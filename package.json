@@ -1,0 +1,25 @@
+{
+  "name": "maplibre-gl-layers-root",
+  "private": true,
+  "description": "MapLibre's layer extension library enabling the display, movement, and modification of large numbers of dynamic sprite images",
+  "author": "Kouji Matsui (@kekyo@mi.kekyo.net)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kekyo/maplibre-gl-layers.git"
+  },
+  "homepage": "https://github.com/kekyo/maplibre-gl-layers#readme",
+  "readme": "README_pack.md",
+  "workspaces": [
+    "maplibre-gl-layers",
+    "demo"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "pack": "npm run pack --workspaces",
+    "dev": "npm run dev --workspaces"
+  },
+  "dependencies": {
+  }
+}

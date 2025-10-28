@@ -1,0 +1,607 @@
+# maplibre-gl-layers
+
+大量で動的なスプライト画像の表示・移動・変更を可能にする、MapLibreのレイヤー拡張ライブラリ
+
+![maplibre-gl-layers](images/maplibre-gl-layers-120.png)
+
+[![Project Status: Concept – Minimal or no implementation has been done yet, or the repository is only intended to be a limited example, demo, or proof-of-concept.](https://www.repostatus.org/badges/latest/concept.svg)](https://www.repostatus.org/#concept)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+---
+
+[(English language is here.)](./README.md)
+
+## これは何？
+
+[MapLibre GL JS](https://maplibre.org/maplibre-gl-js/docs/)で、地図上にマーカーを配置したり、その表示に装飾を行い、そして自由自在にマーカーを移動する。
+マーカーはスムーズに移動して、時間の経過と共に増減する。
+更に、マーカーを配置したい座標は沢山ある...
+
+そんなあなたのニーズを満たすのが、**maplibre-gl-layers**ライブラリです。
+
+このパッケージを使用すると、単純なAPIを使用して、スプライト（マーカー画像）を大量に配置して自由に調整できます:
+
+![demo 1](images/demo1.png)
+
+以下は、一つのスプライトを追加する最小の例です:
+
+```typescript
+// MapLibre GL JSを使用します
+import { Map } from 'maplibre-gl';
+import { createSpriteLayer } from 'maplibre-gl-layers';
+
+// MapLibreのインスタンスを生成します
+const map = new Map({
+  container: 'map',
+  style: 'https://demotiles.maplibre.org/style.json',
+  center: [136.885202573, 35.170006912],
+  zoom: 13,
+});
+
+// SpriteLayerを生成します
+const spriteLayer = createSpriteLayer({ id: 'vehicles' });
+
+// MapLibreの準備が出来たら
+map.on('load', async () => {
+  // SpriteLayerを地図に追加します
+  map.addLayer(spriteLayer);
+
+  // 指定した画像ファイルを表示で使用する為に、SpriteLayerに登録します
+  const MARKER_IMAGE_ID = 'marker';
+  await spriteLayer.registerImage(MARKER_IMAGE_ID, '/assets/marker.png');
+
+  // スプライトを配置し、上記で登録した画像を指定します
+  const SPRITE_ID = 'vehicle-1';
+  spriteLayer.addSprite(SPRITE_ID, {
+    // スプライトを配置する座標
+    location: { lng: 136.8852, lat: 35.17 },
+    // スプライトの画像を指定
+    images: [
+      {
+        subLayer: 0, // サブレイヤーを指定
+        order: 0, // 表示優先順位を指定
+        imageId: MARKER_IMAGE_ID, // 表示する画像
+      },
+    ],
+  });
+
+  // (... 以降、SpriteLayer APIを使用して自由にスプライトを操作可能)
+});
+```
+
+スプライトの配置・変更・削除や、スプライトに割り当てた画像を追加・変更・削除など、APIを使用していつでも可能です。
+
+画像だけでなく、テキストも同時に配置して、スプライトに連携して動かすことも出来ます。地物や移動体の可視化でおおよそ考えられる表示を簡単なAPIで実現できます:
+
+![demo 2](images/demo2.png)
+
+### 主な機能
+
+- 大量のスプライトを配置・変更・削除できる。
+- 各スプライトの座標点を自由に移動出来る。つまり、移動体を簡単に表現できる。
+- 各スプライトには、座標のアンカー位置を指定できる。精密な位置の描画が可能。
+- 各スプライトには複数の画像を追加出来て、回転・オフセット・スケール・透明度などを指定できる。同様にテキストも配置できる。
+- スプライトの座標移動・回転・オフセットをアニメーション補間出来る。
+- 画像の重なりを制御するための、サブレイヤーとオフセット指定も可能。
+- 大量のスプライトの状態をまとめて更新可能なAPI。
+- MapLibre以外へのパッケージ依存なし。
+
+### 環境
+
+- MapLibre GL JS 5.9 or higher
+
+---
+
+## インストール
+
+ライブラリはNPMパッケージで公開されています。以下のコマンドであなたのプロジェクトにインストールして下さい:
+
+```bash
+npm install maplibre-gl-layers
+```
+
+## 初期化
+
+最初に、SpriteLayerのインスタンスを生成して、MapLibreに追加します。
+
+```typescript
+// MapLibre GL JSを使用します
+import { Map } from 'maplibre-gl';
+import { createSpriteLayer } from 'maplibre-gl-layers';
+
+// MapLibreのインスタンスを生成します
+// あなたに必要なスタイルや初期状態などを指定して下さい
+const map = new Map({
+  container: 'map',
+  style: 'https://demotiles.maplibre.org/style.json',
+  center: [136.885202573, 35.170006912],
+  zoom: 13,
+});
+
+// SpriteLayerのインスタンスを生成します
+const spriteLayer = createSpriteLayer({ id: 'vehicles' });
+
+// MapLibreの準備が出来たら
+map.on('load', async () => {
+  // SpriteLayerをMapLibre地図に追加します
+  map.addLayer(spriteLayer);
+
+  // (...)
+});
+```
+
+初期化作業はこれだけです！
+この後、描画させたい画像やテキストを準備して、スプライトの表示を行います。
+
+---
+
+## 画像とテキストの登録
+
+SpriteLayerで描画させたい画像は、あらかじめ登録しておく必要があります。
+画像の登録や削除は任意のタイミングで行えますが、多数の異なる画像を描画する場合は、それぞれの画像を必要なタイミングで、登録したり削除したりする必要があります。
+
+以下は、指定された画像をURLから読み取って登録し、画像IDで区別できるようにします:
+
+```typescript
+// 指定した画像ファイルを表示で使用する為に、SpriteLayerに登録します
+const ARROW_IMAGE_ID = 'arrow';
+await spriteLayer.registerImage(
+  ARROW_IMAGE_ID,  // 画像ID
+  '/assets/arrow.png'  // URL
+); // 画像URL
+```
+
+また、任意のテキストを表示することも出来ますが、同様に登録と削除が必要です。画像とテキストは、内部では両方とも画像として管理されています。登録するときに指定するIDも、画像IDと同じように扱われます。
+
+以下は、指定されたテキストを画像として登録します:
+
+```typescript
+// 指定したテキストをSpriteLayerに登録します
+const TEXT_LABEL1_ID = 'text-label-1';
+await spriteLayer.registerTextGlyph(
+  TEXT_LABEL1_ID, // テキストのID（画像ID）
+  'The Station', // 描画するテキスト
+  { maxWidthPixel: 128 }, // 最大幅を指定
+  {
+    color: '#ffffff', // 各種テキスト属性を指定
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingPixel: { top: 6, right: 10, bottom: 6, left: 10 },
+  }
+);
+```
+
+画像の場合は、その画像のサイズが使用されますが、テキストの場合は明示的にサイズを指定する必要があります。テキストのサイズの単位はピクセル(px)ですが、実際にはSpriteLayerのオプション指定によって比率が決定されます。既定では1pxが1メートルとして扱われます。
+
+これにより、矢印とテキストラベルで同じようにサイズが比較できるので、以下のような描画を見てサイズのバランスを調整するのに役立ちます:
+
+![画像のサイズの比較](images/size1.png)
+
+(但し、実際に描画されるサイズが指定された通りになるとは限らない事に注意して下さい。特に後述のサーフェイスモードとビルボードモードでは見た目の印象に差が発生することがあります)
+
+テキストのサイズを指定する方法は2通りあります:
+
+- 最大幅を指定(`maxWidthPixel`): 必ずその幅で描画される。改行を含む場合は、複数行の中から最大の幅を持つ行がこの幅となるように文字サイズが調整される。
+- 1行の高さを指定(`lineHeightPixel`): 一行の高さがこの高さになるように描画される。改行を含む場合は、1行の高さ×行数が全高となるように文字サイズが調整される。
+
+一般的には最大幅を指定すれば十分でしょう。
+
+---
+
+## スプライトと描画モード
+
+スプライトの構造は以下の通りです:
+
+- 一つのスプライトが基準となる座標点を示す。
+- 一つのスプライトに、複数の画像が表示できる。簡単に示すと、各画像がスプライトの座標点からのオフセットを持っていて、それに従って画像が表示される。
+
+以下の画像は、単一のスプライトが2つの画像を表示している例です。一つの画像はスプライト座標点の中心に赤い矢印、もう一つの画像はテキストのラベルで、左にオフセットしています:
+
+![サーフェイスモードの矢印1](images/surface1.png)
+
+矢印は斜め左上を向いていますが、同時に少し縦方向に「潰れている」ようにも見えると思います。これは、MapLibreがピッチ角を調整可能で、地図を45度「傾けて」表示しているからです。
+この矢印は地図の表面に張り付いているように描画されています。これを「サーフェイスモード」と呼びます。しかし、テキストラベルは、矢印とは少し異なって見えます。
+
+以下はピッチ角を更に寝かせ、60度とした場合です。矢印は更に縦に潰れていますが、テキストラベルは「カメラの視点に正対」したままであり、殆ど変わっていないことに注意して下さい:
+
+![サーフェイスモードの矢印2](images/surface2.png)
+
+テキストラベルはピッチ角をどのように変更しても、常にカメラ正対として描画されています。これを「ビルボードモード」と呼びます。
+
+画像がどちらのモードで描画されるのかは、各画像毎に指定できます。つまり、この場合は、矢印がサーフェイスモード、テキストラベルがビルボードモードで描画されていることになります。上記の画像は例であり、それぞれの画像をあなたの希望に合わせて自由にモード変更できます。
+
+これらの描画モードは、地図の視認性を元にどちらを使用するかを決めると良いでしょう。
+一般的には、ビルボードモードはピッチ角の影響を受けないので、地物などの目標物を識別するアイコンや、ヘッドアップディスプレイ(HUD)表示に使用することで、視認性を向上させます。
+
+以下のコード例は、上記のような矢印とテキストラベルを追加する例です:
+
+```typescript
+// スプライトを追加します
+const SPRITE_ID = 'vehicle-1';
+spriteLayer.addSprite(SPRITE_ID, {
+  // スプライトを配置する座標（基準座標点）
+  location: { lng: 136.8852, lat: 35.17 },
+  // スプライトの画像を指定
+  images: [
+    {
+      subLayer: 0, // サブレイヤー0を指定（奥側）
+      order: 0, // 表示優先順位を指定
+      imageId: ARROW_IMAGE_ID, // 矢印の画像のID
+    },
+    {
+      subLayer: 1, // サブレイヤー1を指定（手前側）
+      order: 0, // 表示優先順位を指定
+      imageId: TEXT_LABEL1_ID, // 表示するテキストラベルのID
+    },
+  ],
+});
+```
+
+## サブレイヤーとオーダー
+
+各画像は「サブレイヤー(`subLayer`)」と「オーダー(`order`)」を指定します。これらの値は必須ですが、どのような優先順位で描画されるかを気にしないのであれば、両者ともに`0`を指定できます。
+
+サブレイヤー、オーダー、そしてカメラ正対での奥行きは、以下のように考慮されます:
+
+1. サブレイヤー: MapLibreのレイヤーのように、完全に独立したレイヤーとして機能します。
+   各スプライトの画像がそれぞれ指定したサブレイヤーIDに配置され、描画が入れ替わることはありません。
+   カメラ正対での「奥行き」が逆であっても、サブレイヤーIDの順（降順）で、手前に描画されます。
+   これは、HUDのように、3D表現の表示にオーバーレイされる2Dアイテムような表現に対応します。前節の、矢印とテキストラベルがこの関係にあります。
+2. オーダー: 同じサブレイヤー内では、オーダーIDの順(降順) で手前に描画されます。
+   複数の画像を同じ位置に重ねて表示して、一つの意味のある画像に合成したかのように描画させたい場合は、オーダーIDで制御すると良いでしょう。凝った装飾のある背景とテキストを合成して表示する、などの用途が考えられます。
+3. カメラ正対の奥行き: サブレイヤーとレイヤーが同一の場合は、カメラ正対での奥行きが考慮されて、手前に存在する場合は手前になるように描画されます。
+   但し、画像は2D平面であるため、3Dポリゴンのように立体構造物として重なりが正しく表現されるわけではないことに注意して下さい。多数の画像が重なっている場合は、視覚的な自然さとは異なる順に描画される場合があります。
+
+以下の画像は、多数の矢印とラベルが重なっている例です:
+
+![サブレイヤー](images/sublayer1.png)
+
+矢印とテキストラベルは異なるサブレイヤーに配置されているので、奥行きとは関係なく、常にテキストラベルが矢印より手前に描画されます。そして、矢印同士、テキストラベル同士は同じサブレイヤーに配置されているので、カメラ正対の奥行きに基づいて順序が決定されます:
+
+## アンカー
+
+各画像はスプライトの基準座標（`location`）に対して、画像内のどこを重ねるかを`anchor`で指定します。`anchor.x`と`anchor.y`は画像の左下を-1、中央を0、右上を1とする正規化値で、既定値は`{ x: 0, y: 0 }`（画像の中心）です。アンカーを変更すると、同じスプライト座標でも表示位置や回転の支点を細かく調整できます。値は-1～1を目安にしますが、必要に応じて範囲外を指定しても構いません。
+
+アンカーはモードに関わらず機能し、後述の`rotateDeg`・`scale`・`offset`・`originLocation`もこのアンカー位置から計算されます。
+
+以下は、矢印の先端にアンカーを設定することで、より地図上での精密な座標位置を表現させる例です。登録済みの画像は、矢印の先端が上向きに描かれてい場合に、アンカー位置を上端中央に指定することでこれを実現します:
+
+```typescript
+// 矢印の先端を基準座標に合わせるアンカー設定例
+spriteLayer.addSprite('vehicle-anchor', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID, // 矢印(先端は上向き)
+      anchor: { x: 0, y: 1 }, // 上端中央を0m地点に合わせる
+    },
+  ],
+});
+```
+
+## オフセット
+
+`offset`ではアンカーから一定距離だけ画像を離して配置できます。`offset.offsetMeters`はメートル単位の距離、`offset.offsetDeg`は方向を表し、サーフェイスモードでは地図上の真北を0度とした時計回り、ビルボードモードでは画面上方向を0度とした時計回りで解釈されます。
+
+距離はSpriteLayerが管理する縮尺に基づいてピクセルへ換算されるため、ズームやピッチが変わっても相対位置が維持されます。設定しなければアンカー位置にそのまま描画されます。
+
+```typescript
+// スプライトの右側へ12m離した位置にビルボードラベルを配置する例
+spriteLayer.addSprite('vehicle-anchor', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 1,
+      order: 0,
+      imageId: TEXT_LABEL1_ID, // テキストID(画像ID)
+      mode: 'billboard',
+      offset: { offsetMeters: 12, offsetDeg: 90 }, // 右に12mずらす
+    },
+  ],
+});
+```
+
+## 画像の回転
+
+`rotateDeg`を指定すると、アンカーを支点にして画像を回転できます。サーフェイスモードでは真北を0度とした時計回り、ビルボードモードでは画面上方向を0度とした時計回りで解釈されます。アンカーが中心以外でもその位置を軸に回転するため、ピンの先端や車両の重心を基準にしたまま向きを調整できます。
+
+以下の例は、上向きの矢印画像の先端にアンカーを設定し画像を180度回転させて、下向きの矢印かつ矢印先端がアンカーとなるようにする例です:
+
+```typescript
+// 矢印の先端を地図上の現在地に固定したまま下向きに回転させる
+spriteLayer.addSprite('vehicle-anchor', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID, // 画像は上向き矢印を想定
+      anchor: { x: 0, y: 1 }, // 先端（上端中央）を基準座標に重ねる
+      rotateDeg: 180, // アンカーを支点に180度回転して下向きにする
+    },
+  ],
+});
+```
+
+## 画像のスケール
+
+`scale`は画像の幅・高さを倍率で拡大縮小し、同時に`offset.offsetMeters`で指定した距離にも掛かります。
+
+まず元の画像サイズに`scale`とズーム倍率が掛け合わされ、その結果を基にアンカーの位置と回転の中心が決まります。さらに、オフセット距離も`scale`で伸縮されるため、スプライト全体の相対的なバランスが保たれます。
+
+ビルボード・サーフェイスの両モードで計算は共通で、地図上の実寸比(`metersPerPixel`)を画像毎に変更していることに近い結果となります。これは、サーフェイスモードでは自然に見えますが、ビルボードモードでは意図したサイズ感と異なる可能性があります。
+
+以下は各画像にスケールを適用する例です:
+
+```typescript
+// スプライト全体を半分のサイズに縮小し、ラベルの離隔距離も揃えて縮める
+spriteLayer.addSprite('vehicle-scaled', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      scale: 0.5,  // スケールを指定して半分のサイズに縮小
+      anchor: { x: 0, y: -1 },
+    },
+    {
+      subLayer: 1,
+      order: 0,
+      imageId: TEXT_LABEL1_ID,
+      mode: 'billboard',
+      scale: 0.5,  // スケールを指定して半分のサイズに縮小
+      originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
+      offset: { offsetMeters: 10, offsetDeg: 0 },
+    },
+  ],
+});
+```
+
+注意: `rotateDeg`や`offset`は、画像の実サイズに`scale`を適用した後、アンカーによる基準点移動を反映した状態で解釈されます。つまり:
+
+1. スケールで画像の拡大・縮小を行い
+2. アンカー位置から基準座標点を確定し
+3. オフセット距離と方向を加算し
+4. 画像を回転する
+
+上記の順序で計算が進行します。
+
+アンカーを中心以外に設定している場合、回転やオフセットは常にアンカー基準で適用されるため、意図と異なる位置に感じる場合は、アンカー・回転・オフセットの組み合わせを見直して下さい。ビルボードモードではオフセット角度が画面基準、サーフェイスモードでは地理座標の磁北基準である点にも注意が必要です。
+
+## 自動方位回転
+
+スプライトの移動方向に合わせて、自動で画像を回転させたい場合は、`autoRotation`を有効にします。
+
+サーフェイスモードでは既定で`true`になっており、最新の移動ベクトルから方位を算出して基準角度を計算します。ビルボードモードでも有効にすることが出来、角度自体は計算されますが、常にカメラ正対で上方向が磁北に一致しないため、描画は直感に反する場合があります。
+
+`autoRotationMinDistanceMeters`で角度計算に必要な最小移動距離を指定すると、微小な揺れによるノイズを抑えられます。自動回転で得られた角度に`rotateDeg`が加算される（更新されるわけではない）ため、基準方向からさらに補正したい場合も併用できます。
+
+```typescript
+// 自動回転を利用しつつ、最低5m移動したときだけ向きを計算する
+spriteLayer.addSprite('vehicle-auto', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      mode: 'surface',
+      autoRotation: true, // 自動方位回転を有効
+      autoRotationMinDistanceMeters: 5, // 5m以上移動したら計算する
+    },
+  ],
+});
+```
+
+## スプライト移動補間
+
+SpriteLayerには、スプライトの移動を自動的に補間して、描画をなめらかにアニメーションさせる機能があります。この機能を使用するには、以下の2つの要素を考える必要があります。
+
+- 移動始点と終点: 補間はこの2点間を自動的に補間します。
+- 補間時間: 始点から終点に向かって補間を行う時、かかる時間を示します。
+- 補間の方法: フィードバックまたはフィードフォワード
+
+通常、スプライトに新しい座標を指定した場合、画像は即座に指定した座標に移動します。しかし、移動にかかる時間・補間の方法を指定して新しい座標を与えると、これらのパラメータを使用して移動のアニメーションが行われます。
+
+次の例は、指定したスプライトを移動するときに、移動補間を行います:
+
+```typescript
+// 初期の座標を指定してスプライトを配置
+const SPRITE_ID = 'vehicle-interpolation';
+spriteLayer.addSprite(SPRITE_ID, {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    { subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID, autoRotation: true },
+  ],
+});
+
+// 800msかけて次の地点へ移動したと見なし、
+// feedforwardで未来の座標を予測して移動させる
+spriteLayer.updateSprite(SPRITE_ID, {
+  location: { lng: 136.8875, lat: 35.165 },
+  interpolation: { durationMs: 800, mode: 'feedforward' },
+});
+```
+
+古い座標と新しい座標をどのようにして補間計算に使用するかは、補間の方法によって異なります:
+
+- フィードバック: 古い座標から新しい座標に向かって、指定された補間時間をかけて移動する。
+- フィードフォワード: 古い座標から新しい座標に向かって、指定された補間時間をかけて移動したと仮定し、そのベクトルを補間時間だけ延長した座標を移動予測座標とし、新しい座標から移動予測座標に向かって、指定された補間時間をかけて移動する。
+
+フィードバックでは、新しい座標を設定しても、アニメーションが終了するまではその座標に到達しないため、常に表示が遅れることになります。一方、フィードフォワードを使用すれば、移動予測座標付近に到達することが予想されるので、供給された座標と表示座標がかなり一致することが期待できます。
+
+もちろん、これは予測座標なので、移動中に移動方向や速度が大きく変われば、誤った座標に移動し続けてしまうデメリットがあります。それでも、新しい座標が供給されれば、そちらの方にすばやく移動するように矯正されるので、座標のズレは収斂するでしょう。
+
+## 画像の回転角とオフセットの回転角の補間
+
+スプライト移動補間と似た機能として、画像の回転とオフセットの角度回転を補間することも出来ます。これらの機能は似ていますが、スプライト位置の補間とは別の機能です。
+
+`rotationInterpolation`で、画像の回転角の補間を有効にできます。`rotateDeg`の補間用と`offset.offsetDeg`の補間用で個別に`durationMs`と任意の`easing`関数を指定できます。補間が完了するまでは毎フレーム角度が滑らかに変化し、設定を削除するか`null`を渡すと即座に停止します。
+
+以下に、画像の回転角とオフセットの角度のそれぞれで、補間を適用する例を示します:
+
+```typescript
+// 画像の回転角を400msで補間しながら変更する
+spriteLayer.updateSpriteImage('vehicle-anchor', 0, 0, {
+  rotateDeg: 180, // 現在の角度から180度に向かって回転
+  rotationInterpolation: {
+    rotateDeg: { durationMs: 400 },
+  },
+});
+
+// オフセットの向きを600msで補間しながら変更する
+spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
+  offset: {
+    offsetMeters: 12,
+    offsetDeg: 45, // 現在の角度から45度に向かって回転
+  },
+  rotationInterpolation: {
+    offsetDeg: { durationMs: 600 },
+  },
+});
+```
+
+## 基準座標点とアンカー
+
+各画像は既定でスプライトの`location`（補間後の座標）を基準に、アンカー・オフセット・回転を計算します。`originLocation`を指定すると、同じスプライト内の別画像を座標の基準として再利用でき、複数の画像を一つの塊として扱えます。
+
+参照は再帰的に解決され、`useResolvedAnchor`を`true`にすると参照先画像のアンカーやオフセット、回転を適用した後の位置を基準とします。省略した場合はアンカー適用前の位置を基準にします。
+
+```typescript
+// 矢印を基準に、テキストラベルを常に矢印の上側へ配置する例
+spriteLayer.addSprite('vehicle-group', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      anchor: { x: 0, y: -1 },
+    },
+    {
+      subLayer: 1,
+      order: 0,
+      imageId: TEXT_LABEL1_ID,
+      mode: 'billboard',
+      originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
+      offset: { offsetMeters: 8, offsetDeg: 0 }, // 画面上方向へ配置
+    },
+  ],
+});
+```
+
+注意点を示します:
+
+- 参照する画像は、同一のスプライト内の画像に限られます。
+- 循環参照や存在しない画像を指すとエラーになるため、チェーンはループしないように構成して下さい。
+
+## イベントハンドラ
+
+SpriteLayerは`spriteclick`イベントをサポートしており、スプライトをクリック・タップした際に呼び出されます。イベントハンドラ内から`updateSprite`を呼び出せば、ユーザー操作に応じた移動補間も簡単に実装できます。
+
+```typescript
+// スプライトがクリック・タップされたときに呼び出される
+spriteLayer.on('spriteclick', ({ sprite, screenPoint }) => {
+  const { spriteId } = sprite;
+  // クリック位置を基準にした次の座標を計算し、500msで移動させる
+  const nextLocation = {
+    lng: sprite.currentLocation.lng + 0.002,
+    lat: sprite.currentLocation.lat,
+  };
+  spriteLayer.updateSprite(spriteId, {
+    location: nextLocation,
+    interpolation: { durationMs: 500, mode: 'feedback' },
+  });
+});
+```
+
+## タグ
+
+SpriteLayerでは各スプライトに任意のタグ情報を付与できます。
+
+タグは`addSprite`や`updateSprite`で`tag`プロパティに設定し、`sprite.tag`として参照します。描画には直接影響しませんが、移動体の種別やデータソースの識別子、クリック時に呼び出す処理を分岐させるフラグなど、アプリケーション側のメタデータを持たせたいときに便利です。
+
+タグの型はジェネリックで定義されているため、TypeScriptではSpriteLayer生成時に型パラメータを指定すると安全に扱えます。タグを更新しても描画内容に変化が無ければ再描画は発生しません。
+
+```typescript
+// ユーザー独自の型を定義
+type VehicleTag = {
+  id: string;
+  type: 'bus' | 'train' | 'delivery';
+};
+
+// タグの型を指定してSpriteLayerを生成
+const spriteLayer = createSpriteLayer<VehicleTag>({ id: 'vehicles' });
+
+// タグ情報を追加してスプライトを生成
+spriteLayer.addSprite('vehicle-101', {
+  location: { lng: 136.8852, lat: 35.17 },
+  tag: { id: 'veh-101', type: 'bus' },  // タグ
+  images: [
+    { subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID, autoRotation: true },
+  ],
+});
+
+// タグを参照してクリック時の挙動を切り替える
+spriteLayer.on('spriteclick', ({ sprite }) => {
+  if (sprite.tag?.type === 'train') {
+    openTrainDetail(sprite.tag.id);
+  } else if (sprite.tag) {
+    openVehicleSummary(sprite.tag.id);
+  }
+});
+```
+
+後からタグを書き換える場合は`updateSprite`で`tag`を渡します。`null`または未指定にするとタグを削除できます。
+
+## バルク更新API
+
+多数のスプライトを一度に更新したい場合は、`updateBulk`と`updateForEach`を利用すると効率良く処理できます。いずれも変更が発生したスプライト数を戻り値として返します。
+
+- `updateBulk`: 更新対象のスプライトIDを明示的に指定して、一括で処理したいときに便利です。サーバーからまとめて位置情報が届いた場合などに向いています。
+- `updateForEach`: 登録済みの全スプライトに対して反復処理を行いたい場合に使用します。マップのズームや時刻など、クライアント側のコンテキストに応じて一括調整する用途に向いています。コールバックが`false`を返すと反復処理を中断します。
+
+以下にそれぞれの例を示します:
+
+```typescript
+// 複数のスプライトに新しい座標を同時適用する例
+const changed = spriteLayer.updateBulk([
+  {
+    spriteId: 'vehicle-1',
+    location: { lng: 136.886, lat: 35.1695 },
+    interpolation: { durationMs: 600, mode: 'feedforward' },
+  },
+  {
+    spriteId: 'vehicle-2',
+    location: { lng: 136.883, lat: 35.1712 },
+    interpolation: { durationMs: 600, mode: 'feedforward' },
+  },
+]);
+console.log(`更新されたスプライト数: ${changed}`);
+```
+
+```typescript
+// すべてのスプライトを走査して、特定タグを持つアイコンだけ透過度を下げる例
+const dimmed = spriteLayer.updateForEach((sprite, updater) => {
+  if (sprite.tag?.type !== 'bus') {
+    return true; // 何もしないで次のスプライトへ
+  }
+
+  // サブレイヤー0/オーダー0の画像の透過度を調整
+  updater.updateImage(0, 0, { opacity: 0.6 });
+  return true; // trueを返すと処理を継続
+});
+console.log(`透過度を変更したスプライト数: ${dimmed}`);
+```
+
+`updateForEach`の第2引数(`updater`)は再利用されるオブジェクトです。コールバックの外に保持せず、その場で必要な変更だけを記述して下さい。
+
+画像リストを把握したい場合は`updater.getImageIndexMap()`で現在のサブレイヤー/オーダー構成を取得できます。
+
+---
+
+## ライセンス
+
+Under MIT.

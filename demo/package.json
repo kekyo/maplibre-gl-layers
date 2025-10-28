@@ -1,0 +1,21 @@
+{
+  "name": "demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "echo \"demo does not have test rule.\"",
+    "pack": "echo \"demo does not have dev rule.\""
+  },
+  "dependencies": {
+    "maplibre-gl-layers": "*"
+  },
+  "devDependencies": {
+    "@types/node": ">=24.9.0",
+    "prettier-max": ">=1.11.0",
+    "typescript": ">=5.9.0",
+    "vite": ">=7.1.0"
+  }
+}
