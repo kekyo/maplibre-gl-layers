@@ -68,6 +68,7 @@ import {
   calculateSurfaceWorldDimensions,
   applySurfaceDisplacement,
   isFiniteNumber,
+  clipToScreen,
   screenToClip,
   resolveScalingOptions,
   calculateBillboardCenterPosition,
@@ -2704,20 +2705,17 @@ export const createSpriteLayer = <T = any>(
             return;
           }
 
-          const projectedCorner = mapInstance.project({
-            lng: displaced.lng,
-            lat: displaced.lat,
-            // Mirror the same altitude assumption when projecting back to screen space.
-            z: spriteEntry.currentLocation.z ?? 0,
-          } as any);
-          if (!projectedCorner) {
+          const screenCorner = clipToScreen(
+            clipPosition,
+            drawingBufferWidth,
+            drawingBufferHeight,
+            pixelRatio
+          );
+          if (!screenCorner) {
             return;
           }
 
-          screenCornersLocal[index] = {
-            x: projectedCorner.x,
-            y: projectedCorner.y,
-          };
+          screenCornersLocal[index] = screenCorner;
 
           let [clipX, clipY, clipZ, clipW] = clipPosition;
           if (ENABLE_NDC_BIAS_SURFACE) {

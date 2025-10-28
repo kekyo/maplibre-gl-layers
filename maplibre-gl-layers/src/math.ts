@@ -482,6 +482,41 @@ export const screenToClip = (
 };
 
 /**
+ * Converts homogeneous clip coordinates back into screen-space pixels.
+ * @param {[number, number, number, number]} clipPosition - Homogeneous clip coordinates.
+ * @param {number} drawingBufferWidth - WebGL drawing buffer width in device pixels.
+ * @param {number} drawingBufferHeight - WebGL drawing buffer height in device pixels.
+ * @param {number} pixelRatio - Device pixel ratio relating CSS pixels to device pixels.
+ * @returns {{ x: number; y: number } | null} Screen-space coordinates or `null` when invalid.
+ */
+export const clipToScreen = (
+  clipPosition: readonly [number, number, number, number],
+  drawingBufferWidth: number,
+  drawingBufferHeight: number,
+  pixelRatio: number
+): { x: number; y: number } | null => {
+  const [clipX, clipY, , clipW] = clipPosition;
+  if (!Number.isFinite(clipW) || clipW === 0) {
+    return null;
+  }
+  const invW = 1 / clipW;
+  const ndcX = clipX * invW;
+  const ndcY = clipY * invW;
+  const deviceX = (ndcX + 1) * 0.5 * drawingBufferWidth;
+  const deviceY = (1 - ndcY) * 0.5 * drawingBufferHeight;
+  if (!Number.isFinite(deviceX) || !Number.isFinite(deviceY)) {
+    return null;
+  }
+  if (!Number.isFinite(pixelRatio) || pixelRatio === 0) {
+    return null;
+  }
+  return {
+    x: deviceX / pixelRatio,
+    y: deviceY / pixelRatio,
+  };
+};
+
+/**
  * Index order used to decompose a quad into two triangles.
  * @constant
  */
