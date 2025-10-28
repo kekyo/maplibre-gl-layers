@@ -2,8 +2,11 @@ name: Deploy Demo to GitHub Pages
 
 on:
   push:
+    branches:
+      - main
     tags:
       - '*'
+  workflow_dispatch:
 
 concurrency:
   group: pages
@@ -17,33 +20,31 @@ jobs:
     outputs:
       deploy: ${{ steps.check-merge.outputs.deploy }}
     steps:
-      - name: Checkout tagged commit
+      - name: Checkout current ref
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fetch main and develop branches
+      - name: Fetch main, develop, and tags
         run: |
           git fetch origin main:refs/remotes/origin/main
           git fetch origin develop:refs/remotes/origin/develop
+          git fetch --tags --force
 
       - name: Evaluate deployment conditions
         id: check-merge
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE:-}" != "tag" ]; then
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          tag_name="${GITHUB_REF_NAME:-}"
-          if [ -z "$tag_name" ] || ! git tag --points-at HEAD | grep -Fxq "$tag_name"; then
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "deploy=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          tags=$(git tag --points-at HEAD)
+          if [ -z "$tags" ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag_name=$(head -n 1 <<<"$tags")
           parents=$(git rev-list --parents -n 1 HEAD)
           word_count=$(wc -w <<<"$parents")
           if [ "$word_count" -ne 3 ]; then
