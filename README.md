@@ -533,14 +533,66 @@ spriteLayer.on('spriteclick', ({ sprite }) => {
 
 To change or remove a tag later, call `updateSprite` with a new `tag` value. Passing `null` (or omitting the property) clears the tag.
 
-## Bulk Update API
+## Bulk Sprite Management
+
+SpriteLayer now offers bulk functions makes faster where many sprites must be placed or removed at once.
+
+- `addSprites` accepts either a record (`Record<string, SpriteInit<TTag>>`) or an array of [`SpriteInitEntry<TTag>`](./maplibre-gl-layers/src/types.ts) objects. The latter simply extends `SpriteInit` with a `spriteId` field for convenience. The method returns how many sprites were inserted.
+- `removeSprites` removes multiple sprites by ID and returns the number of entries that were present.
+- `removeAllSprites` clears every sprite and reports how many were removed.
+- `removeAllSpriteImages(spriteId)` removes every image assignment from the specified sprite while leaving the sprite shell intact, returning the number of images that were removed.
+
+The following are examples:
+
+```typescript
+// Array form using SpriteInitEntry
+const vehicles: SpriteInitEntry<VehicleTag>[] = [
+  {
+    spriteId: 'vehicle-201',
+    location: { lng: 136.881, lat: 35.169 },
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+    tag: { id: 'veh-201', type: 'bus' },
+  },
+  {
+    spriteId: 'vehicle-202',
+    location: { lng: 136.883, lat: 35.172 },
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+    tag: { id: 'veh-202', type: 'delivery' },
+  },
+];
+
+// Bulk place helpers
+const added = spriteLayer.addSprites(vehicles);
+console.log(`Sprites added: ${added}`);
+
+// Record form
+const moreVehicles = {
+  'vehicle-301': {
+    location: { lng: 136.89, lat: 35.173 },
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+  },
+  'vehicle-302': {
+    location: { lng: 136.887, lat: 35.168 },
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+  },
+} satisfies Record<string, SpriteInit<VehicleTag>>;
+spriteLayer.addSprites(moreVehicles);
+
+// Bulk removal helpers
+const removed = spriteLayer.removeSprites(['vehicle-201', 'vehicle-302']);
+console.log(`Sprites removed: ${removed}`);
+
+// Full resets
+spriteLayer.removeAllSpriteImages('vehicle-202'); // Removes all images from a single sprite
+spriteLayer.removeAllSprites(); // Removes every sprite
+```
 
 When you need to update many sprites at once, SpriteLayer provides two helpers: `updateBulk` and `updateForEach`. Each returns the number of sprites that changed.
 
 - `updateBulk` is best when you already know which sprite IDs should change — for example, applying a batch of positions received from a server.
 - `updateForEach` iterates over every registered sprite so you can adjust them based on client-side context. Returning `false` from the callback stops the iteration early.
 
-The following are examples of each:
+The following are examples:
 
 ```typescript
 // Apply new positions to multiple sprites in one call

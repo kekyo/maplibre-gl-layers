@@ -557,14 +557,66 @@ spriteLayer.on('spriteclick', ({ sprite }) => {
 
 後からタグを書き換える場合は`updateSprite`で`tag`を渡します。`null`または未指定にするとタグを削除できます。
 
-## バルク更新API
+## 複数スプライトの配置・変更・削除
+
+大量のスプライトをまとめて配置・削除したい場合は、`addSprites`/`removeSprites`などのバルク関数を利用すると、高速に処理できます。
+
+- `addSprites` は `Record<string, SpriteInit<TTag>>` 形式か、`spriteId` プロパティを追加した [`SpriteInitEntry<TTag>`](./maplibre-gl-layers/src/types.ts) の配列のいずれかを受け付けます。戻り値は新しく追加されたスプライト数です。
+- `removeSprites` は複数のスプライトIDをまとめて削除し、削除した画像数を返します。
+- `removeAllSprites` はすべてのスプライトを削除し、その数を返します。
+- `removeAllSpriteImages(spriteId)` は指定したスプライトに紐づく画像情報だけをクリアし、削除した画像数を返します。
+
+以下に例を示します:
+
+```typescript
+// SpriteInitEntry を使った配列形式
+const vehicles: SpriteInitEntry<VehicleTag>[] = [
+  {
+    spriteId: 'vehicle-201',
+    location: { lng: 136.881, lat: 35.169 },
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+    tag: { id: 'veh-201', type: 'bus' },
+  },
+  {
+    spriteId: 'vehicle-202',
+    location: { lng: 136.883, lat: 35.172 },
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+    tag: { id: 'veh-202', type: 'delivery' },
+  },
+];
+
+// まとめて配置
+const added = spriteLayer.addSprites(vehicles);
+console.log(`配置したスプライト数: ${added}`);
+
+// Record 形式
+const moreVehicles = {
+  'vehicle-301': {
+    location: { lng: 136.89, lat: 35.173 },
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+  },
+  'vehicle-302': {
+    location: { lng: 136.887, lat: 35.168 },
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+  },
+} satisfies Record<string, SpriteInit<VehicleTag>>;
+spriteLayer.addSprites(moreVehicles);
+
+// まとめて削除
+const removed = spriteLayer.removeSprites(['vehicle-201', 'vehicle-302']);
+console.log(`削除したスプライト数: ${removed}`);
+
+// 一部だけリセット
+spriteLayer.removeAllSpriteImages('vehicle-202'); // 指定スプライトの画像だけを削除
+spriteLayer.removeAllSprites(); // スプライトをすべて削除
+```
 
 多数のスプライトを一度に更新したい場合は、`updateBulk`と`updateForEach`を利用すると効率良く処理できます。いずれも変更が発生したスプライト数を戻り値として返します。
 
 - `updateBulk`: 更新対象のスプライトIDを明示的に指定して、一括で処理したいときに便利です。サーバーからまとめて位置情報が届いた場合などに向いています。
 - `updateForEach`: 登録済みの全スプライトに対して反復処理を行いたい場合に使用します。マップのズームや時刻など、クライアント側のコンテキストに応じて一括調整する用途に向いています。コールバックが`false`を返すと反復処理を中断します。
 
-以下にそれぞれの例を示します:
+以下に例を示します:
 
 ```typescript
 // 複数のスプライトに新しい座標を同時適用する例

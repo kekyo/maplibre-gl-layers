@@ -18,6 +18,7 @@ import type { CustomRenderMethodInput } from 'maplibre-gl';
 import { vec4, type mat4 } from 'gl-matrix';
 import type {
   SpriteInit,
+  SpriteInitCollection,
   SpriteMode,
   SpriteLayerInterface,
   SpriteLayerOptions,
@@ -3388,15 +3389,43 @@ export const createSpriteLayer = <T = any>(
     return true;
   };
 
+  /**
+   * Unregisters all images and glyphs, cleaning up associated GPU textures.
+   * @returns {void}
+   */
+  const unregisterAllImages = (): void => {
+    const glContext = gl;
+    images.forEach((image) => {
+      if (glContext && image.texture) {
+        glContext.deleteTexture(image.texture);
+      }
+      if (image.bitmap) {
+        image.bitmap.close?.();
+      }
+    });
+    images.clear();
+    ensureRenderTargetEntries();
+    scheduleRender();
+  };
+
+  /**
+   * Returns the identifiers of all registered images and glyphs.
+   * @returns {string[]} Array containing every registered imageId.
+   */
+  const getAllImageIds = (): string[] => Array.from(images.keys());
+
   //////////////////////////////////////////////////////////////////////////
 
   /**
-   * Creates a new sprite with the provided options and adds it to the layer.
+   * Internal helper that constructs sprite state without scheduling redraws.
    * @param {string} spriteId - Sprite identifier.
-   * @param {SpriteInit<T>} init - Initial sprite parameters supplied by the caller.
-   * @returns {boolean} `true` when the sprite is added; `false` when the ID already exists.
+   * @param {SpriteInit<T>} init - Initial sprite parameters.
+   * @returns {boolean} `true` when the sprite is stored; `false` when the ID already exists or is invalid.
    */
-  const addSprite = (spriteId: string, init: SpriteInit<T>): boolean => {
+  const addSpriteInternal = (
+    spriteId: string,
+    init: SpriteInit<T>
+  ): boolean => {
     // Reject duplicates.
     if (sprites.get(spriteId)) {
       return false;
@@ -3490,13 +3519,73 @@ export const createSpriteLayer = <T = any>(
     // Store the sprite state.
     sprites.set(spriteId, spriteState);
 
-    // Rebuild render target entries.
-    ensureRenderTargetEntries();
-    // Request a redraw so the new sprite appears immediately.
-    scheduleRender();
-
     return true;
   };
+
+  /**
+   * Expands a batch sprite payload into iterable entries.
+   * @param {SpriteInitCollection<T>} collection - Batch payload.
+   * @returns {Array<[string, SpriteInit<T>]>} Normalised entries.
+   */
+  const resolveSpriteInitCollection = (
+    collection: SpriteInitCollection<T>
+  ): Array<[string, SpriteInit<T>]> => {
+    if (Array.isArray(collection)) {
+      return collection.map((entry): [string, SpriteInit<T>] => [
+        entry.spriteId,
+        entry,
+      ]);
+    }
+    return Object.entries(collection) as Array<[string, SpriteInit<T>]>;
+  };
+
+  /**
+   * Creates a new sprite with the provided options and adds it to the layer.
+   * @param {string} spriteId - Sprite identifier.
+   * @param {SpriteInit<T>} init - Initial sprite parameters supplied by the caller.
+   * @returns {boolean} `true` when the sprite is added; `false` when the ID already exists.
+   */
+  const addSprite = (spriteId: string, init: SpriteInit<T>): boolean => {
+    const isAdded = addSpriteInternal(spriteId, init);
+    if (isAdded) {
+      // Rebuild render target entries.
+      ensureRenderTargetEntries();
+      // Request a redraw so the new sprite appears immediately.
+      scheduleRender();
+    }
+    return isAdded;
+  };
+
+  /**
+   * Adds multiple sprites in a single batch operation.
+   * @param {SpriteInitCollection<T>} collection - Sprite payloads keyed by spriteId or as array entries.
+   * @returns {number} Number of sprites that were newly added.
+   */
+  const addSprites = (collection: SpriteInitCollection<T>): number => {
+    let addedCount = 0;
+    for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
+      collection
+    )) {
+      if (addSpriteInternal(spriteId, spriteInit)) {
+        addedCount++;
+      }
+    }
+    if (addedCount > 0) {
+      // Rebuild render target entries.
+      ensureRenderTargetEntries();
+      // Request a redraw so the new sprite appears immediately.
+      scheduleRender();
+    }
+    return addedCount;
+  };
+
+  /**
+   * Removes a sprite without requesting rendering.
+   * @param {string} spriteId - Sprite identifier.
+   * @returns {boolean} `true` when the sprite existed and was removed.
+   */
+  const removeSpriteInternal = (spriteId: string): boolean =>
+    sprites.delete(spriteId);
 
   /**
    * Removes a sprite from the layer.
@@ -3506,7 +3595,8 @@ export const createSpriteLayer = <T = any>(
    */
   const removeSprite = (spriteId: string): boolean => {
     // Exit early when the sprite does not exist.
-    if (!sprites.delete(spriteId)) {
+    const removed = removeSpriteInternal(spriteId);
+    if (!removed) {
       return false;
     }
 
@@ -3516,6 +3606,75 @@ export const createSpriteLayer = <T = any>(
     scheduleRender();
 
     return true;
+  };
+
+  /**
+   * Removes multiple sprites at once.
+   * @param {readonly string[]} spriteIds - Sprite identifiers to remove.
+   * @returns {number} Number of sprites that were removed.
+   */
+  const removeSprites = (spriteIds: readonly string[]): number => {
+    let removedCount = 0;
+    for (const spriteId of spriteIds) {
+      if (removeSpriteInternal(spriteId)) {
+        removedCount++;
+      }
+    }
+    if (removedCount > 0) {
+      // Rebuild render target entries.
+      ensureRenderTargetEntries();
+      // Request a redraw so the new sprite appears immediately.
+      scheduleRender();
+    }
+    return removedCount;
+  };
+
+  /**
+   * Removes every sprite managed by the layer.
+   * @returns {number} Number of sprites that were cleared.
+   */
+  const removeAllSprites = (): number => {
+    const removedCount = sprites.size;
+    if (removedCount === 0) {
+      return 0;
+    }
+
+    sprites.clear();
+
+    // Rebuild render target entries.
+    ensureRenderTargetEntries();
+    // Request a redraw so the new sprite appears immediately.
+    scheduleRender();
+
+    return removedCount;
+  };
+
+  /**
+   * Deletes all sprite images attached to the specified sprite while keeping the sprite entry intact.
+   * @param {string} spriteId - Identifier of the sprite whose images should be removed.
+   * @returns {number} Number of images that were removed.
+   */
+  const removeAllSpriteImages = (spriteId: string): number => {
+    const sprite = sprites.get(spriteId);
+    if (!sprite) {
+      return 0;
+    }
+    if (sprite.images.size === 0) {
+      return 0;
+    }
+
+    let removedCount = 0;
+    sprite.images.forEach((orderMap) => {
+      removedCount += orderMap.size;
+    });
+    sprite.images.clear();
+
+    // Rebuild render target entries.
+    ensureRenderTargetEntries();
+    // Request a redraw so the sprite reflects the removal immediately.
+    scheduleRender();
+
+    return removedCount;
   };
 
   /**
@@ -4226,8 +4385,14 @@ export const createSpriteLayer = <T = any>(
     registerImage,
     registerTextGlyph,
     unregisterImage,
+    unregisterAllImages,
+    getAllImageIds,
     addSprite,
+    addSprites,
     removeSprite,
+    removeSprites,
+    removeAllSprites,
+    removeAllSpriteImages,
     getSpriteState,
     addSpriteImage,
     updateSpriteImage,

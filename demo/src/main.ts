@@ -10,6 +10,7 @@ import type {
   SpriteAnchor,
   SpriteImageRotationInterpolationOptions,
   SpriteImageDefinitionUpdate,
+  SpriteInitEntry,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -2552,6 +2553,7 @@ const main = async () => {
       // Without predefined icon variants the demo cannot render sprites, so bail out quietly.
       return;
     }
+    const initialSpriteEntries: SpriteInitEntry<DemoSpriteTag>[] = [];
     for (let i = 0; i < MAX_NUMBER_OF_SPRITES; i += 1) {
       const id = `sprite-${i}`;
       allSpriteIds.push(id);
@@ -2570,8 +2572,9 @@ const main = async () => {
         currentAnimationMode,
         newTag
       );
-      // Register the sprite.
-      spriteLayer.addSprite(id, {
+      // Record sprite definition for batched registration.
+      initialSpriteEntries.push({
+        spriteId: id,
         location: {
           lng: location.lng,
           lat: location.lat,
@@ -2609,6 +2612,9 @@ const main = async () => {
           },
         ],
       });
+    }
+    if (initialSpriteEntries.length > 0) {
+      spriteLayer.addSprites(initialSpriteEntries);
     }
 
     if (isRotateInterpolationEnabled) {
