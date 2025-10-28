@@ -383,9 +383,9 @@ export interface SpriteTextGlyphOptions {
 /**
  * MapLibre layer interface for SpriteLayer.
  * Renders large numbers of sprites and supports high-frequency updates.
- * @param T Sprite tag type.
+ * @param TTag Sprite tag type.
  */
-export interface SpriteLayerInterface<T = any> extends CustomLayerInterface {
+export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   readonly registerImage: (
     imageId: string,
     image: string | ImageBitmap
@@ -400,11 +400,11 @@ export interface SpriteLayerInterface<T = any> extends CustomLayerInterface {
 
   ////////////////////////////////////////////////////////////////////////////////
 
-  readonly addSprite: (spriteId: string, init: SpriteInit<T>) => boolean;
+  readonly addSprite: (spriteId: string, init: SpriteInit<TTag>) => boolean;
   readonly removeSprite: (spriteId: string) => void;
   readonly getSpriteState: (
     spriteId: string
-  ) => SpriteCurrentState<T> | undefined;
+  ) => SpriteCurrentState<TTag> | undefined;
 
   ////////////////////////////////////////////////////////////////////////////////
 
@@ -430,24 +430,24 @@ export interface SpriteLayerInterface<T = any> extends CustomLayerInterface {
 
   readonly updateSprite: (
     spriteId: string,
-    update: SpriteUpdateEntry<T>
+    update: SpriteUpdateEntry<TTag>
   ) => boolean;
-  readonly updateBulk: (updateBulkList: SpriteUpdateBulkEntry<T>[]) => number;
+  readonly updateBulk: (updateBulkList: SpriteUpdateBulkEntry<TTag>[]) => number;
   readonly updateForEach: (
     updater: (
-      sprite: SpriteCurrentState<T>,
-      update: SpriteUpdaterEntry<T>
+      sprite: SpriteCurrentState<TTag>,
+      update: SpriteUpdaterEntry<TTag>
     ) => boolean
   ) => number;
 
   ////////////////////////////////////////////////////////////////////////////////
 
-  readonly on: <K extends keyof SpriteLayerEventMap<T>>(
+  readonly on: <K extends keyof SpriteLayerEventMap<TTag>>(
     type: K,
-    listener: SpriteLayerEventListener<T, K>
+    listener: SpriteLayerEventListener<TTag, K>
   ) => void;
-  readonly off: <K extends keyof SpriteLayerEventMap<T>>(
+  readonly off: <K extends keyof SpriteLayerEventMap<TTag>>(
     type: K,
-    listener: SpriteLayerEventListener<T, K>
+    listener: SpriteLayerEventListener<TTag, K>
   ) => void;
 }
