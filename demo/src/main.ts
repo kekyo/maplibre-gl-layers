@@ -17,12 +17,12 @@ import { version, repository_url } from './generated/packageMetadata';
 /**
  * Maximum number of sprites shown simultaneously in the demo scene.
  */
-const MAX_NUMBER_OF_SPRITES = 3000;
+const MAX_NUMBER_OF_SPRITES = 10000;
 
 /**
  * Initial number of sprites to display when the demo loads.
  */
-const INITIAL_NUMBER_OF_SPRITES = 1000; // 1000
+const INITIAL_NUMBER_OF_SPRITES = 1000;
 
 /**
  * Interval in milliseconds between movement updates.
@@ -1251,6 +1251,13 @@ const main = async () => {
     let isActive = true;
     let spriteVisibilityLimit = INITIAL_NUMBER_OF_SPRITES;
     let lastVisibleSpriteCount = 0;
+    let syncSpritePoolWithLimit: (targetSize: number) => {
+      added: number;
+      removed: number;
+    } = () => ({
+      added: 0,
+      removed: 0,
+    });
 
     /**
      * Computes a scaling factor that widens the random-walk bounds as more sprites become visible.
@@ -1284,7 +1291,7 @@ const main = async () => {
     updateMovementExtents(spriteVisibilityLimit);
 
     /**
-     * Enables or disables sprites so only the desired number render while keeping the pool cached.
+     * Enables or disables sprites so only the desired number render while honoring the current activity flag.
      */
     const reconcileSpriteVisibility = () => {
       let activeCount = 0;
@@ -1327,7 +1334,10 @@ const main = async () => {
         Math.max(Math.round(limit), 1),
         MAX_NUMBER_OF_SPRITES
       );
-      if (spriteVisibilityLimit === clampedLimit) {
+      if (
+        spriteVisibilityLimit === clampedLimit &&
+        allSpriteIds.length === clampedLimit
+      ) {
         if (typeof window !== 'undefined' && window.__spriteDemo) {
           // Even without a change, keep the debug state synchronized for consistency.
           window.__spriteDemo.spriteLimit = spriteVisibilityLimit;
@@ -1337,7 +1347,12 @@ const main = async () => {
       }
       spriteVisibilityLimit = clampedLimit;
       updateMovementExtents(spriteVisibilityLimit);
+      const { added } = syncSpritePoolWithLimit(clampedLimit);
       reconcileSpriteVisibility();
+      if (added > 0 && currentSecondaryImageType === 'text') {
+        // Refresh secondary glyph bindings so newly added sprites match the current text mode.
+        void setSecondaryImageType('text');
+      }
       if (shouldReinitialize) {
         // When the count slider triggers a full reinit, rebuild the sprite positions for fairness.
         reinitializeMovement();
@@ -2547,17 +2562,19 @@ const main = async () => {
     //////////////////////////////////////////////////////////////////////////////////
     // Initialization: sprite placement routine.
 
-    // Pre-create MAX_NUMBER_OF_SPRITES sprites. The visibility limit is governed by spriteVisibilityLimit.
+    // Pre-create INITIAL_NUMBER_OF_SPRITES sprites. Additional sprites are created on demand.
     const iconSpecCount = ICON_SPECS.length;
     if (iconSpecCount === 0) {
       // Without predefined icon variants the demo cannot render sprites, so bail out quietly.
       return;
     }
-    const initialSpriteEntries: SpriteInitEntry<DemoSpriteTag>[] = [];
-    for (let i = 0; i < MAX_NUMBER_OF_SPRITES; i += 1) {
-      const id = `sprite-${i}`;
+
+    const createSpriteInitEntry = (
+      index: number
+    ): SpriteInitEntry<DemoSpriteTag> => {
+      const id = `sprite-${index}`;
       allSpriteIds.push(id);
-      const imageSpec = ICON_SPECS[i % iconSpecCount]!;
+      const imageSpec = ICON_SPECS[index % iconSpecCount]!;
       const primaryPlacement = resolvePrimaryImagePlacement(
         currentSpriteMode,
         isAutoRotationEnabled
@@ -2565,15 +2582,14 @@ const main = async () => {
 
       // Prepare a tag object so the initializer can populate required fields.
       const newTag = {} as DemoSpriteTag;
-      newTag.orderIndex = i;
+      newTag.orderIndex = index;
       newTag.iconSpecId = imageSpec.id;
       const location = initializeMovementState(
         STARTUP_CENTER,
         currentAnimationMode,
         newTag
       );
-      // Record sprite definition for batched registration.
-      initialSpriteEntries.push({
+      return {
         spriteId: id,
         location: {
           lng: location.lng,
@@ -2600,7 +2616,6 @@ const main = async () => {
             subLayer: SECONDARY_SUB_LAYER, // Place on the secondary sub-layer.
             order: 0,
             imageId: SECONDARY_IMAGE_ID, // Fixed image ID.
-            //mode: currentSpriteMode,
             mode: 'billboard', // Always render the satellite as a billboard.
             autoRotation: false, // Satellite orbits the anchor and does not face direction.
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
@@ -2611,7 +2626,37 @@ const main = async () => {
               : undefined,
           },
         ],
-      });
+      };
+    };
+
+    syncSpritePoolWithLimit = (targetSize: number) => {
+      const currentSize = allSpriteIds.length;
+      let added = 0;
+      let removed = 0;
+
+      if (targetSize > currentSize) {
+        const newEntries: SpriteInitEntry<DemoSpriteTag>[] = [];
+        for (let index = currentSize; index < targetSize; index += 1) {
+          newEntries.push(createSpriteInitEntry(index));
+        }
+        if (newEntries.length > 0) {
+          spriteLayer.addSprites(newEntries);
+          added = newEntries.length;
+        }
+      } else if (targetSize < currentSize) {
+        const removedIds = allSpriteIds.splice(targetSize);
+        if (removedIds.length > 0) {
+          spriteLayer.removeSprites(removedIds);
+          removed = removedIds.length;
+        }
+      }
+
+      return { added, removed };
+    };
+
+    const initialSpriteEntries: SpriteInitEntry<DemoSpriteTag>[] = [];
+    for (let i = 0; i < INITIAL_NUMBER_OF_SPRITES; i += 1) {
+      initialSpriteEntries.push(createSpriteInitEntry(i));
     }
     if (initialSpriteEntries.length > 0) {
       spriteLayer.addSprites(initialSpriteEntries);
