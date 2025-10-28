@@ -1,0 +1,79 @@
+name: Deploy Demo to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      deploy: ${{ steps.check-merge.outputs.deploy }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch develop branch
+        run: git fetch origin develop:refs/remotes/origin/develop
+
+      - name: Detect merge commit from develop
+        id: check-merge
+        run: |
+          set -euo pipefail
+          parents=$(git rev-list --parents -n 1 HEAD)
+          word_count=$(wc -w <<<"$parents")
+          if [ "$word_count" -ne 3 ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          second_parent=$(awk '{print $3}' <<<"$parents")
+          if git merge-base --is-ancestor "$second_parent" origin/develop; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        if: steps.check-merge.outputs.deploy == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.check-merge.outputs.deploy == 'true'
+        run: npm install
+
+      - name: Build demo workspace
+        if: steps.check-merge.outputs.deploy == 'true'
+        run: npm run build
+
+      - name: Upload Pages artifact
+        if: steps.check-merge.outputs.deploy == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: demo/dist
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
