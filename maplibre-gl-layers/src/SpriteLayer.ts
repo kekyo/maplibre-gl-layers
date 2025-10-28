@@ -1018,6 +1018,8 @@ const drawTextWithLetterSpacing = (
   }
 };
 
+type MutableSpriteScreenPoint = { x: number; y: number };
+
 /**
  * Base attributes for an image that composes a sprite.
  */
@@ -1094,6 +1096,15 @@ interface InternalSpriteImageState {
    * Interpolation state used for offset.offsetDeg.
    */
   offsetInterpolationState: NumericInterpolationState | null;
+  /**
+   * Reusable buffer storing screen-space quad corners for hit testing.
+   */
+  hitTestCorners?: [
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+  ];
 }
 
 /**
@@ -1820,6 +1831,30 @@ export const createSpriteLayer = <T = any>(
   const hitTestEntries: HitTestEntry[] = [];
 
   /**
+   * Ensures an image has a reusable hit-test corner buffer.
+   * @param {InternalSpriteImageState} imageEntry - Image requiring a corner buffer.
+   * @returns {[SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint]}
+   */
+  const ensureHitTestCorners = (
+    imageEntry: InternalSpriteImageState
+  ): [
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+  ] => {
+    if (!imageEntry.hitTestCorners) {
+      imageEntry.hitTestCorners = [
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+      ];
+    }
+    return imageEntry.hitTestCorners;
+  };
+
+  /**
    * Adds a hit-test entry to the cache, computing its axis-aligned bounding box.
    * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image.
    * @param {InternalSpriteImageState} imageEntry - Image reference.
@@ -1835,17 +1870,7 @@ export const createSpriteLayer = <T = any>(
       SpriteScreenPoint,
     ]
   ): void => {
-    const corners: [
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-    ] = [
-      { x: screenCorners[0].x, y: screenCorners[0].y },
-      { x: screenCorners[1].x, y: screenCorners[1].y },
-      { x: screenCorners[2].x, y: screenCorners[2].y },
-      { x: screenCorners[3].x, y: screenCorners[3].y },
-    ];
+    const corners = screenCorners;
 
     let minX = corners[0].x;
     let maxX = corners[0].x;
@@ -2696,7 +2721,7 @@ export const createSpriteLayer = <T = any>(
           offsetMeters,
         });
 
-        const screenCornersLocal: SpriteScreenPoint[] = new Array(4);
+        const hitTestCorners = ensureHitTestCorners(imageEntry);
         let bufferOffset = 0;
         // Iterate through each vertex defined by TRIANGLE_INDICES to populate the vertex buffer.
         for (const index of TRIANGLE_INDICES) {
@@ -2730,7 +2755,9 @@ export const createSpriteLayer = <T = any>(
             return;
           }
 
-          screenCornersLocal[index] = screenCorner;
+          const targetCorner = hitTestCorners[index]!;
+          targetCorner.x = screenCorner.x;
+          targetCorner.y = screenCorner.y;
 
           let [clipX, clipY, clipZ, clipW] = clipPosition;
           if (ENABLE_NDC_BIAS_SURFACE) {
@@ -2755,7 +2782,7 @@ export const createSpriteLayer = <T = any>(
           QUAD_VERTEX_SCRATCH[bufferOffset++] = v;
         }
 
-        screenCornerBuffer = screenCornersLocal;
+        screenCornerBuffer = hitTestCorners;
 
         if (SL_DEBUG) {
           (imageEntry as any).__debugBag = {
@@ -2804,6 +2831,7 @@ export const createSpriteLayer = <T = any>(
           anchor,
           totalRotateDeg,
         });
+        const hitTestCorners = ensureHitTestCorners(imageEntry);
 
         let bufferOffset = 0;
         // Populate the billboard quad vertices in TRIANGLE_INDICES order.
@@ -2824,13 +2852,14 @@ export const createSpriteLayer = <T = any>(
           QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.v;
         }
 
-        screenCornerBuffer = [
-          // Preserve the resolved screen-space corners for hit testing below.
-          { x: corners[0]!.x, y: corners[0]!.y },
-          { x: corners[1]!.x, y: corners[1]!.y },
-          { x: corners[2]!.x, y: corners[2]!.y },
-          { x: corners[3]!.x, y: corners[3]!.y },
-        ];
+        for (let i = 0; i < corners.length; i++) {
+          const source = corners[i]!;
+          const target = hitTestCorners[i]!;
+          target.x = source.x;
+          target.y = source.y;
+        }
+
+        screenCornerBuffer = hitTestCorners;
 
         if (SL_DEBUG) {
           (imageEntry as any).__debugBag = {
