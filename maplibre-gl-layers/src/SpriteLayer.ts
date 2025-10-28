@@ -508,15 +508,13 @@ export const createShaderProgram = (
  * @property {number} height - Image height in source pixels.
  * @property {ImageBitmap} bitmap - Backing bitmap used for uploads.
  * @property {WebGLTexture} [texture] - GPU texture bound to the bitmap.
- * @property {boolean} dirty - Indicates whether the texture needs to be rebuilt after replacing the bitmap.
  */
 interface RegisteredImage {
   id: string;
   width: number;
   height: number;
   bitmap: ImageBitmap;
-  texture?: WebGLTexture;
-  dirty: boolean;
+  texture: WebGLTexture | undefined;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -1366,6 +1364,37 @@ export const createSpriteLayer = <T = any>(
   const images = new Map<string, RegisteredImage>();
 
   /**
+   * Tracks queued image IDs to avoid duplicated uploads.
+   */
+  const queuedTextureIds = new Set<string>();
+
+  /**
+   * Enqueues an image for GPU texture upload.
+   * @param {RegisteredImage} image - Registered image awaiting upload.
+   * @returns {void}
+   */
+  const queueTextureUpload = (image: RegisteredImage): void => {
+    queuedTextureIds.add(image.id);
+  };
+
+  /**
+   * Removes an image ID from the upload queue when no longer needed.
+   * @param {string} imageId - Identifier of the image to cancel.
+   * @returns {void}
+   */
+  const cancelQueuedTextureUpload = (imageId: string): void => {
+    queuedTextureIds.delete(imageId);
+  };
+
+  /**
+   * Clears all pending texture uploads.
+   * @returns {void}
+   */
+  const clearTextureQueue = (): void => {
+    queuedTextureIds.clear();
+  };
+
+  /**
    * Collection of sprites currently managed by the layer.
    */
   const sprites = new Map<string, InternalSpriteCurrentState<T>>();
@@ -2041,7 +2070,7 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Creates or refreshes WebGL textures for registered images.
-   * Processes only entries marked with `dirty` to avoid unnecessary work.
+   * Processes only queued entries to avoid unnecessary work.
    * Intended to run just before drawing; returns immediately if the GL context is unavailable.
    * Ensures registerImage calls outside the render loop sync on the next frame.
    * @returns {void}
@@ -2051,15 +2080,23 @@ export const createSpriteLayer = <T = any>(
     if (!gl) {
       return;
     }
+    if (queuedTextureIds.size === 0) {
+      return;
+    }
     const glContext = gl;
-    images.forEach((image) => {
-      // Skip clean entries or ones missing a bitmap.
-      if (!image.dirty || !image.bitmap) {
+
+    // Iterates all queue item (image id)
+    queuedTextureIds.forEach((imageId) => {
+      // Extract image object
+      const image = images.get(imageId);
+      queuedTextureIds.delete(imageId);
+      if (!image || !image.bitmap) {
         return;
       }
       if (image.texture) {
         // Delete existing textures to avoid stale GPU data.
         glContext.deleteTexture(image.texture);
+        image.texture = undefined;
       }
       const texture = glContext.createTexture();
       if (!texture) {
@@ -2099,8 +2136,6 @@ export const createSpriteLayer = <T = any>(
         image.bitmap
       );
       image.texture = texture;
-      // Clear the dirty flag now that the upload is complete.
-      image.dirty = false;
     });
   };
 
@@ -2320,7 +2355,7 @@ export const createSpriteLayer = <T = any>(
           glContext.deleteTexture(image.texture);
         }
         image.texture = undefined;
-        image.dirty = true;
+        queueTextureUpload(image);
       });
       if (vertexBuffer) {
         glContext.deleteBuffer(vertexBuffer);
@@ -3099,16 +3134,17 @@ export const createSpriteLayer = <T = any>(
     }
 
     // Store the image metadata.
-    images.set(imageId, {
+    const image: RegisteredImage = {
       id: imageId,
       width: bitmap.width,
       height: bitmap.height,
       bitmap,
       texture: undefined,
-      dirty: true,
-    });
+    };
+    images.set(imageId, image);
 
-    // Mark as dirty so the next draw uploads the bitmap.
+    // Queue the upload so the next draw refreshes the texture.
+    queueTextureUpload(image);
     ensureTextures();
     // Request a redraw so sprites using the new image update immediately.
     scheduleRender();
@@ -3346,15 +3382,16 @@ export const createSpriteLayer = <T = any>(
       renderPixelRatio
     );
 
-    images.set(textGlyphId, {
+    const image: RegisteredImage = {
       id: textGlyphId,
       width: totalWidth,
       height: totalHeight,
       bitmap,
       texture: undefined,
-      dirty: true,
-    });
+    };
+    images.set(textGlyphId, image);
 
+    queueTextureUpload(image);
     ensureTextures();
     scheduleRender();
 
@@ -3379,6 +3416,7 @@ export const createSpriteLayer = <T = any>(
       glContext.deleteTexture(image.texture);
     }
 
+    cancelQueuedTextureUpload(imageId);
     // Remove the image entry.
     images.delete(imageId);
 
@@ -3404,6 +3442,7 @@ export const createSpriteLayer = <T = any>(
       }
     });
     images.clear();
+    clearTextureQueue();
     ensureRenderTargetEntries();
     scheduleRender();
   };
