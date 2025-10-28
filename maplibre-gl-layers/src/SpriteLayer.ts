@@ -2216,7 +2216,18 @@ export const createSpriteLayer = <T = any>(
       });
     });
 
-    // Sorting happens later during rendering per sub-layer.
+    // Pre-sorting (However, camera face depth is not normalized)
+    renderTargetEntries.sort((a, b) => {
+      const aImage = a[1];
+      const bImage = b[1];
+      if (aImage.subLayer !== bImage.subLayer) {
+        return aImage.subLayer - bImage.subLayer;
+      }
+      if (aImage.order !== bImage.order) {
+        return aImage.order - bImage.order;
+      }
+      return aImage.imageId.localeCompare(bImage.imageId);
+    });
   };
 
   //////////////////////////////////////////////////////////////////////////
