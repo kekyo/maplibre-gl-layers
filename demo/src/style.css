@@ -17,6 +17,10 @@ body {
   overflow: hidden;
 }
 
+a {
+  color: #60a0ff;
+}
+
 #app {
   position: relative;
 }
@@ -30,7 +34,7 @@ body {
   position: absolute;
   top: 16px;
   left: 16px;
-  max-width: 320px;
+  max-width: 340px;
   padding: 16px 20px 24px 20px;
   border-radius: 12px;
   background: rgba(100, 60, 60, 0.65);

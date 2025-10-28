@@ -16,7 +16,7 @@ Markers often need to move smoothly, appear and disappear over time, and you may
 
 **maplibre-gl-layers** is designed to meet that need.
 
-Using this package, you can place and adjust large collections of sprites (marker images) through a straightforward API:
+Using this package, you can place and adjust large collections of sprites (marker images) through a straightforward API ([This demo page is here](https://kekyo.github.io/maplibre-gl-layers/)):
 
 ![demo 1](images/demo1.png)
 
