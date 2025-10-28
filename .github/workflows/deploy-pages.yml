@@ -2,8 +2,8 @@ name: Deploy Demo to GitHub Pages
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - '*'
 
 concurrency:
   group: pages
@@ -17,18 +17,33 @@ jobs:
     outputs:
       deploy: ${{ steps.check-merge.outputs.deploy }}
     steps:
-      - name: Checkout main branch
+      - name: Checkout tagged commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fetch develop branch
-        run: git fetch origin develop:refs/remotes/origin/develop
+      - name: Fetch main and develop branches
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          git fetch origin develop:refs/remotes/origin/develop
 
-      - name: Detect merge commit from develop
+      - name: Evaluate deployment conditions
         id: check-merge
         run: |
           set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" != "tag" ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag_name="${GITHUB_REF_NAME:-}"
+          if [ -z "$tag_name" ] || ! git tag --points-at HEAD | grep -Fxq "$tag_name"; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           parents=$(git rev-list --parents -n 1 HEAD)
           word_count=$(wc -w <<<"$parents")
           if [ "$word_count" -ne 3 ]; then
@@ -38,6 +53,7 @@ jobs:
           second_parent=$(awk '{print $3}' <<<"$parents")
           if git merge-base --is-ancestor "$second_parent" origin/develop; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag_name" >> "$GITHUB_OUTPUT"
           else
             echo "deploy=false" >> "$GITHUB_OUTPUT"
           fi

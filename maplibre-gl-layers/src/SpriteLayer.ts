@@ -18,6 +18,7 @@ import type { CustomRenderMethodInput } from 'maplibre-gl';
 import { vec4, type mat4 } from 'gl-matrix';
 import type {
   SpriteInit,
+  SpriteInitCollection,
   SpriteMode,
   SpriteLayerInterface,
   SpriteLayerOptions,
@@ -67,6 +68,7 @@ import {
   calculateSurfaceWorldDimensions,
   applySurfaceDisplacement,
   isFiniteNumber,
+  clipToScreen,
   screenToClip,
   resolveScalingOptions,
   calculateBillboardCenterPosition,
@@ -507,15 +509,13 @@ export const createShaderProgram = (
  * @property {number} height - Image height in source pixels.
  * @property {ImageBitmap} bitmap - Backing bitmap used for uploads.
  * @property {WebGLTexture} [texture] - GPU texture bound to the bitmap.
- * @property {boolean} dirty - Indicates whether the texture needs to be rebuilt after replacing the bitmap.
  */
 interface RegisteredImage {
   id: string;
   width: number;
   height: number;
   bitmap: ImageBitmap;
-  texture?: WebGLTexture;
-  dirty: boolean;
+  texture: WebGLTexture | undefined;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -1018,6 +1018,8 @@ const drawTextWithLetterSpacing = (
   }
 };
 
+type MutableSpriteScreenPoint = { x: number; y: number };
+
 /**
  * Base attributes for an image that composes a sprite.
  */
@@ -1094,6 +1096,15 @@ interface InternalSpriteImageState {
    * Interpolation state used for offset.offsetDeg.
    */
   offsetInterpolationState: NumericInterpolationState | null;
+  /**
+   * Reusable buffer storing screen-space quad corners for hit testing.
+   */
+  hitTestCorners?: [
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+  ];
 }
 
 /**
@@ -1365,6 +1376,37 @@ export const createSpriteLayer = <T = any>(
   const images = new Map<string, RegisteredImage>();
 
   /**
+   * Tracks queued image IDs to avoid duplicated uploads.
+   */
+  const queuedTextureIds = new Set<string>();
+
+  /**
+   * Enqueues an image for GPU texture upload.
+   * @param {RegisteredImage} image - Registered image awaiting upload.
+   * @returns {void}
+   */
+  const queueTextureUpload = (image: RegisteredImage): void => {
+    queuedTextureIds.add(image.id);
+  };
+
+  /**
+   * Removes an image ID from the upload queue when no longer needed.
+   * @param {string} imageId - Identifier of the image to cancel.
+   * @returns {void}
+   */
+  const cancelQueuedTextureUpload = (imageId: string): void => {
+    queuedTextureIds.delete(imageId);
+  };
+
+  /**
+   * Clears all pending texture uploads.
+   * @returns {void}
+   */
+  const clearTextureQueue = (): void => {
+    queuedTextureIds.clear();
+  };
+
+  /**
    * Collection of sprites currently managed by the layer.
    */
   const sprites = new Map<string, InternalSpriteCurrentState<T>>();
@@ -1602,6 +1644,11 @@ export const createSpriteLayer = <T = any>(
     readonly spriteMinPixel: number;
     readonly spriteMaxPixel: number;
     readonly effectivePixelsPerMeter: number;
+    readonly drawingBufferWidth: number;
+    readonly drawingBufferHeight: number;
+    readonly pixelRatio: number;
+    readonly clipContext: ClipContext | null;
+    readonly altitudeMeters: number;
   };
 
   /**
@@ -1629,6 +1676,11 @@ export const createSpriteLayer = <T = any>(
       effectivePixelsPerMeter,
       images,
       mapInstance,
+      drawingBufferWidth,
+      drawingBufferHeight,
+      pixelRatio,
+      clipContext,
+      altitudeMeters,
     } = params;
 
     // Decide whether to return the anchor-adjusted center or the raw projected location.
@@ -1719,6 +1771,12 @@ export const createSpriteLayer = <T = any>(
           })
         : // Otherwise use the sprite's own interpolated geographic location.
           { lng: sprite.currentLocation.lng, lat: sprite.currentLocation.lat };
+
+    const projectToClipSpace: ProjectToClipSpaceFn | undefined = clipContext
+      ? (lng, lat, elevation) =>
+          projectLngLatToClipSpace(lng, lat, elevation, clipContext)
+      : undefined;
+
     const surfacePlacement = calculateSurfaceCenterPosition({
       baseLngLat,
       imageWidth: imageResourceRef?.width,
@@ -1729,38 +1787,25 @@ export const createSpriteLayer = <T = any>(
       totalRotateDeg: totalRotDeg,
       anchor: img.anchor,
       offset: img.offset,
-      project: (lngLat) => {
-        const projectedPoint = mapInstance.project(lngLat as any);
-        // Skip anchors that cannot be projected (likely off-screen during interpolation).
-        if (!projectedPoint) {
-          return null;
-        }
-        // Translate MapLibre's point into our simplified XY representation when projection succeeds.
-        return { x: projectedPoint.x, y: projectedPoint.y };
-      },
+      projectToClipSpace,
+      drawingBufferWidth,
+      drawingBufferHeight,
+      pixelRatio,
+      altitudeMeters,
+      resolveAnchorless: true,
+      project:
+        projectToClipSpace === undefined
+          ? (lngLat) => {
+              const projectedPoint = mapInstance.project(lngLat as any);
+              if (!projectedPoint) {
+                return null;
+              }
+              return { x: projectedPoint.x, y: projectedPoint.y };
+            }
+          : undefined,
     });
 
-    const anchorlessPlacement = calculateSurfaceCenterPosition({
-      baseLngLat,
-      imageWidth: imageResourceRef?.width,
-      imageHeight: imageResourceRef?.height,
-      baseMetersPerPixel,
-      imageScale: imageScaleLocal,
-      zoomScaleFactor,
-      totalRotateDeg: totalRotDeg,
-      anchor: undefined,
-      offset: img.offset,
-      project: (lngLat) => {
-        const projectedPoint = mapInstance.project(lngLat as any);
-        if (!projectedPoint) {
-          return null;
-        }
-        // Anchorless variant still converts through the same helper to maintain consistency.
-        return { x: projectedPoint.x, y: projectedPoint.y };
-      },
-    });
-
-    const anchorlessCenter = anchorlessPlacement.center ?? {
+    const anchorlessCenter = surfacePlacement.anchorlessCenter ?? {
       // If the anchorless placement could not be projected, fall back to the original screen position.
       x: baseX,
       y: baseY,
@@ -1786,6 +1831,30 @@ export const createSpriteLayer = <T = any>(
   const hitTestEntries: HitTestEntry[] = [];
 
   /**
+   * Ensures an image has a reusable hit-test corner buffer.
+   * @param {InternalSpriteImageState} imageEntry - Image requiring a corner buffer.
+   * @returns {[SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint]}
+   */
+  const ensureHitTestCorners = (
+    imageEntry: InternalSpriteImageState
+  ): [
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+  ] => {
+    if (!imageEntry.hitTestCorners) {
+      imageEntry.hitTestCorners = [
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+      ];
+    }
+    return imageEntry.hitTestCorners;
+  };
+
+  /**
    * Adds a hit-test entry to the cache, computing its axis-aligned bounding box.
    * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image.
    * @param {InternalSpriteImageState} imageEntry - Image reference.
@@ -1801,17 +1870,7 @@ export const createSpriteLayer = <T = any>(
       SpriteScreenPoint,
     ]
   ): void => {
-    const corners: [
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-    ] = [
-      { x: screenCorners[0].x, y: screenCorners[0].y },
-      { x: screenCorners[1].x, y: screenCorners[1].y },
-      { x: screenCorners[2].x, y: screenCorners[2].y },
-      { x: screenCorners[3].x, y: screenCorners[3].y },
-    ];
+    const corners = screenCorners;
 
     let minX = corners[0].x;
     let maxX = corners[0].x;
@@ -2040,7 +2099,7 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Creates or refreshes WebGL textures for registered images.
-   * Processes only entries marked with `dirty` to avoid unnecessary work.
+   * Processes only queued entries to avoid unnecessary work.
    * Intended to run just before drawing; returns immediately if the GL context is unavailable.
    * Ensures registerImage calls outside the render loop sync on the next frame.
    * @returns {void}
@@ -2050,15 +2109,23 @@ export const createSpriteLayer = <T = any>(
     if (!gl) {
       return;
     }
+    if (queuedTextureIds.size === 0) {
+      return;
+    }
     const glContext = gl;
-    images.forEach((image) => {
-      // Skip clean entries or ones missing a bitmap.
-      if (!image.dirty || !image.bitmap) {
+
+    // Iterates all queue item (image id)
+    queuedTextureIds.forEach((imageId) => {
+      // Extract image object
+      const image = images.get(imageId);
+      queuedTextureIds.delete(imageId);
+      if (!image || !image.bitmap) {
         return;
       }
       if (image.texture) {
         // Delete existing textures to avoid stale GPU data.
         glContext.deleteTexture(image.texture);
+        image.texture = undefined;
       }
       const texture = glContext.createTexture();
       if (!texture) {
@@ -2098,8 +2165,6 @@ export const createSpriteLayer = <T = any>(
         image.bitmap
       );
       image.texture = texture;
-      // Clear the dirty flag now that the upload is complete.
-      image.dirty = false;
     });
   };
 
@@ -2151,7 +2216,18 @@ export const createSpriteLayer = <T = any>(
       });
     });
 
-    // Sorting happens later during rendering per sub-layer.
+    // Pre-sorting (However, camera face depth is not normalized)
+    renderTargetEntries.sort((a, b) => {
+      const aImage = a[1];
+      const bImage = b[1];
+      if (aImage.subLayer !== bImage.subLayer) {
+        return aImage.subLayer - bImage.subLayer;
+      }
+      if (aImage.order !== bImage.order) {
+        return aImage.order - bImage.order;
+      }
+      return aImage.imageId.localeCompare(bImage.imageId);
+    });
   };
 
   //////////////////////////////////////////////////////////////////////////
@@ -2319,7 +2395,7 @@ export const createSpriteLayer = <T = any>(
           glContext.deleteTexture(image.texture);
         }
         image.texture = undefined;
-        image.dirty = true;
+        queueTextureUpload(image);
       });
       if (vertexBuffer) {
         glContext.deleteBuffer(vertexBuffer);
@@ -2578,6 +2654,11 @@ export const createSpriteLayer = <T = any>(
         spriteMinPixel,
         spriteMaxPixel,
         effectivePixelsPerMeter,
+        drawingBufferWidth,
+        drawingBufferHeight,
+        pixelRatio,
+        clipContext,
+        altitudeMeters: spriteEntry.currentLocation.z ?? 0,
       };
 
       let baseProjected = { x: projected.x, y: projected.y };
@@ -2620,11 +2701,18 @@ export const createSpriteLayer = <T = any>(
           totalRotateDeg,
           anchor,
           offset: offsetDef,
-          project: (lngLat) => {
-            const result = mapInstance.project(lngLat as any);
-            // If projection succeeds, wrap the returned point; otherwise propagate null so callers can skip rendering.
-            return result ? { x: result.x, y: result.y } : null;
-          },
+          projectToClipSpace: (lng, lat, elevation) =>
+            projectLngLatToClipSpace(lng, lat, elevation, clipContext),
+          drawingBufferWidth,
+          drawingBufferHeight,
+          pixelRatio,
+          altitudeMeters: spriteEntry.currentLocation.z ?? 0,
+          project: !clipContext
+            ? (lngLat) => {
+                const result = mapInstance.project(lngLat as any);
+                return result ? { x: result.x, y: result.y } : null;
+              }
+            : undefined,
         });
 
         if (!surfaceCenter.center) {
@@ -2644,7 +2732,7 @@ export const createSpriteLayer = <T = any>(
           offsetMeters,
         });
 
-        const screenCornersLocal: SpriteScreenPoint[] = new Array(4);
+        const hitTestCorners = ensureHitTestCorners(imageEntry);
         let bufferOffset = 0;
         // Iterate through each vertex defined by TRIANGLE_INDICES to populate the vertex buffer.
         for (const index of TRIANGLE_INDICES) {
@@ -2668,20 +2756,19 @@ export const createSpriteLayer = <T = any>(
             return;
           }
 
-          const projectedCorner = mapInstance.project({
-            lng: displaced.lng,
-            lat: displaced.lat,
-            // Mirror the same altitude assumption when projecting back to screen space.
-            z: spriteEntry.currentLocation.z ?? 0,
-          } as any);
-          if (!projectedCorner) {
+          const screenCorner = clipToScreen(
+            clipPosition,
+            drawingBufferWidth,
+            drawingBufferHeight,
+            pixelRatio
+          );
+          if (!screenCorner) {
             return;
           }
 
-          screenCornersLocal[index] = {
-            x: projectedCorner.x,
-            y: projectedCorner.y,
-          };
+          const targetCorner = hitTestCorners[index]!;
+          targetCorner.x = screenCorner.x;
+          targetCorner.y = screenCorner.y;
 
           let [clipX, clipY, clipZ, clipW] = clipPosition;
           if (ENABLE_NDC_BIAS_SURFACE) {
@@ -2706,7 +2793,7 @@ export const createSpriteLayer = <T = any>(
           QUAD_VERTEX_SCRATCH[bufferOffset++] = v;
         }
 
-        screenCornerBuffer = screenCornersLocal;
+        screenCornerBuffer = hitTestCorners;
 
         if (SL_DEBUG) {
           (imageEntry as any).__debugBag = {
@@ -2755,6 +2842,7 @@ export const createSpriteLayer = <T = any>(
           anchor,
           totalRotateDeg,
         });
+        const hitTestCorners = ensureHitTestCorners(imageEntry);
 
         let bufferOffset = 0;
         // Populate the billboard quad vertices in TRIANGLE_INDICES order.
@@ -2775,13 +2863,14 @@ export const createSpriteLayer = <T = any>(
           QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.v;
         }
 
-        screenCornerBuffer = [
-          // Preserve the resolved screen-space corners for hit testing below.
-          { x: corners[0]!.x, y: corners[0]!.y },
-          { x: corners[1]!.x, y: corners[1]!.y },
-          { x: corners[2]!.x, y: corners[2]!.y },
-          { x: corners[3]!.x, y: corners[3]!.y },
-        ];
+        for (let i = 0; i < corners.length; i++) {
+          const source = corners[i]!;
+          const target = hitTestCorners[i]!;
+          target.x = source.x;
+          target.y = source.y;
+        }
+
+        screenCornerBuffer = hitTestCorners;
 
         if (SL_DEBUG) {
           (imageEntry as any).__debugBag = {
@@ -2905,6 +2994,11 @@ export const createSpriteLayer = <T = any>(
           spriteMinPixel,
           spriteMaxPixel,
           effectivePixelsPerMeter,
+          drawingBufferWidth,
+          drawingBufferHeight,
+          pixelRatio,
+          clipContext,
+          altitudeMeters: spriteEntry.currentLocation.z ?? 0,
         };
 
         // Resolve anchor/offset defaults for depth computations to stay consistent with draw path.
@@ -3098,16 +3192,17 @@ export const createSpriteLayer = <T = any>(
     }
 
     // Store the image metadata.
-    images.set(imageId, {
+    const image: RegisteredImage = {
       id: imageId,
       width: bitmap.width,
       height: bitmap.height,
       bitmap,
       texture: undefined,
-      dirty: true,
-    });
+    };
+    images.set(imageId, image);
 
-    // Mark as dirty so the next draw uploads the bitmap.
+    // Queue the upload so the next draw refreshes the texture.
+    queueTextureUpload(image);
     ensureTextures();
     // Request a redraw so sprites using the new image update immediately.
     scheduleRender();
@@ -3345,15 +3440,16 @@ export const createSpriteLayer = <T = any>(
       renderPixelRatio
     );
 
-    images.set(textGlyphId, {
+    const image: RegisteredImage = {
       id: textGlyphId,
       width: totalWidth,
       height: totalHeight,
       bitmap,
       texture: undefined,
-      dirty: true,
-    });
+    };
+    images.set(textGlyphId, image);
 
+    queueTextureUpload(image);
     ensureTextures();
     scheduleRender();
 
@@ -3378,6 +3474,7 @@ export const createSpriteLayer = <T = any>(
       glContext.deleteTexture(image.texture);
     }
 
+    cancelQueuedTextureUpload(imageId);
     // Remove the image entry.
     images.delete(imageId);
 
@@ -3388,15 +3485,44 @@ export const createSpriteLayer = <T = any>(
     return true;
   };
 
+  /**
+   * Unregisters all images and glyphs, cleaning up associated GPU textures.
+   * @returns {void}
+   */
+  const unregisterAllImages = (): void => {
+    const glContext = gl;
+    images.forEach((image) => {
+      if (glContext && image.texture) {
+        glContext.deleteTexture(image.texture);
+      }
+      if (image.bitmap) {
+        image.bitmap.close?.();
+      }
+    });
+    images.clear();
+    clearTextureQueue();
+    ensureRenderTargetEntries();
+    scheduleRender();
+  };
+
+  /**
+   * Returns the identifiers of all registered images and glyphs.
+   * @returns {string[]} Array containing every registered imageId.
+   */
+  const getAllImageIds = (): string[] => Array.from(images.keys());
+
   //////////////////////////////////////////////////////////////////////////
 
   /**
-   * Creates a new sprite with the provided options and adds it to the layer.
+   * Internal helper that constructs sprite state without scheduling redraws.
    * @param {string} spriteId - Sprite identifier.
-   * @param {SpriteInit<T>} init - Initial sprite parameters supplied by the caller.
-   * @returns {boolean} `true` when the sprite is added; `false` when the ID already exists.
+   * @param {SpriteInit<T>} init - Initial sprite parameters.
+   * @returns {boolean} `true` when the sprite is stored; `false` when the ID already exists or is invalid.
    */
-  const addSprite = (spriteId: string, init: SpriteInit<T>): boolean => {
+  const addSpriteInternal = (
+    spriteId: string,
+    init: SpriteInit<T>
+  ): boolean => {
     // Reject duplicates.
     if (sprites.get(spriteId)) {
       return false;
@@ -3490,13 +3616,73 @@ export const createSpriteLayer = <T = any>(
     // Store the sprite state.
     sprites.set(spriteId, spriteState);
 
-    // Rebuild render target entries.
-    ensureRenderTargetEntries();
-    // Request a redraw so the new sprite appears immediately.
-    scheduleRender();
-
     return true;
   };
+
+  /**
+   * Expands a batch sprite payload into iterable entries.
+   * @param {SpriteInitCollection<T>} collection - Batch payload.
+   * @returns {Array<[string, SpriteInit<T>]>} Normalised entries.
+   */
+  const resolveSpriteInitCollection = (
+    collection: SpriteInitCollection<T>
+  ): Array<[string, SpriteInit<T>]> => {
+    if (Array.isArray(collection)) {
+      return collection.map((entry): [string, SpriteInit<T>] => [
+        entry.spriteId,
+        entry,
+      ]);
+    }
+    return Object.entries(collection) as Array<[string, SpriteInit<T>]>;
+  };
+
+  /**
+   * Creates a new sprite with the provided options and adds it to the layer.
+   * @param {string} spriteId - Sprite identifier.
+   * @param {SpriteInit<T>} init - Initial sprite parameters supplied by the caller.
+   * @returns {boolean} `true` when the sprite is added; `false` when the ID already exists.
+   */
+  const addSprite = (spriteId: string, init: SpriteInit<T>): boolean => {
+    const isAdded = addSpriteInternal(spriteId, init);
+    if (isAdded) {
+      // Rebuild render target entries.
+      ensureRenderTargetEntries();
+      // Request a redraw so the new sprite appears immediately.
+      scheduleRender();
+    }
+    return isAdded;
+  };
+
+  /**
+   * Adds multiple sprites in a single batch operation.
+   * @param {SpriteInitCollection<T>} collection - Sprite payloads keyed by spriteId or as array entries.
+   * @returns {number} Number of sprites that were newly added.
+   */
+  const addSprites = (collection: SpriteInitCollection<T>): number => {
+    let addedCount = 0;
+    for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
+      collection
+    )) {
+      if (addSpriteInternal(spriteId, spriteInit)) {
+        addedCount++;
+      }
+    }
+    if (addedCount > 0) {
+      // Rebuild render target entries.
+      ensureRenderTargetEntries();
+      // Request a redraw so the new sprite appears immediately.
+      scheduleRender();
+    }
+    return addedCount;
+  };
+
+  /**
+   * Removes a sprite without requesting rendering.
+   * @param {string} spriteId - Sprite identifier.
+   * @returns {boolean} `true` when the sprite existed and was removed.
+   */
+  const removeSpriteInternal = (spriteId: string): boolean =>
+    sprites.delete(spriteId);
 
   /**
    * Removes a sprite from the layer.
@@ -3506,7 +3692,8 @@ export const createSpriteLayer = <T = any>(
    */
   const removeSprite = (spriteId: string): boolean => {
     // Exit early when the sprite does not exist.
-    if (!sprites.delete(spriteId)) {
+    const removed = removeSpriteInternal(spriteId);
+    if (!removed) {
       return false;
     }
 
@@ -3516,6 +3703,75 @@ export const createSpriteLayer = <T = any>(
     scheduleRender();
 
     return true;
+  };
+
+  /**
+   * Removes multiple sprites at once.
+   * @param {readonly string[]} spriteIds - Sprite identifiers to remove.
+   * @returns {number} Number of sprites that were removed.
+   */
+  const removeSprites = (spriteIds: readonly string[]): number => {
+    let removedCount = 0;
+    for (const spriteId of spriteIds) {
+      if (removeSpriteInternal(spriteId)) {
+        removedCount++;
+      }
+    }
+    if (removedCount > 0) {
+      // Rebuild render target entries.
+      ensureRenderTargetEntries();
+      // Request a redraw so the new sprite appears immediately.
+      scheduleRender();
+    }
+    return removedCount;
+  };
+
+  /**
+   * Removes every sprite managed by the layer.
+   * @returns {number} Number of sprites that were cleared.
+   */
+  const removeAllSprites = (): number => {
+    const removedCount = sprites.size;
+    if (removedCount === 0) {
+      return 0;
+    }
+
+    sprites.clear();
+
+    // Rebuild render target entries.
+    ensureRenderTargetEntries();
+    // Request a redraw so the new sprite appears immediately.
+    scheduleRender();
+
+    return removedCount;
+  };
+
+  /**
+   * Deletes all sprite images attached to the specified sprite while keeping the sprite entry intact.
+   * @param {string} spriteId - Identifier of the sprite whose images should be removed.
+   * @returns {number} Number of images that were removed.
+   */
+  const removeAllSpriteImages = (spriteId: string): number => {
+    const sprite = sprites.get(spriteId);
+    if (!sprite) {
+      return 0;
+    }
+    if (sprite.images.size === 0) {
+      return 0;
+    }
+
+    let removedCount = 0;
+    sprite.images.forEach((orderMap) => {
+      removedCount += orderMap.size;
+    });
+    sprite.images.clear();
+
+    // Rebuild render target entries.
+    ensureRenderTargetEntries();
+    // Request a redraw so the sprite reflects the removal immediately.
+    scheduleRender();
+
+    return removedCount;
   };
 
   /**
@@ -4226,8 +4482,14 @@ export const createSpriteLayer = <T = any>(
     registerImage,
     registerTextGlyph,
     unregisterImage,
+    unregisterAllImages,
+    getAllImageIds,
     addSprite,
+    addSprites,
     removeSprite,
+    removeSprites,
+    removeAllSprites,
+    removeAllSpriteImages,
     getSpriteState,
     addSpriteImage,
     updateSpriteImage,

@@ -482,6 +482,41 @@ export const screenToClip = (
 };
 
 /**
+ * Converts homogeneous clip coordinates back into screen-space pixels.
+ * @param {[number, number, number, number]} clipPosition - Homogeneous clip coordinates.
+ * @param {number} drawingBufferWidth - WebGL drawing buffer width in device pixels.
+ * @param {number} drawingBufferHeight - WebGL drawing buffer height in device pixels.
+ * @param {number} pixelRatio - Device pixel ratio relating CSS pixels to device pixels.
+ * @returns {{ x: number; y: number } | null} Screen-space coordinates or `null` when invalid.
+ */
+export const clipToScreen = (
+  clipPosition: readonly [number, number, number, number],
+  drawingBufferWidth: number,
+  drawingBufferHeight: number,
+  pixelRatio: number
+): { x: number; y: number } | null => {
+  const [clipX, clipY, , clipW] = clipPosition;
+  if (!Number.isFinite(clipW) || clipW === 0) {
+    return null;
+  }
+  const invW = 1 / clipW;
+  const ndcX = clipX * invW;
+  const ndcY = clipY * invW;
+  const deviceX = (ndcX + 1) * 0.5 * drawingBufferWidth;
+  const deviceY = (1 - ndcY) * 0.5 * drawingBufferHeight;
+  if (!Number.isFinite(deviceX) || !Number.isFinite(deviceY)) {
+    return null;
+  }
+  if (!Number.isFinite(pixelRatio) || pixelRatio === 0) {
+    return null;
+  }
+  return {
+    x: deviceX / pixelRatio,
+    y: deviceY / pixelRatio,
+  };
+};
+
+/**
  * Index order used to decompose a quad into two triangles.
  * @constant
  */
@@ -894,7 +929,13 @@ export const calculateBillboardCornerScreenPositions = (
  * @property {number} totalRotateDeg - Rotation applied to the sprite in degrees.
  * @property {SpriteAnchor} [anchor] - Anchor definition normalized between -1 and 1.
  * @property {SpriteImageOffset} [offset] - Offset definition applied in meters/deg.
- * @property {ProjectLngLatFn} project - Projection function mapping longitude/latitude to screen space.
+ * @property {ProjectLngLatFn} [project] - Projection function mapping longitude/latitude to screen space.
+ * @property {ProjectToClipSpaceFn} [projectToClipSpace] - Projection into clip space when available.
+ * @property {number} [drawingBufferWidth] - WebGL drawing buffer width in device pixels.
+ * @property {number} [drawingBufferHeight] - WebGL drawing buffer height in device pixels.
+ * @property {number} [pixelRatio] - Device pixel ratio relating CSS pixels to device pixels.
+ * @property {number} [altitudeMeters] - Altitude used when projecting points into clip space.
+ * @property {boolean} [resolveAnchorless] - When true, also computes the anchorless center.
  */
 export type SurfaceCenterParams = {
   baseLngLat: SpriteLocation;
@@ -906,7 +947,13 @@ export type SurfaceCenterParams = {
   totalRotateDeg: number;
   anchor?: SpriteAnchor;
   offset?: SpriteImageOffset;
-  project: ProjectLngLatFn;
+  project?: ProjectLngLatFn;
+  projectToClipSpace?: ProjectToClipSpaceFn;
+  drawingBufferWidth?: number;
+  drawingBufferHeight?: number;
+  pixelRatio?: number;
+  altitudeMeters?: number;
+  resolveAnchorless?: boolean;
 };
 
 /**
@@ -916,12 +963,18 @@ export type SurfaceCenterParams = {
  * @property {{ width: number; height: number }} worldDimensions - Sprite dimensions in world meters.
  * @property {{ east: number; north: number }} totalDisplacement - Combined anchor and offset displacement in meters.
  * @property {SpriteLocation} displacedLngLat - Geographic coordinates after applying displacement.
+ * @property {{ x: number; y: number } | null | undefined} [anchorlessCenter] - Anchorless screen coordinates when requested.
+ * @property {{ east: number; north: number } | undefined} [anchorlessDisplacement] - Offset-only displacement when requested.
+ * @property {SpriteLocation | undefined} [anchorlessLngLat] - Anchorless geographic coordinate when requested.
  */
 export type SurfaceCenterResult = {
   center: { x: number; y: number } | null;
   worldDimensions: { width: number; height: number };
   totalDisplacement: { east: number; north: number };
   displacedLngLat: SpriteLocation;
+  anchorlessCenter?: { x: number; y: number } | null;
+  anchorlessDisplacement?: { east: number; north: number };
+  anchorlessLngLat?: SpriteLocation;
 };
 
 /**
@@ -943,7 +996,51 @@ export const calculateSurfaceCenterPosition = (
     anchor,
     offset,
     project,
+    projectToClipSpace,
+    drawingBufferWidth,
+    drawingBufferHeight,
+    pixelRatio,
+    altitudeMeters,
+    resolveAnchorless = false,
   } = params;
+
+  const baseAltitude = Number.isFinite(altitudeMeters)
+    ? altitudeMeters!
+    : (baseLngLat.z ?? 0);
+
+  const hasClipProjection =
+    typeof drawingBufferWidth === 'number' &&
+    drawingBufferWidth > 0 &&
+    typeof drawingBufferHeight === 'number' &&
+    drawingBufferHeight > 0 &&
+    typeof pixelRatio === 'number' &&
+    Number.isFinite(pixelRatio) &&
+    pixelRatio !== 0 &&
+    typeof projectToClipSpace === 'function';
+
+  const projectPoint = (
+    lngLat: SpriteLocation
+  ): { x: number; y: number } | null => {
+    if (hasClipProjection && projectToClipSpace) {
+      const clip = projectToClipSpace(
+        lngLat.lng,
+        lngLat.lat,
+        lngLat.z ?? baseAltitude
+      );
+      if (clip) {
+        const screen = clipToScreen(
+          clip,
+          drawingBufferWidth!,
+          drawingBufferHeight!,
+          pixelRatio!
+        );
+        if (screen) {
+          return screen;
+        }
+      }
+    }
+    return project ? project(lngLat) : null;
+  };
 
   const worldDims = calculateSurfaceWorldDimensions(
     imageWidth,
@@ -973,13 +1070,34 @@ export const calculateSurfaceCenterPosition = (
     totalNorth
   );
 
-  const center = project(displaced);
+  const center = projectPoint(displaced);
+
+  let anchorlessCenter: { x: number; y: number } | null | undefined;
+  let anchorlessDisplacement: { east: number; north: number } | undefined;
+  let anchorlessLngLat: SpriteLocation | undefined;
+
+  if (resolveAnchorless) {
+    anchorlessDisplacement = {
+      east: offsetMeters.east,
+      north: offsetMeters.north,
+    };
+    anchorlessLngLat = applySurfaceDisplacement(
+      baseLngLat.lng,
+      baseLngLat.lat,
+      anchorlessDisplacement.east,
+      anchorlessDisplacement.north
+    );
+    anchorlessCenter = projectPoint(anchorlessLngLat) ?? null;
+  }
 
   return {
     center,
     worldDimensions: worldDims,
     totalDisplacement: { east: totalEast, north: totalNorth },
     displacedLngLat: displaced,
+    anchorlessCenter,
+    anchorlessDisplacement,
+    anchorlessLngLat,
   };
 };
 
