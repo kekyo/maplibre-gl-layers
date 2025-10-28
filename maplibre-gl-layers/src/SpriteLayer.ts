@@ -1633,6 +1633,11 @@ export const createSpriteLayer = <T = any>(
     readonly spriteMinPixel: number;
     readonly spriteMaxPixel: number;
     readonly effectivePixelsPerMeter: number;
+    readonly drawingBufferWidth: number;
+    readonly drawingBufferHeight: number;
+    readonly pixelRatio: number;
+    readonly clipContext: ClipContext | null;
+    readonly altitudeMeters: number;
   };
 
   /**
@@ -1660,6 +1665,11 @@ export const createSpriteLayer = <T = any>(
       effectivePixelsPerMeter,
       images,
       mapInstance,
+      drawingBufferWidth,
+      drawingBufferHeight,
+      pixelRatio,
+      clipContext,
+      altitudeMeters,
     } = params;
 
     // Decide whether to return the anchor-adjusted center or the raw projected location.
@@ -1750,6 +1760,12 @@ export const createSpriteLayer = <T = any>(
           })
         : // Otherwise use the sprite's own interpolated geographic location.
           { lng: sprite.currentLocation.lng, lat: sprite.currentLocation.lat };
+
+    const projectToClipSpace: ProjectToClipSpaceFn | undefined = clipContext
+      ? (lng, lat, elevation) =>
+          projectLngLatToClipSpace(lng, lat, elevation, clipContext)
+      : undefined;
+
     const surfacePlacement = calculateSurfaceCenterPosition({
       baseLngLat,
       imageWidth: imageResourceRef?.width,
@@ -1760,38 +1776,25 @@ export const createSpriteLayer = <T = any>(
       totalRotateDeg: totalRotDeg,
       anchor: img.anchor,
       offset: img.offset,
-      project: (lngLat) => {
-        const projectedPoint = mapInstance.project(lngLat as any);
-        // Skip anchors that cannot be projected (likely off-screen during interpolation).
-        if (!projectedPoint) {
-          return null;
-        }
-        // Translate MapLibre's point into our simplified XY representation when projection succeeds.
-        return { x: projectedPoint.x, y: projectedPoint.y };
-      },
+      projectToClipSpace,
+      drawingBufferWidth,
+      drawingBufferHeight,
+      pixelRatio,
+      altitudeMeters,
+      resolveAnchorless: true,
+      project:
+        projectToClipSpace === undefined
+          ? (lngLat) => {
+              const projectedPoint = mapInstance.project(lngLat as any);
+              if (!projectedPoint) {
+                return null;
+              }
+              return { x: projectedPoint.x, y: projectedPoint.y };
+            }
+          : undefined,
     });
 
-    const anchorlessPlacement = calculateSurfaceCenterPosition({
-      baseLngLat,
-      imageWidth: imageResourceRef?.width,
-      imageHeight: imageResourceRef?.height,
-      baseMetersPerPixel,
-      imageScale: imageScaleLocal,
-      zoomScaleFactor,
-      totalRotateDeg: totalRotDeg,
-      anchor: undefined,
-      offset: img.offset,
-      project: (lngLat) => {
-        const projectedPoint = mapInstance.project(lngLat as any);
-        if (!projectedPoint) {
-          return null;
-        }
-        // Anchorless variant still converts through the same helper to maintain consistency.
-        return { x: projectedPoint.x, y: projectedPoint.y };
-      },
-    });
-
-    const anchorlessCenter = anchorlessPlacement.center ?? {
+    const anchorlessCenter = surfacePlacement.anchorlessCenter ?? {
       // If the anchorless placement could not be projected, fall back to the original screen position.
       x: baseX,
       y: baseY,
@@ -2615,6 +2618,11 @@ export const createSpriteLayer = <T = any>(
         spriteMinPixel,
         spriteMaxPixel,
         effectivePixelsPerMeter,
+        drawingBufferWidth,
+        drawingBufferHeight,
+        pixelRatio,
+        clipContext,
+        altitudeMeters: spriteEntry.currentLocation.z ?? 0,
       };
 
       let baseProjected = { x: projected.x, y: projected.y };
@@ -2657,11 +2665,18 @@ export const createSpriteLayer = <T = any>(
           totalRotateDeg,
           anchor,
           offset: offsetDef,
-          project: (lngLat) => {
-            const result = mapInstance.project(lngLat as any);
-            // If projection succeeds, wrap the returned point; otherwise propagate null so callers can skip rendering.
-            return result ? { x: result.x, y: result.y } : null;
-          },
+          projectToClipSpace: (lng, lat, elevation) =>
+            projectLngLatToClipSpace(lng, lat, elevation, clipContext),
+          drawingBufferWidth,
+          drawingBufferHeight,
+          pixelRatio,
+          altitudeMeters: spriteEntry.currentLocation.z ?? 0,
+          project: !clipContext
+            ? (lngLat) => {
+                const result = mapInstance.project(lngLat as any);
+                return result ? { x: result.x, y: result.y } : null;
+              }
+            : undefined,
         });
 
         if (!surfaceCenter.center) {
@@ -2939,6 +2954,11 @@ export const createSpriteLayer = <T = any>(
           spriteMinPixel,
           spriteMaxPixel,
           effectivePixelsPerMeter,
+          drawingBufferWidth,
+          drawingBufferHeight,
+          pixelRatio,
+          clipContext,
+          altitudeMeters: spriteEntry.currentLocation.z ?? 0,
         };
 
         // Resolve anchor/offset defaults for depth computations to stay consistent with draw path.
