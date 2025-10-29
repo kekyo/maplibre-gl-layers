@@ -31,7 +31,10 @@ import type {
   SpriteUpdaterEntry,
   SpriteImageDefinitionInit,
   SpriteImageDefinitionUpdate,
+  // @prettier-max-ignore-deprecated
   SpriteUpdateBulkEntry,
+  SpriteMutateCallbacks,
+  SpriteMutateSourceItem,
   SpriteImageOffset,
   SpriteInterpolationOptions,
   SpriteNumericInterpolationOptions,
@@ -4334,6 +4337,7 @@ export const createSpriteLayer = <T = any>(
    * Applies multiple sprite updates in bulk.
    * @param {SpriteUpdateBulkEntry<T>[]} updateBulkList - Array of updates to apply sequentially.
    * @returns {number} Number of sprites that changed.
+   * @deprecated Use {@link SpriteLayerInterface.mutateSprites} for clearer mutation flows.
    */
   const updateBulk = (updateBulkList: SpriteUpdateBulkEntry<T>[]): number => {
     let updatedCount = 0;
@@ -4372,6 +4376,151 @@ export const createSpriteLayer = <T = any>(
     }
 
     return updatedCount;
+  };
+  /**
+   * Adds, updates, or removes sprites based on arbitrary source items.
+   * @template TSourceItem Source item type that exposes a sprite identifier.
+   * @param {readonly TSourceItem[]} sourceItems - Collection supplying mutation targets.
+   * @param {SpriteMutateCallbacks<T, TSourceItem>} mutator - Callbacks for adding or modifying sprites.
+   * @returns {number} Number of sprites that changed.
+   */
+  const mutateSprites = <TSourceItem extends SpriteMutateSourceItem>(
+    sourceItems: readonly TSourceItem[],
+    mutator: SpriteMutateCallbacks<T, TSourceItem>
+  ): number => {
+    if (sourceItems.length === 0) {
+      return 0;
+    }
+
+    let changedCount = 0;
+    let isRequiredRender = false;
+
+    // Reuse mutable helpers for efficiency.
+    let currentSprite: InternalSpriteCurrentState<T> = undefined!;
+    let didMutateImages = false;
+    const operationResult: SpriteImageOperationInternalResult = {
+      isUpdated: false,
+    };
+    const updateObject: SpriteUpdaterEntry<T> = {
+      getImageIndexMap: () => {
+        const map = new Map<number, Set<number>>();
+        currentSprite.images.forEach((inner, subLayer) => {
+          map.set(subLayer, new Set(inner.keys()));
+        });
+        return map;
+      },
+      addImage: (subLayer, order, imageInit) => {
+        const added = addSpriteImageInternal(
+          currentSprite,
+          subLayer,
+          order,
+          imageInit,
+          operationResult
+        );
+        if (added) {
+          didMutateImages = true;
+        }
+        return added;
+      },
+      updateImage: (subLayer, order, imageUpdate) => {
+        const updated = updateSpriteImageInternal(
+          currentSprite,
+          subLayer,
+          order,
+          imageUpdate,
+          operationResult
+        );
+        if (updated) {
+          didMutateImages = true;
+        }
+        return updated;
+      },
+      removeImage: (subLayer, order) => {
+        const removed = removeSpriteImageInternal(
+          currentSprite,
+          subLayer,
+          order,
+          operationResult
+        );
+        if (removed) {
+          didMutateImages = true;
+        }
+        return removed;
+      },
+    } as SpriteUpdaterEntry<T>;
+
+    for (const sourceItem of sourceItems) {
+      const spriteId = sourceItem.spriteId;
+      const sprite = sprites.get(spriteId);
+
+      if (!sprite) {
+        const init = mutator.add(sourceItem);
+        if (!init) {
+          continue;
+        }
+        if (addSpriteInternal(spriteId, init)) {
+          changedCount++;
+          isRequiredRender = true;
+        }
+        continue;
+      }
+
+      currentSprite = sprite;
+      operationResult.isUpdated = false;
+      didMutateImages = false;
+
+      const decision = mutator.modify(
+        sourceItem,
+        sprite as SpriteCurrentState<T>,
+        updateObject
+      );
+
+      if (decision === 'remove') {
+        if (removeSpriteInternal(spriteId)) {
+          changedCount++;
+          isRequiredRender = true;
+        }
+      } else {
+        const updateResult = updateSpriteInternal(spriteId, updateObject);
+        let spriteChanged = false;
+
+        switch (updateResult) {
+          case 'updated':
+            spriteChanged = true;
+            break;
+          case 'isRequiredRender':
+            spriteChanged = true;
+            isRequiredRender = true;
+            break;
+        }
+
+        if (didMutateImages) {
+          spriteChanged = true;
+          isRequiredRender = true;
+        }
+
+        if (spriteChanged) {
+          changedCount++;
+        }
+      }
+
+      // Reset reusable fields on the shared update object.
+      updateObject.isEnabled = undefined;
+      updateObject.location = undefined;
+      updateObject.interpolation = undefined;
+      updateObject.tag = undefined;
+      operationResult.isUpdated = false;
+      didMutateImages = false;
+    }
+
+    // Request rendering
+    if (isRequiredRender) {
+      // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
+      ensureRenderTargetEntries();
+      scheduleRender();
+    }
+
+    return changedCount;
   };
   /**
    * Iterates over every sprite and attempts to update it via the provided callback.
@@ -4496,6 +4645,7 @@ export const createSpriteLayer = <T = any>(
     removeSpriteImage,
     updateSprite,
     updateBulk,
+    mutateSprites,
     updateForEach,
     on: addEventListener,
     off: removeEventListener,
