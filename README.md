@@ -81,8 +81,6 @@ In addition to images, you can render text alongside sprites and animate them to
 - Add multiple images and text to the same sprite, adjusting rotation, offset, scale, opacity, and more.
 - Animate sprite movement, rotation, and offsets with interpolation controls.
 - Control draw order via sub-layers and per-sprite ordering.
-- Bulk update API for many sprite states.
-- No package dependencies except MapLibre.
 
 ### Requirements
 
@@ -587,29 +585,53 @@ spriteLayer.removeAllSpriteImages('vehicle-202'); // Removes all images from a s
 spriteLayer.removeAllSprites(); // Removes every sprite
 ```
 
-When you need to update many sprites at once, SpriteLayer provides two helpers: `updateBulk` and `updateForEach`. Each returns the number of sprites that changed.
+When you need to update many sprites at once, SpriteLayer provides two helpers that report how many sprites changed:
 
-- `updateBulk` is best when you already know which sprite IDs should change — for example, applying a batch of positions received from a server.
+- `mutateSprites` synchronises a known set of sprite IDs in one pass. It works well when you have a batch of server-side updates or a diff-like structure.
 - `updateForEach` iterates over every registered sprite so you can adjust them based on client-side context. Returning `false` from the callback stops the iteration early.
 
-The following are examples:
+The snippet below demonstrates `mutateSprites` in conjunction with server data that may create, update, or remove sprites:
 
 ```typescript
-// Apply new positions to multiple sprites in one call
-const changed = spriteLayer.updateBulk([
-  {
-    spriteId: 'vehicle-1',
-    location: { lng: 136.886, lat: 35.1695 },
-    interpolation: { durationMs: 600, mode: 'feedforward' },
+import type { SpriteLocation, SpriteMutateSourceItem } from 'maplibre-gl-layers';
+
+// Differential data structure
+interface VehicleUpdate extends SpriteMutateSourceItem {
+  spriteId: string;  // Need spriteId field
+  location: SpriteLocation;
+  tag?: VehicleTag | null;
+  remove?: boolean;
+};
+
+// Receives differential data
+const serverUpdates: VehicleUpdate[] = await fetchVehicleUpdates();
+
+// Bulk mutation
+const changed = spriteLayer.mutateSprites(serverUpdates, {
+  // For adding (when does not exist the sprite id)
+  add: (update) => ({
+    location: update.location,
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+    tag: update.tag ?? null,
+  }),
+  // For modifying
+  modify: (update, sprite, updater) => {
+    // Remove when raised a flag
+    if (update.remove) {
+      return 'remove';
+    }
+
+    // Updates attributes
+    updater.location = update.location;
+    updater.interpolation = { durationMs: 600, mode: 'feedforward' };
+    updater.tag = update.tag ?? null;
+    return 'notremove';
   },
-  {
-    spriteId: 'vehicle-2',
-    location: { lng: 136.883, lat: 35.1712 },
-    interpolation: { durationMs: 600, mode: 'feedforward' },
-  },
-]);
-console.log(`Sprites updated: ${changed}`);
+});
+console.log(`Sprites changed: ${changed}`);
 ```
+
+If you only need to mutate existing sprites based on local state, keep using `updateForEach`:
 
 ```typescript
 // Dim only sprites tagged as buses by lowering their opacity
@@ -618,16 +640,14 @@ const dimmed = spriteLayer.updateForEach((sprite, updater) => {
     return true; // Skip sprites that are not buses
   }
 
-  // Adjust the transparency of images in Sublayer 0/Order 0
+  // Adjust the transparency of images in sub-layer 0/order 0
   updater.updateImage(0, 0, { opacity: 0.6 });
   return true; // Continue iterating
 });
 console.log(`Sprites with adjusted opacity: ${dimmed}`);
 ```
 
-The second argument passed to `updateForEach` is a reusable updater object. Avoid storing it outside the callback; apply the required changes immediately.
-
-To inspect the current image layout, call `updater.getImageIndexMap()` and iterate over the available sub-layer and order combinations.
+The updater passed to `updateForEach` is reusable. Avoid storing it outside the callback; apply changes immediately. To inspect the current image layout, call `updater.getImageIndexMap()` and iterate through the available sub-layer and order pairs.
 
 ---
 

@@ -84,8 +84,6 @@ map.on('load', async () => {
 - 各スプライトには複数の画像を追加出来て、回転・オフセット・スケール・透明度などを指定できる。同様にテキストも配置できる。
 - スプライトの座標移動・回転・オフセットをアニメーション補間出来る。
 - 画像の重なりを制御するための、サブレイヤーとオフセット指定も可能。
-- 大量のスプライトの状態をまとめて更新可能なAPI。
-- MapLibre以外へのパッケージ依存なし。
 
 ### 環境
 
@@ -611,47 +609,68 @@ spriteLayer.removeAllSpriteImages('vehicle-202'); // 指定スプライトの画
 spriteLayer.removeAllSprites(); // スプライトをすべて削除
 ```
 
-多数のスプライトを一度に更新したい場合は、`updateBulk`と`updateForEach`を利用すると効率良く処理できます。いずれも変更が発生したスプライト数を戻り値として返します。
+多数のスプライトを一度に更新したい場合は、`mutateSprites` と `updateForEach` を利用すると効率良く処理できます。いずれも変更が発生したスプライト数を戻り値として返します。
 
-- `updateBulk`: 更新対象のスプライトIDを明示的に指定して、一括で処理したいときに便利です。サーバーからまとめて位置情報が届いた場合などに向いています。
-- `updateForEach`: 登録済みの全スプライトに対して反復処理を行いたい場合に使用します。マップのズームや時刻など、クライアント側のコンテキストに応じて一括調整する用途に向いています。コールバックが`false`を返すと反復処理を中断します。
+- `mutateSprites`: 更新対象のスプライトIDを列挙できるときに便利です。サーバーから座標や状態の差分が届くケースで、新規作成・更新・削除をまとめて処理できます。
+- `updateForEach`: 登録済みスプライトをすべて走査して、クライアント側の状況に応じて一括調整します。コールバックが `false` を返すと反復処理を中断します。
 
-以下に例を示します:
+以下は `mutateSprites` を使ってサーバー差分を適用する例です:
 
 ```typescript
-// 複数のスプライトに新しい座標を同時適用する例
-const changed = spriteLayer.updateBulk([
-  {
-    spriteId: 'vehicle-1',
-    location: { lng: 136.886, lat: 35.1695 },
-    interpolation: { durationMs: 600, mode: 'feedforward' },
+import type { SpriteLocation, SpriteMutateSourceItem } from 'maplibre-gl-layers';
+
+// 差分データ
+interface VehicleUpdate extends SpriteMutateSourceItem {
+  spriteId: string;  // spriteIdフィールドは必須
+  location: SpriteLocation;
+  tag?: VehicleTag | null;
+  remove?: boolean;
+};
+
+// 差分データを受信する
+const serverUpdates: VehicleUpdate[] = await fetchVehicleUpdates();
+
+// 一括更新
+const changed = spriteLayer.mutateSprites(serverUpdates, {
+  // 追加する（スプライトIDが見つからない場合）
+  add: (update) => ({
+    location: update.location,
+    images: [{ subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID }],
+    tag: update.tag ?? null,
+  }),
+  // 更新する
+  modify: (update, sprite, updater) => {
+    // 削除フラグが立っていたら削除する
+    if (update.remove) {
+      return 'remove';
+    }
+
+    // 各属性を更新する
+    updater.location = update.location;
+    updater.interpolation = { durationMs: 600, mode: 'feedforward' };
+    updater.tag = update.tag ?? null;
+    return 'notremove';
   },
-  {
-    spriteId: 'vehicle-2',
-    location: { lng: 136.883, lat: 35.1712 },
-    interpolation: { durationMs: 600, mode: 'feedforward' },
-  },
-]);
-console.log(`更新されたスプライト数: ${changed}`);
+});
+console.log(`変更されたスプライト数: ${changed}`);
 ```
 
+ローカルの状態だけで既存スプライトを調整したい場合は、`updateForEach` を利用できます:
+
 ```typescript
-// すべてのスプライトを走査して、特定タグを持つアイコンだけ透過度を下げる例
+// タグが bus のスプライトだけ透明度を下げる
 const dimmed = spriteLayer.updateForEach((sprite, updater) => {
   if (sprite.tag?.type !== 'bus') {
-    return true; // 何もしないで次のスプライトへ
+    return true; // バス以外はスキップ
   }
 
-  // サブレイヤー0/オーダー0の画像の透過度を調整
   updater.updateImage(0, 0, { opacity: 0.6 });
-  return true; // trueを返すと処理を継続
+  return true; // 継続
 });
-console.log(`透過度を変更したスプライト数: ${dimmed}`);
+console.log(`透明度を調整したスプライト数: ${dimmed}`);
 ```
 
-`updateForEach`の第2引数(`updater`)は再利用されるオブジェクトです。コールバックの外に保持せず、その場で必要な変更だけを記述して下さい。
-
-画像リストを把握したい場合は`updater.getImageIndexMap()`で現在のサブレイヤー/オーダー構成を取得できます。
+`updateForEach` の第2引数で受け取るアップデータは再利用されます。コールバックの外に保持せず、その場で必要な変更を記述してください。現在の画像構成を調べたい場合は、`updater.getImageIndexMap()` でサブレイヤーとオーダーの組み合わせを取得できます。
 
 ---
 
