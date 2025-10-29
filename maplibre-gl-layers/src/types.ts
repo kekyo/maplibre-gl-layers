@@ -353,14 +353,9 @@ export interface SpriteUpdateEntry<TTag> extends SpriteUpdateEntryBase<TTag> {
   images?: SpriteImageDefinitionUpdateEntry[];
 }
 
-/**
- * Entry consumed by updateBulk to target a specific sprite.
- *
- * @template T Tag type stored on the sprite.
- * @property {string} spriteId - Identifier of the sprite to update.
- */
+/** @deprecated Scheduled for removal in a future release. Use {@link SpriteLayerInterface.mutateSprites} instead. */
 export interface SpriteUpdateBulkEntry<T> extends SpriteUpdateEntry<T> {
-  /** Identifier of the sprite to update. */
+  /** @deprecated Scheduled for removal in a future release. Use {@link SpriteLayerInterface.mutateSprites} instead. */
   spriteId: string;
 }
 
@@ -390,6 +385,54 @@ export interface SpriteUpdaterEntry<TTag> extends SpriteUpdateEntryBase<TTag> {
   ) => boolean;
   /** Removes an image slot. */
   readonly removeImage: (subLayer: number, order: number) => boolean;
+}
+
+/**
+ * Result flags returned by `mutateSprites` callbacks.
+ * - `'notremove'`: Keep the sprite after applying any modifications.
+ * - `'remove'`: Remove the sprite from the layer.
+ */
+export type SpriteModifierResult = 'notremove' | 'remove';
+
+/** Source items supplied to `mutateSprites` must expose the target sprite ID. */
+export interface SpriteMutateSourceItem {
+  /** Identifier of the sprite targeted by the source item. */
+  readonly spriteId: string;
+}
+
+/**
+ * Callbacks invoked by `mutateSprites` for each source item.
+ *
+ * @template TTag Sprite tag type stored by the layer.
+ * @template TSourceItem Source item type that satisfies {@link SpriteMutateSourceItem}.
+ */
+export interface SpriteMutateCallbacks<
+  TTag,
+  TSourceItem extends SpriteMutateSourceItem,
+> {
+  /**
+   * Invoked when the sprite ID from the source item does not yet exist.
+   * Return a populated {@link SpriteInit} when the sprite should be added; return `undefined`
+   * (or `null`) to skip creation.
+   *
+   * @param sourceItem Source item that produced the sprite ID.
+   * @returns Sprite initialiser to insert, or `undefined`/`null` to skip.
+   */
+  add: (sourceItem: TSourceItem) => SpriteInit<TTag> | null | undefined;
+  /**
+   * Invoked when the sprite ID already exists on the layer.
+   * Use `update` to mutate sprite properties or images; return `'remove'` to delete the sprite instead.
+   *
+   * @param sourceItem Source item that produced the sprite ID.
+   * @param sprite Current sprite state snapshot.
+   * @param update Helper exposing the same operations as {@link SpriteUpdaterEntry}.
+   * @returns `'remove'` to delete the sprite; otherwise `'notremove'`.
+   */
+  modify: (
+    sourceItem: TSourceItem,
+    sprite: SpriteCurrentState<TTag>,
+    update: SpriteUpdaterEntry<TTag>
+  ) => SpriteModifierResult;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -732,13 +775,23 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
     update: SpriteUpdateEntry<TTag>
   ) => boolean;
   /**
-   * Applies a batch of sprite updates.
-   *
-   * @param {SpriteUpdateBulkEntry<TTag>[]} updateBulkList - List of sprite updates.
-   * @returns {number} Number of sprites that were updated.
+   * @deprecated Use {@link SpriteLayerInterface.mutateSprites} instead for clearer mutation flows.
    */
   readonly updateBulk: (
+    // @prettier-max-ignore-deprecated
     updateBulkList: SpriteUpdateBulkEntry<TTag>[]
+  ) => number;
+  /**
+   * Adds, updates, or removes sprites based on an arbitrary collection of source items.
+   *
+   * @param {readonly TSourceItem[]} sourceItems - Source items that describe desired sprite state.
+   * @param {SpriteMutateCallbacks<TTag, TSourceItem>} mutator - Callbacks responsible for creation and modification.
+   * @returns {number} Number of sprites that changed. Counts each `add` that returns a non-null
+   * initialiser and each `modify` that either invoked the updater helper or returned `'remove'`.
+   */
+  readonly mutateSprites: <TSourceItem extends SpriteMutateSourceItem>(
+    sourceItems: readonly TSourceItem[],
+    mutator: SpriteMutateCallbacks<TTag, TSourceItem>
   ) => number;
   /**
    * Iterates over each sprite and allows modifications through a callback.
