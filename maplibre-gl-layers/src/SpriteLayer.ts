@@ -1790,6 +1790,9 @@ export const createSpriteLayer = <T = any>(
       totalRotateDeg: totalRotDeg,
       anchor: img.anchor,
       offset: img.offset,
+      effectivePixelsPerMeter,
+      spriteMinPixel,
+      spriteMaxPixel,
       projectToClipSpace,
       drawingBufferWidth,
       drawingBufferHeight,
@@ -2704,6 +2707,9 @@ export const createSpriteLayer = <T = any>(
           totalRotateDeg,
           anchor,
           offset: offsetDef,
+          effectivePixelsPerMeter,
+          spriteMinPixel,
+          spriteMaxPixel,
           projectToClipSpace: (lng, lat, elevation) =>
             projectLngLatToClipSpace(lng, lat, elevation, clipContext),
           drawingBufferWidth,
@@ -2725,7 +2731,8 @@ export const createSpriteLayer = <T = any>(
 
         const offsetMeters = calculateSurfaceOffsetMeters(
           offsetDef,
-          imageScale
+          imageScale,
+          zoomScaleFactor
         );
         const cornerDisplacements = calculateSurfaceCornerDisplacements({
           worldWidthMeters: surfaceCenter.worldDimensions.width,
@@ -3025,7 +3032,12 @@ export const createSpriteLayer = <T = any>(
             imageResource.height,
             baseMetersPerPixel,
             imageScale,
-            zoomScaleFactor
+            zoomScaleFactor,
+            {
+              effectivePixelsPerMeter,
+              spriteMinPixel,
+              spriteMaxPixel,
+            }
           );
           const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
             ? imageEntry.displayedRotateDeg
@@ -3035,7 +3047,8 @@ export const createSpriteLayer = <T = any>(
               );
           const offsetMeters = calculateSurfaceOffsetMeters(
             offsetResolved,
-            imageScale
+            imageScale,
+            zoomScaleFactor
           );
           const cornerDisplacements = calculateSurfaceCornerDisplacements({
             worldWidthMeters: worldDims.width,

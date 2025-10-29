@@ -4,6 +4,7 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
+import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './types';
 import type {
   SpriteAnchor,
   SpriteImageOffset,
@@ -37,20 +38,6 @@ export const RAD2DEG = 180 / Math.PI;
 export const TILE_SIZE = 512;
 
 /**
- * Default values that fill in missing {@link SpriteScalingOptions} fields supplied by callers.
- * @constant
- */
-export const DEFAULT_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
-  metersPerPixel: 1.0,
-  zoomMin: 0,
-  zoomMax: 30,
-  scaleMin: 1,
-  scaleMax: 1,
-  spriteMinPixel: 0,
-  spriteMaxPixel: 10000,
-} as const;
-
-/**
  * Structure holding resolved sprite scaling options.
  * @property {number} metersPerPixel - Effective number of meters represented by each rendered pixel.
  * @property {number} zoomMin - Lowest zoom level at which scaling interpolation begins.
@@ -60,7 +47,7 @@ export const DEFAULT_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
  * @property {number} spriteMinPixel - Lower clamp for sprite size in pixels.
  * @property {number} spriteMaxPixel - Upper clamp for sprite size in pixels.
  */
-export type ResolvedSpriteScalingOptions = {
+export interface ResolvedSpriteScalingOptions {
   metersPerPixel: number;
   zoomMin: number;
   zoomMax: number;
@@ -68,7 +55,7 @@ export type ResolvedSpriteScalingOptions = {
   scaleMax: number;
   spriteMinPixel: number;
   spriteMaxPixel: number;
-};
+}
 
 /**
  * Fills missing {@link SpriteScalingOptions} values with defaults so downstream math can assume a complete object.
@@ -78,15 +65,173 @@ export type ResolvedSpriteScalingOptions = {
 export const resolveScalingOptions = (
   options?: SpriteScalingOptions
 ): ResolvedSpriteScalingOptions => {
-  const base = DEFAULT_SPRITE_SCALING_OPTIONS;
+  const base = UNLIMITED_SPRITE_SCALING_OPTIONS;
+  const warnings: string[] = [];
+
+  const fallbackMetersPerPixel =
+    Number.isFinite(base.metersPerPixel) && (base.metersPerPixel ?? 0) > 0
+      ? base.metersPerPixel!
+      : 1;
+  let metersPerPixel =
+    options?.metersPerPixel !== undefined
+      ? options.metersPerPixel
+      : fallbackMetersPerPixel;
+  if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) {
+    if (options?.metersPerPixel !== undefined) {
+      warnings.push(
+        `metersPerPixel(${String(options.metersPerPixel)}) is invalid; using ${fallbackMetersPerPixel}`
+      );
+    }
+    metersPerPixel = fallbackMetersPerPixel;
+  }
+
+  const fallbackZoomMin = Number.isFinite(base.zoomMin) ? base.zoomMin! : 0;
+  let zoomMin =
+    options?.zoomMin !== undefined ? options.zoomMin : fallbackZoomMin;
+  if (!Number.isFinite(zoomMin)) {
+    if (options?.zoomMin !== undefined) {
+      warnings.push(
+        `zoomMin(${String(options.zoomMin)}) is not finite; using ${fallbackZoomMin}`
+      );
+    }
+    zoomMin = fallbackZoomMin;
+  }
+
+  const fallbackZoomMax =
+    Number.isFinite(base.zoomMax) && base.zoomMax! > fallbackZoomMin
+      ? base.zoomMax!
+      : fallbackZoomMin;
+  let zoomMax =
+    options?.zoomMax !== undefined ? options.zoomMax : fallbackZoomMax;
+  if (!Number.isFinite(zoomMax)) {
+    if (options?.zoomMax !== undefined) {
+      warnings.push(
+        `zoomMax(${String(options.zoomMax)}) is not finite; using ${fallbackZoomMax}`
+      );
+    }
+    zoomMax = fallbackZoomMax;
+  }
+
+  if (zoomMax < zoomMin) {
+    warnings.push(
+      `zoomMax(${zoomMax}) < zoomMin(${zoomMin}); swapped values to maintain ascending order`
+    );
+    [zoomMin, zoomMax] = [zoomMax, zoomMin];
+  }
+
+  const fallbackScaleMin = Number.isFinite(base.scaleMin) ? base.scaleMin! : 1;
+  let scaleMin =
+    options?.scaleMin !== undefined ? options.scaleMin : fallbackScaleMin;
+  if (!Number.isFinite(scaleMin)) {
+    if (options?.scaleMin !== undefined) {
+      warnings.push(
+        `scaleMin(${String(options.scaleMin)}) is not finite; using ${fallbackScaleMin}`
+      );
+    }
+    scaleMin = fallbackScaleMin;
+  }
+  if (scaleMin < 0) {
+    warnings.push(`scaleMin(${scaleMin}) is negative; clamped to 0`);
+    scaleMin = 0;
+  }
+
+  const fallbackScaleMax = Number.isFinite(base.scaleMax) ? base.scaleMax! : 1;
+  let scaleMax =
+    options?.scaleMax !== undefined ? options.scaleMax : fallbackScaleMax;
+  if (!Number.isFinite(scaleMax)) {
+    if (options?.scaleMax !== undefined) {
+      warnings.push(
+        `scaleMax(${String(options.scaleMax)}) is not finite; using ${fallbackScaleMax}`
+      );
+    }
+    scaleMax = fallbackScaleMax;
+  }
+  if (scaleMax < 0) {
+    warnings.push(`scaleMax(${scaleMax}) is negative; clamped to 0`);
+    scaleMax = 0;
+  }
+
+  if (scaleMax < scaleMin) {
+    warnings.push(
+      `scaleMax(${scaleMax}) < scaleMin(${scaleMin}); swapped values to maintain ascending order`
+    );
+    [scaleMin, scaleMax] = [scaleMax, scaleMin];
+  }
+
+  const fallbackSpriteMin =
+    Number.isFinite(base.spriteMinPixel) && base.spriteMinPixel! >= 0
+      ? base.spriteMinPixel!
+      : 0;
+  let spriteMinPixel =
+    options?.spriteMinPixel !== undefined
+      ? options.spriteMinPixel
+      : fallbackSpriteMin;
+  if (!Number.isFinite(spriteMinPixel)) {
+    if (options?.spriteMinPixel !== undefined) {
+      warnings.push(
+        `spriteMinPixel(${String(
+          options.spriteMinPixel
+        )}) is not finite; using ${fallbackSpriteMin}`
+      );
+    }
+    spriteMinPixel = fallbackSpriteMin;
+  } else if (spriteMinPixel < 0) {
+    warnings.push(
+      `spriteMinPixel(${spriteMinPixel}) is negative; clamped to 0`
+    );
+    spriteMinPixel = 0;
+  }
+
+  const fallbackSpriteMax =
+    Number.isFinite(base.spriteMaxPixel) && base.spriteMaxPixel! >= 0
+      ? base.spriteMaxPixel!
+      : 0;
+  let spriteMaxPixel =
+    options?.spriteMaxPixel !== undefined
+      ? options.spriteMaxPixel
+      : fallbackSpriteMax;
+  if (!Number.isFinite(spriteMaxPixel)) {
+    if (options?.spriteMaxPixel !== undefined) {
+      warnings.push(
+        `spriteMaxPixel(${String(
+          options.spriteMaxPixel
+        )}) is not finite; using ${fallbackSpriteMax}`
+      );
+    }
+    spriteMaxPixel = fallbackSpriteMax;
+  } else if (spriteMaxPixel < 0) {
+    warnings.push(
+      `spriteMaxPixel(${spriteMaxPixel}) is negative; clamped to 0`
+    );
+    spriteMaxPixel = 0;
+  }
+
+  if (
+    spriteMinPixel > 0 &&
+    spriteMaxPixel > 0 &&
+    spriteMaxPixel < spriteMinPixel
+  ) {
+    warnings.push(
+      `spriteMaxPixel(${spriteMaxPixel}) < spriteMinPixel(${spriteMinPixel}); swapped values to maintain ascending order`
+    );
+    [spriteMinPixel, spriteMaxPixel] = [spriteMaxPixel, spriteMinPixel];
+  }
+
+  if (warnings.length > 0 && typeof console !== 'undefined') {
+    const warn = console.warn ?? null;
+    if (typeof warn === 'function') {
+      warn(`[SpriteScalingOptions] ${warnings.join('; ')}`);
+    }
+  }
+
   return {
-    metersPerPixel: options?.metersPerPixel ?? base.metersPerPixel ?? 1,
-    zoomMin: options?.zoomMin ?? base.zoomMin ?? 0,
-    zoomMax: options?.zoomMax ?? base.zoomMax ?? 24,
-    scaleMin: options?.scaleMin ?? base.scaleMin ?? 1,
-    scaleMax: options?.scaleMax ?? base.scaleMax ?? 1,
-    spriteMinPixel: options?.spriteMinPixel ?? base.spriteMinPixel ?? 0,
-    spriteMaxPixel: options?.spriteMaxPixel ?? base.spriteMaxPixel ?? 0,
+    metersPerPixel,
+    zoomMin,
+    zoomMax,
+    scaleMin,
+    scaleMax,
+    spriteMinPixel,
+    spriteMaxPixel,
   };
 };
 
@@ -356,7 +501,12 @@ export const calculateSurfaceWorldDimensions = (
   imageHeight: number | undefined,
   baseMetersPerPixel: number,
   imageScale: number,
-  zoomScaleFactor: number
+  zoomScaleFactor: number,
+  options?: {
+    effectivePixelsPerMeter?: number;
+    spriteMinPixel?: number;
+    spriteMaxPixel?: number;
+  }
 ): { width: number; height: number } => {
   // Reject invalid inputs to keep downstream displacement math finite.
   if (
@@ -369,8 +519,41 @@ export const calculateSurfaceWorldDimensions = (
     return { width: 0, height: 0 };
   }
   const scaleFactor = baseMetersPerPixel * imageScale * zoomScaleFactor;
-  const width = ensureFinite(imageWidth * scaleFactor);
-  const height = ensureFinite(imageHeight * scaleFactor);
+  let width = ensureFinite(imageWidth * scaleFactor);
+  let height = ensureFinite(imageHeight * scaleFactor);
+
+  const effectivePixelsPerMeter =
+    options?.effectivePixelsPerMeter !== undefined
+      ? options.effectivePixelsPerMeter
+      : 0;
+  const spriteMinPixel = options?.spriteMinPixel ?? 0;
+  const spriteMaxPixel = options?.spriteMaxPixel ?? 0;
+
+  if (
+    effectivePixelsPerMeter > 0 &&
+    Number.isFinite(effectivePixelsPerMeter) &&
+    (spriteMinPixel > 0 || spriteMaxPixel > 0)
+  ) {
+    const largestMeters = Math.max(width, height);
+    if (largestMeters > 0 && Number.isFinite(largestMeters)) {
+      const largestPixels = largestMeters * effectivePixelsPerMeter;
+      if (Number.isFinite(largestPixels) && largestPixels > 0) {
+        let scale = 1;
+        if (spriteMinPixel > 0 && largestPixels < spriteMinPixel) {
+          scale = spriteMinPixel / largestPixels;
+        }
+        const scaledLargest = largestPixels * scale;
+        if (spriteMaxPixel > 0 && scaledLargest > spriteMaxPixel) {
+          scale = spriteMaxPixel / largestPixels;
+        }
+        if (scale !== 1) {
+          width *= scale;
+          height *= scale;
+        }
+      }
+    }
+  }
+
   return { width, height };
 };
 
@@ -410,13 +593,16 @@ export const calculateSurfaceAnchorShiftMeters = (
  * Calculates surface image offsets in meters.
  * @param {SpriteImageOffset | undefined} offset - Offset configuration for the surface sprite.
  * @param {number} imageScale - User-provided scale multiplier applied to the offset distance.
+ * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
  * @returns {{ east: number; north: number }} Offset vector in meters.
  */
 export const calculateSurfaceOffsetMeters = (
   offset: SpriteImageOffset | undefined,
-  imageScale: number
+  imageScale: number,
+  zoomScaleFactor: number
 ): { east: number; north: number } => {
-  const offsetMeters = (offset?.offsetMeters ?? 0) * imageScale;
+  const offsetMeters =
+    (offset?.offsetMeters ?? 0) * imageScale * zoomScaleFactor;
   // Short-circuit when no displacement is requested to avoid redundant trig.
   if (offsetMeters === 0) {
     return { east: 0, north: 0 };
@@ -929,6 +1115,9 @@ export const calculateBillboardCornerScreenPositions = (
  * @property {number} totalRotateDeg - Rotation applied to the sprite in degrees.
  * @property {SpriteAnchor} [anchor] - Anchor definition normalized between -1 and 1.
  * @property {SpriteImageOffset} [offset] - Offset definition applied in meters/deg.
+ * @property {number} [effectivePixelsPerMeter] - Conversion rate from meters to on-screen pixels.
+ * @property {number} [spriteMinPixel] - Lower clamp for the sprite's largest pixel dimension.
+ * @property {number} [spriteMaxPixel] - Upper clamp for the sprite's largest pixel dimension.
  * @property {ProjectLngLatFn} [project] - Projection function mapping longitude/latitude to screen space.
  * @property {ProjectToClipSpaceFn} [projectToClipSpace] - Projection into clip space when available.
  * @property {number} [drawingBufferWidth] - WebGL drawing buffer width in device pixels.
@@ -947,6 +1136,9 @@ export type SurfaceCenterParams = {
   totalRotateDeg: number;
   anchor?: SpriteAnchor;
   offset?: SpriteImageOffset;
+  effectivePixelsPerMeter?: number;
+  spriteMinPixel?: number;
+  spriteMaxPixel?: number;
   project?: ProjectLngLatFn;
   projectToClipSpace?: ProjectToClipSpaceFn;
   drawingBufferWidth?: number;
@@ -995,6 +1187,9 @@ export const calculateSurfaceCenterPosition = (
     totalRotateDeg,
     anchor,
     offset,
+    effectivePixelsPerMeter = 0,
+    spriteMinPixel = 0,
+    spriteMaxPixel = 0,
     project,
     projectToClipSpace,
     drawingBufferWidth,
@@ -1047,7 +1242,12 @@ export const calculateSurfaceCenterPosition = (
     imageHeight,
     baseMetersPerPixel,
     imageScale,
-    zoomScaleFactor
+    zoomScaleFactor,
+    {
+      effectivePixelsPerMeter,
+      spriteMinPixel,
+      spriteMaxPixel,
+    }
   );
   const halfWidthMeters = worldDims.width / 2;
   const halfHeightMeters = worldDims.height / 2;
@@ -1058,7 +1258,11 @@ export const calculateSurfaceCenterPosition = (
     anchor,
     totalRotateDeg
   );
-  const offsetMeters = calculateSurfaceOffsetMeters(offset, imageScale);
+  const offsetMeters = calculateSurfaceOffsetMeters(
+    offset,
+    imageScale,
+    zoomScaleFactor
+  );
 
   const totalEast = anchorShiftMeters.east + offsetMeters.east;
   const totalNorth = anchorShiftMeters.north + offsetMeters.north;
