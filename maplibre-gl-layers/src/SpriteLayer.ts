@@ -688,7 +688,7 @@ const resolveTextGlyphOptions = (
         DEFAULT_TEXT_GLYPH_FONT_SIZE;
 
   const resolvedFontSize = resolvePositiveFinite(
-    options?.fontSizePixel,
+    options?.fontSizePixelHint,
     fallbackFontSize
   );
 

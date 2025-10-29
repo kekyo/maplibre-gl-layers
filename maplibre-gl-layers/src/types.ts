@@ -595,7 +595,6 @@ export type SpriteTextGlyphDimensions =
  * Text glyph appearance options.
  *
  * @property {string | undefined} fontFamily - Font family name.
- * @property {number | undefined} fontSizePixel - Font size in pixels.
  * @property {string | undefined} fontWeight - CSS font-weight value.
  * @property {'normal' | 'italic' | undefined} fontStyle - CSS font-style value.
  * @property {string | undefined} color - Text fill color.
@@ -606,13 +605,12 @@ export type SpriteTextGlyphDimensions =
  * @property {number | undefined} borderWidthPixel - Outline width in pixels.
  * @property {number | undefined} borderRadiusPixel - Border radius in pixels.
  * @property {SpriteTextGlyphHorizontalAlign | undefined} textAlign - Horizontal alignment of multiline text.
- * @property {number | undefined} renderPixelRatio - Pixel ratio used when rendering the glyph.
+ * @property {number | undefined} fontSizePixelHint - It is not specified normally. Preferred font size in pixels before dimension constraints are enforced.
+ * @property {number | undefined} renderPixelRatio - Canvas pixel ratio multiplier (defaults to 1) applied before the glyph is resampled to its logical size.
  */
 export interface SpriteTextGlyphOptions {
   /** Font family name. */
   fontFamily?: string;
-  /** Font size in pixels. */
-  fontSizePixel?: number;
   /** CSS font-weight value. */
   fontWeight?: string;
   /** CSS font-style value. */
@@ -633,7 +631,9 @@ export interface SpriteTextGlyphOptions {
   borderRadiusPixel?: number;
   /** Horizontal alignment of multiline text. */
   textAlign?: SpriteTextGlyphHorizontalAlign;
-  /** Pixel ratio used when rendering the glyph. */
+  /** It is not specified normally. Preferred font size in pixels; may shrink automatically to satisfy provided dimensions. */
+  fontSizePixelHint?: number;
+  /** Pixel ratio used when rendering the glyph; defaults to 1 and values > 1 render at higher resolution before downscaling. */
   renderPixelRatio?: number;
 }
 
