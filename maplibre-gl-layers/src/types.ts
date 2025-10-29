@@ -586,6 +586,9 @@ export type SpriteTextGlyphPaddingPixel =
       left?: number;
     };
 
+/** Border sides that can be rendered for a text glyph outline. */
+export type SpriteTextGlyphBorderSide = 'top' | 'right' | 'bottom' | 'left';
+
 /** Additional size options accepted by registerTextGlyph. */
 export type SpriteTextGlyphDimensions =
   | { readonly lineHeightPixel: number; readonly maxWidthPixel?: never }
@@ -603,6 +606,7 @@ export type SpriteTextGlyphDimensions =
  * @property {SpriteTextGlyphPaddingPixel | undefined} paddingPixel - Padding around the glyph.
  * @property {string | undefined} borderColor - Outline color.
  * @property {number | undefined} borderWidthPixel - Outline width in pixels.
+ * @property {SpriteTextGlyphBorderSide[] | undefined} borderSides - Border sides to draw (defaults to all four).
  * @property {number | undefined} borderRadiusPixel - Border radius in pixels.
  * @property {SpriteTextGlyphHorizontalAlign | undefined} textAlign - Horizontal alignment of multiline text.
  * @property {number | undefined} fontSizePixelHint - It is not specified normally. Preferred font size in pixels before dimension constraints are enforced.
@@ -627,6 +631,8 @@ export interface SpriteTextGlyphOptions {
   borderColor?: string;
   /** Outline width in pixels. */
   borderWidthPixel?: number;
+  /** Border sides to draw; defaults to all four sides when omitted. */
+  borderSides?: readonly SpriteTextGlyphBorderSide[];
   /** Border radius in pixels. */
   borderRadiusPixel?: number;
   /** Horizontal alignment of multiline text. */
