@@ -46,6 +46,7 @@ import type {
   SpriteTextGlyphOptions,
   SpriteTextGlyphHorizontalAlign,
   SpriteTextGlyphPaddingPixel,
+  SpriteTextGlyphBorderSide,
 } from './types';
 import { loadImageBitmap } from './utils';
 import { cloneSpriteLocation, spriteLocationsEqual } from './location';
@@ -540,6 +541,13 @@ type ResolvedTextGlyphPadding = {
   readonly left: number;
 };
 
+type ResolvedBorderSides = {
+  readonly top: boolean;
+  readonly right: boolean;
+  readonly bottom: boolean;
+  readonly left: boolean;
+};
+
 interface ResolvedTextGlyphOptions {
   readonly fontFamily: string;
   readonly fontStyle: 'normal' | 'italic';
@@ -552,6 +560,7 @@ interface ResolvedTextGlyphOptions {
   readonly borderColor?: string;
   readonly borderWidthPixel: number;
   readonly borderRadiusPixel: number;
+  readonly borderSides: ResolvedBorderSides;
   readonly textAlign: SpriteTextGlyphHorizontalAlign;
   readonly renderPixelRatio: number;
 }
@@ -589,6 +598,49 @@ const resolveTextGlyphPadding = (
   }
 
   return { top: 0, right: 0, bottom: 0, left: 0 };
+};
+
+/**
+ * Normalises the border sides definition, defaulting to all sides when unspecified or invalid.
+ * @param {readonly SpriteTextGlyphBorderSide[]} [sides] - Requested border sides.
+ * @returns {ResolvedBorderSides} Derived sides ready for rendering.
+ */
+const resolveBorderSides = (
+  sides?: readonly SpriteTextGlyphBorderSide[]
+): ResolvedBorderSides => {
+  if (!Array.isArray(sides) || sides.length === 0) {
+    return { top: true, right: true, bottom: true, left: true };
+  }
+
+  let top = false;
+  let right = false;
+  let bottom = false;
+  let left = false;
+
+  for (const side of sides) {
+    switch (side) {
+      case 'top':
+        top = true;
+        break;
+      case 'right':
+        right = true;
+        break;
+      case 'bottom':
+        bottom = true;
+        break;
+      case 'left':
+        left = true;
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (!top && !right && !bottom && !left) {
+    return { top: true, right: true, bottom: true, left: true };
+  }
+
+  return { top, right, bottom, left };
 };
 
 /**
@@ -688,7 +740,7 @@ const resolveTextGlyphOptions = (
         DEFAULT_TEXT_GLYPH_FONT_SIZE;
 
   const resolvedFontSize = resolvePositiveFinite(
-    options?.fontSizePixel,
+    options?.fontSizePixelHint,
     fallbackFontSize
   );
 
@@ -704,6 +756,7 @@ const resolveTextGlyphOptions = (
     borderColor: options?.borderColor,
     borderWidthPixel: resolveNonNegativeFinite(options?.borderWidthPixel, 0),
     borderRadiusPixel: resolveNonNegativeFinite(options?.borderRadiusPixel, 0),
+    borderSides: resolveBorderSides(options?.borderSides),
     textAlign: resolveTextAlign(options?.textAlign),
     renderPixelRatio: resolveRenderPixelRatio(options?.renderPixelRatio),
   };
@@ -913,6 +966,7 @@ const fillRoundedRect = (
  * @param {number} radius - Corner radius.
  * @param {string} color - Stroke color.
  * @param {number} lineWidth - Stroke width in pixels.
+ * @param {ResolvedBorderSides} sides - Border sides to render.
  */
 const strokeRoundedRect = (
   ctx: Canvas2DContext,
@@ -920,14 +974,67 @@ const strokeRoundedRect = (
   height: number,
   radius: number,
   color: string,
-  lineWidth: number
+  lineWidth: number,
+  sides: ResolvedBorderSides
 ) => {
+  const { top, right, bottom, left } = sides;
+  if (lineWidth <= 0 || (!top && !right && !bottom && !left)) {
+    return;
+  }
+
   ctx.save();
-  ctx.beginPath();
-  drawRoundedRectPath(ctx, 0, 0, width, height, radius);
   ctx.strokeStyle = color;
   ctx.lineWidth = lineWidth;
-  ctx.stroke();
+
+  const cornerRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+  const previousCap = ctx.lineCap;
+  ctx.lineCap = cornerRadius === 0 ? 'square' : 'butt';
+
+  if (top) {
+    const startX = cornerRadius;
+    const endX = width - cornerRadius;
+    if (endX > startX) {
+      ctx.beginPath();
+      ctx.moveTo(startX, 0);
+      ctx.lineTo(endX, 0);
+      ctx.stroke();
+    }
+  }
+
+  if (right) {
+    const startY = cornerRadius;
+    const endY = height - cornerRadius;
+    if (endY > startY) {
+      ctx.beginPath();
+      ctx.moveTo(width, startY);
+      ctx.lineTo(width, endY);
+      ctx.stroke();
+    }
+  }
+
+  if (bottom) {
+    const startX = width - cornerRadius;
+    const endX = cornerRadius;
+    if (startX > endX) {
+      ctx.beginPath();
+      ctx.moveTo(startX, height);
+      ctx.lineTo(endX, height);
+      ctx.stroke();
+    }
+  }
+
+  if (left) {
+    const startY = height - cornerRadius;
+    const endY = cornerRadius;
+    if (startY > endY) {
+      ctx.beginPath();
+      ctx.moveTo(0, startY);
+      ctx.lineTo(0, endY);
+      ctx.stroke();
+    }
+  }
+
+  ctx.lineCap = previousCap;
   ctx.restore();
 };
 
@@ -1790,6 +1897,9 @@ export const createSpriteLayer = <T = any>(
       totalRotateDeg: totalRotDeg,
       anchor: img.anchor,
       offset: img.offset,
+      effectivePixelsPerMeter,
+      spriteMinPixel,
+      spriteMaxPixel,
       projectToClipSpace,
       drawingBufferWidth,
       drawingBufferHeight,
@@ -2704,6 +2814,9 @@ export const createSpriteLayer = <T = any>(
           totalRotateDeg,
           anchor,
           offset: offsetDef,
+          effectivePixelsPerMeter,
+          spriteMinPixel,
+          spriteMaxPixel,
           projectToClipSpace: (lng, lat, elevation) =>
             projectLngLatToClipSpace(lng, lat, elevation, clipContext),
           drawingBufferWidth,
@@ -2725,7 +2838,8 @@ export const createSpriteLayer = <T = any>(
 
         const offsetMeters = calculateSurfaceOffsetMeters(
           offsetDef,
-          imageScale
+          imageScale,
+          zoomScaleFactor
         );
         const cornerDisplacements = calculateSurfaceCornerDisplacements({
           worldWidthMeters: surfaceCenter.worldDimensions.width,
@@ -3025,7 +3139,12 @@ export const createSpriteLayer = <T = any>(
             imageResource.height,
             baseMetersPerPixel,
             imageScale,
-            zoomScaleFactor
+            zoomScaleFactor,
+            {
+              effectivePixelsPerMeter,
+              spriteMinPixel,
+              spriteMaxPixel,
+            }
           );
           const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
             ? imageEntry.displayedRotateDeg
@@ -3035,7 +3154,8 @@ export const createSpriteLayer = <T = any>(
               );
           const offsetMeters = calculateSurfaceOffsetMeters(
             offsetResolved,
-            imageScale
+            imageScale,
+            zoomScaleFactor
           );
           const cornerDisplacements = calculateSurfaceCornerDisplacements({
             worldWidthMeters: worldDims.width,
@@ -3386,7 +3506,8 @@ export const createSpriteLayer = <T = any>(
         strokeHeight,
         strokeRadius,
         resolved.borderColor,
-        borderWidth
+        borderWidth,
+        resolved.borderSides
       );
       ctx.restore();
     }

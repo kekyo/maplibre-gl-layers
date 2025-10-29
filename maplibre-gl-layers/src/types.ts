@@ -507,11 +507,14 @@ export type SpriteLayerEventListener<
  * @property {number | undefined} zoomMax - Maximum zoom level before scaling adjustments apply.
  * @property {number | undefined} scaleMin - Lower limit for scale clamping.
  * @property {number | undefined} scaleMax - Upper limit for scale clamping.
- * @property {number | undefined} spriteMinPixel - Minimum on-screen pixel size for sprites.
- * @property {number | undefined} spriteMaxPixel - Maximum on-screen pixel size for sprites.
+ * @property {number | undefined} spriteMinPixel - Minimum on-screen pixel size for sprites (0 disables the lower clamp).
+ * @property {number | undefined} spriteMaxPixel - Maximum on-screen pixel size for sprites (0 disables the upper clamp).
  */
 export interface SpriteScalingOptions {
-  /** Overrides the baseline meters-per-pixel ratio. */
+  /**
+   * Overrides the baseline meters-per-pixel ratio.
+   * We strongly recommend specifying the default value of 1, as this value affects all calculations.
+   */
   metersPerPixel?: number;
   /** Minimum zoom level before scaling adjustments apply. */
   zoomMin?: number;
@@ -521,17 +524,45 @@ export interface SpriteScalingOptions {
   scaleMin?: number;
   /** Upper limit for scale clamping. */
   scaleMax?: number;
-  /** Minimum on-screen pixel size for sprites. */
+  /** Minimum on-screen pixel size for sprites (0 disables the lower clamp). */
   spriteMinPixel?: number;
-  /** Maximum on-screen pixel size for sprites. */
+  /** Maximum on-screen pixel size for sprites (0 disables the upper clamp). */
   spriteMaxPixel?: number;
 }
+
+/**
+ * Unlimited (default) values that fill in missing {@link SpriteScalingOptions} fields supplied by callers.
+ * metersPerPixel is 1.
+ */
+export const UNLIMITED_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
+  metersPerPixel: 1.0,
+  zoomMin: 0,
+  zoomMax: 30,
+  scaleMin: 1,
+  scaleMax: 1,
+  spriteMinPixel: 0,
+  spriteMaxPixel: 100000,
+} as const;
+
+/**
+ * Standard values that fill in missing {@link SpriteScalingOptions} fields supplied by callers.
+ * metersPerPixel is 1.
+ */
+export const STANDARD_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
+  metersPerPixel: 1.0,
+  zoomMin: 8.0,
+  zoomMax: 20.0,
+  scaleMin: 0.1,
+  scaleMax: 1.0,
+  spriteMinPixel: 24,
+  spriteMaxPixel: 100,
+} as const;
 
 /**
  * Options accepted when creating a SpriteLayer.
  *
  * @property {string | undefined} id - Optional layer identifier supplied to MapLibre.
- * @property {SpriteScalingOptions | undefined} spriteScaling - Optional scaling controls.
+ * @property {SpriteScalingOptions | undefined} spriteScaling - Optional scaling controls. Default is UNLIMITED_SPRITE_SCALING_OPTIONS.
  */
 export interface SpriteLayerOptions {
   /** Optional layer identifier supplied to MapLibre. */
@@ -555,6 +586,9 @@ export type SpriteTextGlyphPaddingPixel =
       left?: number;
     };
 
+/** Border sides that can be rendered for a text glyph outline. */
+export type SpriteTextGlyphBorderSide = 'top' | 'right' | 'bottom' | 'left';
+
 /** Additional size options accepted by registerTextGlyph. */
 export type SpriteTextGlyphDimensions =
   | { readonly lineHeightPixel: number; readonly maxWidthPixel?: never }
@@ -564,7 +598,6 @@ export type SpriteTextGlyphDimensions =
  * Text glyph appearance options.
  *
  * @property {string | undefined} fontFamily - Font family name.
- * @property {number | undefined} fontSizePixel - Font size in pixels.
  * @property {string | undefined} fontWeight - CSS font-weight value.
  * @property {'normal' | 'italic' | undefined} fontStyle - CSS font-style value.
  * @property {string | undefined} color - Text fill color.
@@ -573,15 +606,15 @@ export type SpriteTextGlyphDimensions =
  * @property {SpriteTextGlyphPaddingPixel | undefined} paddingPixel - Padding around the glyph.
  * @property {string | undefined} borderColor - Outline color.
  * @property {number | undefined} borderWidthPixel - Outline width in pixels.
+ * @property {SpriteTextGlyphBorderSide[] | undefined} borderSides - Border sides to draw (defaults to all four).
  * @property {number | undefined} borderRadiusPixel - Border radius in pixels.
  * @property {SpriteTextGlyphHorizontalAlign | undefined} textAlign - Horizontal alignment of multiline text.
- * @property {number | undefined} renderPixelRatio - Pixel ratio used when rendering the glyph.
+ * @property {number | undefined} fontSizePixelHint - It is not specified normally. Preferred font size in pixels before dimension constraints are enforced.
+ * @property {number | undefined} renderPixelRatio - Canvas pixel ratio multiplier (defaults to 1) applied before the glyph is resampled to its logical size.
  */
 export interface SpriteTextGlyphOptions {
   /** Font family name. */
   fontFamily?: string;
-  /** Font size in pixels. */
-  fontSizePixel?: number;
   /** CSS font-weight value. */
   fontWeight?: string;
   /** CSS font-style value. */
@@ -598,11 +631,15 @@ export interface SpriteTextGlyphOptions {
   borderColor?: string;
   /** Outline width in pixels. */
   borderWidthPixel?: number;
+  /** Border sides to draw; defaults to all four sides when omitted. */
+  borderSides?: readonly SpriteTextGlyphBorderSide[];
   /** Border radius in pixels. */
   borderRadiusPixel?: number;
   /** Horizontal alignment of multiline text. */
   textAlign?: SpriteTextGlyphHorizontalAlign;
-  /** Pixel ratio used when rendering the glyph. */
+  /** It is not specified normally. Preferred font size in pixels; may shrink automatically to satisfy provided dimensions. */
+  fontSizePixelHint?: number;
+  /** Pixel ratio used when rendering the glyph; defaults to 1 and values > 1 render at higher resolution before downscaling. */
   renderPixelRatio?: number;
 }
 

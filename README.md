@@ -649,6 +649,42 @@ console.log(`Sprites with adjusted opacity: ${dimmed}`);
 
 The updater passed to `updateForEach` is reusable. Avoid storing it outside the callback; apply changes immediately. To inspect the current image layout, call `updater.getImageIndexMap()` and iterate through the available sub-layer and order pairs.
 
+## Scaling Options
+
+`createSpriteLayer(options?: SpriteLayerOptions)` accepts a small set of configuration values that govern how sprites are identified and scaled on the map.
+
+```typescript
+const spriteLayer = createSpriteLayer({
+  id: 'vehicles',
+  spriteScaling: {
+    metersPerPixel: 1,
+    zoomMin: 8,
+    zoomMax: 20,
+    scaleMin: 0.1,
+    scaleMax: 1,
+    spriteMinPixel: 24,
+    spriteMaxPixel: 100,
+  },
+});
+```
+
+- `id` - Optional MapLibre layer identifier. If omitted the layer registers itself as `sprite-layer`.
+- `spriteScaling.metersPerPixel` - Baseline conversion between texture pixels and world meters when zoom-dependent scaling is 1.0.
+  Larger values make every sprite appear bigger at the same zoom level.
+  The resolver clamps non-positive values back to the default (1 meter per pixel) and logs a warning.
+  We strongly recommend specifying the default value of 1, as this value affects all calculations.
+- `spriteScaling.zoomMin` / `zoomMax` - Zoom bounds that drive interpolation between `scaleMin` and `scaleMax`.
+  When the current map zoom is below `zoomMin`, sprites use `scaleMin`; when above `zoomMax`, they use `scaleMax`; anything in between is linearly interpolated.
+  Supplying reversed values is allowed—`resolveScalingOptions` swaps them internally and reports the correction through `console.warn`.
+- `spriteScaling.scaleMin` / `scaleMax` - Scale multipliers applied at `zoomMin` and `zoomMax`.
+  Values lower than zero are clamped to zero before interpolation.
+- `spriteScaling.spriteMinPixel` / `spriteMaxPixel` - Lower and upper clamps for the rendered size of each sprite (evaluated against the longest side in pixels).
+  Setting either value to `0` disables that clamp.
+  The clamping logic applies to both billboard and surface imagery so icons remain legible without blowing up at extreme zoom levels.
+
+All scaling values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
+Invalid inputs are normalised and reported via `console.warn` to help catch configuration mistakes during development.
+
 ---
 
 ## TODO

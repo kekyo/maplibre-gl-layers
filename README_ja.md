@@ -4,7 +4,7 @@
 
 ![maplibre-gl-layers](images/maplibre-gl-layers-120.png)
 
-[![Project Status: Concept – Minimal or no implementation has been done yet, or the repository is only intended to be a limited example, demo, or proof-of-concept.](https://www.repostatus.org/badges/latest/concept.svg)](https://www.repostatus.org/#concept)
+[![Project Status: Concept - Minimal or no implementation has been done yet, or the repository is only intended to be a limited example, demo, or proof-of-concept.](https://www.repostatus.org/badges/latest/concept.svg)](https://www.repostatus.org/#concept)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm version](https://img.shields.io/npm/v/maplibre-gl-layers.svg)](https://www.npmjs.com/package/maplibre-gl-layers)
 
@@ -671,6 +671,40 @@ console.log(`透明度を調整したスプライト数: ${dimmed}`);
 ```
 
 `updateForEach` の第2引数で受け取るアップデータは再利用されます。コールバックの外に保持せず、その場で必要な変更を記述してください。現在の画像構成を調べたい場合は、`updater.getImageIndexMap()` でサブレイヤーとオーダーの組み合わせを取得できます。
+
+## スケーリングオプション
+
+`createSpriteLayer(options?: SpriteLayerOptions)` では、スプライトレイヤーの識別子とスケーリング挙動を調整するためのオプションを指定できます。
+
+```typescript
+const spriteLayer = createSpriteLayer({
+  id: 'vehicles',
+  spriteScaling: {
+    metersPerPixel: 1,
+    zoomMin: 8,
+    zoomMax: 20,
+    scaleMin: 0.1,
+    scaleMax: 1,
+    spriteMinPixel: 24,
+    spriteMaxPixel: 100,
+  },
+});
+```
+
+- `id` - MapLibre に登録するレイヤー ID。省略すると `sprite-layer` が使用されます。
+- `spriteScaling.metersPerPixel` - テクスチャの 1px を地図上で何メートルとして扱うかの基準値です。
+  大きい値ほど同じズームでも画像が大きく表示されます。
+  0 以下や非有限値を指定した場合は 1 に戻し、`console.warn` で警告します。
+  この値は全ての計算に影響を与えるため、デフォルトの1を指定することを強く推奨します。
+- `spriteScaling.zoomMin` / `zoomMax` - ズーム範囲の下限と上限です。この範囲の内側では `scaleMin` から `scaleMax` へ線形補間、範囲外ではそれぞれの端値が適用されます。
+  上下が逆になっていても自動で入れ替え、警告を一度だけ出力します。
+- `spriteScaling.scaleMin` / `scaleMax` - `zoomMin` / `zoomMax` で適用されるスケール係数。
+  負の値は 0 に丸められてから補間に使用されます。
+- `spriteScaling.spriteMinPixel` / `spriteMaxPixel` - 描画後のスプライト（ビルボードとサーフェイス双方）の最大辺ピクセル数に対する下限・上限。
+  0 を指定すると該当する制限を無効化します。視認性を保ちつつ極端な拡大を抑える目的で利用します。
+
+これらの値はレイヤー生成時に一度解決されます。動的に変更したい場合はレイヤーを再生成してください。
+無効な値を指定すると自動で補正され、開発中に気付きやすいよう `console.warn` 経由で通知されます。
 
 ---
 

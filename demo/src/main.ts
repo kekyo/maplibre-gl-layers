@@ -11,6 +11,7 @@ import type {
   SpriteImageRotationInterpolationOptions,
   SpriteImageDefinitionUpdate,
   SpriteInitEntry,
+  SpriteTextGlyphOptions,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -137,7 +138,7 @@ const SECONDARY_IMAGE_ASPECT_RATIO = 1.5;
  * Padding applied around text when rendering secondary glyph images.
  * Keeps the text from touching the border when the orbiting marker is in text mode.
  */
-const SECONDARY_TEXT_PADDING = ICON_SIZE * 0.1;
+const SECONDARY_TEXT_PADDING = ICON_SIZE * 0.14;
 /**
  * Line height used when drawing text-based secondary images, clamped to avoid degenerate glyphs.
  */
@@ -1646,11 +1647,13 @@ const main = async () => {
         // Sprite collection has not been populated yet; defer until initialization completes.
         return;
       }
-      const options = {
-        backgroundColor: '#5a5a5a',
+      const options: SpriteTextGlyphOptions = {
+        backgroundColor: '#3a3a3a',
         color: '#ffffff',
         paddingPixel: SECONDARY_TEXT_PADDING,
-        textAlign: 'center' as const,
+        borderColor: '#55b022',
+        borderWidthPixel: 3,
+        borderSides: ['top', 'bottom'],
       };
 
       await Promise.all(
