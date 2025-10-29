@@ -507,11 +507,14 @@ export type SpriteLayerEventListener<
  * @property {number | undefined} zoomMax - Maximum zoom level before scaling adjustments apply.
  * @property {number | undefined} scaleMin - Lower limit for scale clamping.
  * @property {number | undefined} scaleMax - Upper limit for scale clamping.
- * @property {number | undefined} spriteMinPixel - Minimum on-screen pixel size for sprites.
- * @property {number | undefined} spriteMaxPixel - Maximum on-screen pixel size for sprites.
+ * @property {number | undefined} spriteMinPixel - Minimum on-screen pixel size for sprites (0 disables the lower clamp).
+ * @property {number | undefined} spriteMaxPixel - Maximum on-screen pixel size for sprites (0 disables the upper clamp).
  */
 export interface SpriteScalingOptions {
-  /** Overrides the baseline meters-per-pixel ratio. */
+  /**
+   * Overrides the baseline meters-per-pixel ratio.
+   * We strongly recommend specifying the default value of 1, as this value affects all calculations.
+   */
   metersPerPixel?: number;
   /** Minimum zoom level before scaling adjustments apply. */
   zoomMin?: number;
@@ -521,17 +524,45 @@ export interface SpriteScalingOptions {
   scaleMin?: number;
   /** Upper limit for scale clamping. */
   scaleMax?: number;
-  /** Minimum on-screen pixel size for sprites. */
+  /** Minimum on-screen pixel size for sprites (0 disables the lower clamp). */
   spriteMinPixel?: number;
-  /** Maximum on-screen pixel size for sprites. */
+  /** Maximum on-screen pixel size for sprites (0 disables the upper clamp). */
   spriteMaxPixel?: number;
 }
+
+/**
+ * Unlimited (default) values that fill in missing {@link SpriteScalingOptions} fields supplied by callers.
+ * metersPerPixel is 1.
+ */
+export const UNLIMITED_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
+  metersPerPixel: 1.0,
+  zoomMin: 0,
+  zoomMax: 30,
+  scaleMin: 1,
+  scaleMax: 1,
+  spriteMinPixel: 0,
+  spriteMaxPixel: 100000,
+} as const;
+
+/**
+ * Standard values that fill in missing {@link SpriteScalingOptions} fields supplied by callers.
+ * metersPerPixel is 1.
+ */
+export const STANDARD_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
+  metersPerPixel: 1.0,
+  zoomMin: 8.0,
+  zoomMax: 20.0,
+  scaleMin: 0.1,
+  scaleMax: 1.0,
+  spriteMinPixel: 24,
+  spriteMaxPixel: 100,
+} as const;
 
 /**
  * Options accepted when creating a SpriteLayer.
  *
  * @property {string | undefined} id - Optional layer identifier supplied to MapLibre.
- * @property {SpriteScalingOptions | undefined} spriteScaling - Optional scaling controls.
+ * @property {SpriteScalingOptions | undefined} spriteScaling - Optional scaling controls. Default is UNLIMITED_SPRITE_SCALING_OPTIONS.
  */
 export interface SpriteLayerOptions {
   /** Optional layer identifier supplied to MapLibre. */
