@@ -1194,6 +1194,12 @@ const main = async () => {
     id: 'demo-sprite',
     spriteScaling: STANDARD_SPRITE_SCALING_OPTIONS,
     //    spriteScaling: UNLIMITED_SPRITE_SCALING_OPTIONS,
+    textureFiltering: {
+      minFilter: 'linear-mipmap-linear',
+      magFilter: 'linear',
+      generateMipmaps: true,
+      maxAnisotropy: 4,
+    },
   });
 
   if (typeof window !== 'undefined') {
