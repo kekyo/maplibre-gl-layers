@@ -2,7 +2,10 @@ import './style.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { Map, type MapOptions, type SourceSpecification } from 'maplibre-gl';
-import { createSpriteLayer } from 'maplibre-gl-layers';
+import {
+  createSpriteLayer,
+  STANDARD_SPRITE_SCALING_OPTIONS,
+} from 'maplibre-gl-layers';
 import type {
   SpriteMode,
   SpriteLayerClickEvent,
@@ -1187,7 +1190,11 @@ const main = async () => {
   updateMapStatus();
 
   /** Sprite layer instance. MapLibre manages the WebGL context, so only the layer ID is needed here. */
-  const spriteLayer = createSpriteLayer<DemoSpriteTag>({ id: 'demo-sprite' });
+  const spriteLayer = createSpriteLayer<DemoSpriteTag>({
+    id: 'demo-sprite',
+    spriteScaling: STANDARD_SPRITE_SCALING_OPTIONS,
+    //    spriteScaling: UNLIMITED_SPRITE_SCALING_OPTIONS,
+  });
 
   if (typeof window !== 'undefined') {
     // Register sprite layer references on the window for integration tests and debugging tools.

@@ -143,6 +143,7 @@ describe('billboard helpers', () => {
     );
     expect(base.width).toBeCloseTo(200, 6);
     expect(base.height).toBeCloseTo(160, 6);
+    expect(base.scaleAdjustment).toBeCloseTo(2, 6);
   });
 
   it('returns zero when resource size invalid', () => {
@@ -156,7 +157,7 @@ describe('billboard helpers', () => {
       0,
       0
     );
-    expect(dims).toEqual({ width: 0, height: 0 });
+    expect(dims).toEqual({ width: 0, height: 0, scaleAdjustment: 1 });
   });
 
   it('computes offset pixels', () => {
@@ -168,6 +169,84 @@ describe('billboard helpers', () => {
     );
     expect(offset.x).toBeCloseTo(60, 6);
     expect(offset.y).toBeCloseTo(0, 6);
+  });
+
+  it('locks offset distance once spriteMaxPixel clamps size', () => {
+    const offsetDef = { offsetDeg: 0, offsetMeters: 5 } as const;
+    const dimsAtClamp = calculateBillboardPixelDimensions(
+      128,
+      128,
+      1,
+      1,
+      1,
+      1,
+      0,
+      128
+    );
+    const offsetAtClamp = calculateBillboardOffsetPixels(
+      offsetDef,
+      1,
+      1,
+      1,
+      dimsAtClamp.scaleAdjustment
+    );
+    const dimsBeyondClamp = calculateBillboardPixelDimensions(
+      128,
+      128,
+      1,
+      1,
+      2,
+      1,
+      0,
+      128
+    );
+    const offsetBeyondClamp = calculateBillboardOffsetPixels(
+      offsetDef,
+      1,
+      2,
+      1,
+      dimsBeyondClamp.scaleAdjustment
+    );
+    expect(offsetAtClamp.y).toBeCloseTo(offsetBeyondClamp.y, 6);
+  });
+
+  it('locks offset distance when spriteMinPixel inflates size', () => {
+    const offsetDef = { offsetDeg: 0, offsetMeters: 5 } as const;
+    const dimsAtMin = calculateBillboardPixelDimensions(
+      128,
+      128,
+      1,
+      1,
+      1,
+      1,
+      128,
+      0
+    );
+    const offsetAtMin = calculateBillboardOffsetPixels(
+      offsetDef,
+      1,
+      1,
+      1,
+      dimsAtMin.scaleAdjustment
+    );
+    const dimsBelowMin = calculateBillboardPixelDimensions(
+      128,
+      128,
+      1,
+      1,
+      0.5,
+      1,
+      128,
+      0
+    );
+    const offsetBelowMin = calculateBillboardOffsetPixels(
+      offsetDef,
+      1,
+      0.5,
+      1,
+      dimsBelowMin.scaleAdjustment
+    );
+    expect(offsetAtMin.y).toBeCloseTo(offsetBelowMin.y, 6);
   });
 
   const expectBillboardAnchorDisplacement = (
@@ -219,6 +298,7 @@ describe('surface helpers', () => {
     const dims = calculateSurfaceWorldDimensions(100, 200, 2, 1.5, 0.5);
     expect(dims.width).toBeCloseTo(150, 6);
     expect(dims.height).toBeCloseTo(300, 6);
+    expect(dims.scaleAdjustment).toBeCloseTo(1, 6);
   });
 
   it('expands world dimensions to satisfy spriteMinPixel', () => {
@@ -228,6 +308,7 @@ describe('surface helpers', () => {
     });
     expect(dims.width).toBeCloseTo(400, 6);
     expect(dims.height).toBeCloseTo(200, 6);
+    expect(dims.scaleAdjustment).toBeCloseTo(6.25, 6);
   });
 
   it('shrinks world dimensions to satisfy spriteMaxPixel', () => {
@@ -237,6 +318,7 @@ describe('surface helpers', () => {
     });
     expect(dims.width).toBeCloseTo(32, 6);
     expect(dims.height).toBeCloseTo(16, 6);
+    expect(dims.scaleAdjustment).toBeCloseTo(0.5, 6);
   });
 
   const expectSurfaceAnchorDisplacement = (
@@ -307,6 +389,56 @@ describe('surface helpers', () => {
       35 + (200 / EARTH_RADIUS_METERS) * (180 / Math.PI),
       6
     );
+  });
+
+  it('keeps offset constant after spriteMaxPixel clamp', () => {
+    const offsetDef = { offsetDeg: 0, offsetMeters: 10 } as const;
+    const dimsAtClamp = calculateSurfaceWorldDimensions(128, 64, 1, 1, 1, {
+      effectivePixelsPerMeter: 1,
+      spriteMaxPixel: 128,
+    });
+    const offsetAtClamp = calculateSurfaceOffsetMeters(
+      offsetDef,
+      1,
+      1,
+      dimsAtClamp.scaleAdjustment
+    );
+    const dimsBeyondClamp = calculateSurfaceWorldDimensions(128, 64, 1, 1, 2, {
+      effectivePixelsPerMeter: 1,
+      spriteMaxPixel: 128,
+    });
+    const offsetBeyondClamp = calculateSurfaceOffsetMeters(
+      offsetDef,
+      1,
+      2,
+      dimsBeyondClamp.scaleAdjustment
+    );
+    expect(offsetAtClamp.north).toBeCloseTo(offsetBeyondClamp.north, 6);
+  });
+
+  it('keeps offset constant after spriteMinPixel inflation', () => {
+    const offsetDef = { offsetDeg: 0, offsetMeters: 10 } as const;
+    const dimsAtMin = calculateSurfaceWorldDimensions(128, 64, 1, 1, 1, {
+      effectivePixelsPerMeter: 1,
+      spriteMinPixel: 128,
+    });
+    const offsetAtMin = calculateSurfaceOffsetMeters(
+      offsetDef,
+      1,
+      1,
+      dimsAtMin.scaleAdjustment
+    );
+    const dimsBelowMin = calculateSurfaceWorldDimensions(128, 64, 1, 1, 0.5, {
+      effectivePixelsPerMeter: 1,
+      spriteMinPixel: 128,
+    });
+    const offsetBelowMin = calculateSurfaceOffsetMeters(
+      offsetDef,
+      1,
+      0.5,
+      dimsBelowMin.scaleAdjustment
+    );
+    expect(offsetAtMin.north).toBeCloseTo(offsetBelowMin.north, 6);
   });
 });
 
@@ -579,7 +711,12 @@ describe('calculateSurfaceCenterPosition', () => {
         anchor,
         rotation
       );
-      const offsetMeters = calculateSurfaceOffsetMeters(offset, scale, 1);
+      const offsetMeters = calculateSurfaceOffsetMeters(
+        offset,
+        scale,
+        1,
+        worldDims.scaleAdjustment
+      );
       expect(result.totalDisplacement.east).toBeCloseTo(
         anchorShift.east + offsetMeters.east,
         6
@@ -704,7 +841,12 @@ describe('calculateSurfaceCornerDisplacements', () => {
         scale,
         1
       );
-      const offsetMeters = calculateSurfaceOffsetMeters(offset, scale, 1);
+      const offsetMeters = calculateSurfaceOffsetMeters(
+        offset,
+        scale,
+        1,
+        worldDims.scaleAdjustment
+      );
       const corners = calculateSurfaceCornerDisplacements({
         worldWidthMeters: worldDims.width,
         worldHeightMeters: worldDims.height,

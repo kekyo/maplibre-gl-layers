@@ -363,27 +363,32 @@ const clampSpritePixelSize = (
   height: number,
   spriteMinPixel: number,
   spriteMaxPixel: number
-): { width: number; height: number } => {
+): { width: number; height: number; scaleAdjustment: number } => {
   const largest = Math.max(width, height);
   // If the measured size is invalid or zero, skip clamping to avoid divisions.
   if (!Number.isFinite(largest) || largest <= 0) {
-    return { width, height };
+    return { width, height, scaleAdjustment: 1 };
   }
   let nextWidth = width;
   let nextHeight = height;
+  let scaleAdjustment = 1;
+  let adjustedLargest = largest;
   // Expand sprites that would render too small so visibility constraints are respected.
   if (spriteMinPixel > 0 && largest < spriteMinPixel) {
     const factor = spriteMinPixel / largest;
     nextWidth *= factor;
     nextHeight *= factor;
+    scaleAdjustment *= factor;
+    adjustedLargest *= factor;
   }
   // Shrink sprites that would exceed the configured maximum to protect layer.
-  if (spriteMaxPixel > 0 && largest > spriteMaxPixel) {
-    const factor = spriteMaxPixel / largest;
+  if (spriteMaxPixel > 0 && adjustedLargest > spriteMaxPixel) {
+    const factor = spriteMaxPixel / adjustedLargest;
     nextWidth *= factor;
     nextHeight *= factor;
+    scaleAdjustment *= factor;
   }
-  return { width: nextWidth, height: nextHeight };
+  return { width: nextWidth, height: nextHeight, scaleAdjustment };
 };
 
 /**
@@ -396,7 +401,7 @@ const clampSpritePixelSize = (
  * @param {number} effectivePixelsPerMeter - Conversion between world meters and screen pixels.
  * @param {number} spriteMinPixel - Lower pixel clamp for the sprite's largest side.
  * @param {number} spriteMaxPixel - Upper pixel clamp for the sprite's largest side.
- * @returns {{ width: number; height: number }} Pixel dimensions after scaling and clamping.
+ * @returns {{ width: number; height: number; scaleAdjustment: number }} Pixel dimensions alongside the scale factor applied during clamping.
  */
 export const calculateBillboardPixelDimensions = (
   imageWidth: number | undefined,
@@ -407,7 +412,7 @@ export const calculateBillboardPixelDimensions = (
   effectivePixelsPerMeter: number,
   spriteMinPixel: number,
   spriteMaxPixel: number
-): { width: number; height: number } => {
+): { width: number; height: number; scaleAdjustment: number } => {
   // Reject invalid inputs so the renderer can skip drawing without crashing downstream matrices.
   if (
     !imageWidth ||
@@ -417,7 +422,7 @@ export const calculateBillboardPixelDimensions = (
     baseMetersPerPixel <= 0 ||
     effectivePixelsPerMeter <= 0
   ) {
-    return { width: 0, height: 0 };
+    return { width: 0, height: 0, scaleAdjustment: 1 };
   }
   const scaleFactor =
     baseMetersPerPixel * imageScale * zoomScaleFactor * effectivePixelsPerMeter;
@@ -437,17 +442,20 @@ export const calculateBillboardPixelDimensions = (
  * @param {number} imageScale - User-provided scale multiplier applied to the offset distance.
  * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
  * @param {number} effectivePixelsPerMeter - Conversion factor from meters to pixels.
+ * @param {number} [sizeScaleAdjustment=1] - Additional scale factor applied when sprite size is clamped.
  * @returns {{ x: number; y: number }} Screen-space offset relative to the billboard center.
  */
 export const calculateBillboardOffsetPixels = (
   offset: SpriteImageOffset | undefined,
   imageScale: number,
   zoomScaleFactor: number,
-  effectivePixelsPerMeter: number
+  effectivePixelsPerMeter: number,
+  sizeScaleAdjustment = 1
 ): { x: number; y: number } => {
   const offsetMeters =
     (offset?.offsetMeters ?? 0) * imageScale * zoomScaleFactor;
-  const offsetPixels = offsetMeters * effectivePixelsPerMeter;
+  const offsetPixels =
+    offsetMeters * effectivePixelsPerMeter * sizeScaleAdjustment;
   const offsetRad = (offset?.offsetDeg ?? 0) * DEG2RAD;
   return {
     x: offsetPixels * Math.sin(offsetRad),
@@ -494,7 +502,7 @@ export const calculateBillboardAnchorShiftPixels = (
  * @param {number} baseMetersPerPixel - World meters represented by a pixel at the current zoom.
  * @param {number} imageScale - User-provided scale multiplier.
  * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
- * @returns {{ width: number; height: number }} Dimensions expressed as world-space meters.
+ * @returns {{ width: number; height: number; scaleAdjustment: number }} World dimensions in meters and the applied clamp scale factor.
  */
 export const calculateSurfaceWorldDimensions = (
   imageWidth: number | undefined,
@@ -507,7 +515,7 @@ export const calculateSurfaceWorldDimensions = (
     spriteMinPixel?: number;
     spriteMaxPixel?: number;
   }
-): { width: number; height: number } => {
+): { width: number; height: number; scaleAdjustment: number } => {
   // Reject invalid inputs to keep downstream displacement math finite.
   if (
     !imageWidth ||
@@ -516,11 +524,12 @@ export const calculateSurfaceWorldDimensions = (
     imageHeight <= 0 ||
     baseMetersPerPixel <= 0
   ) {
-    return { width: 0, height: 0 };
+    return { width: 0, height: 0, scaleAdjustment: 1 };
   }
   const scaleFactor = baseMetersPerPixel * imageScale * zoomScaleFactor;
   let width = ensureFinite(imageWidth * scaleFactor);
   let height = ensureFinite(imageHeight * scaleFactor);
+  let scaleAdjustment = 1;
 
   const effectivePixelsPerMeter =
     options?.effectivePixelsPerMeter !== undefined
@@ -549,12 +558,13 @@ export const calculateSurfaceWorldDimensions = (
         if (scale !== 1) {
           width *= scale;
           height *= scale;
+          scaleAdjustment *= scale;
         }
       }
     }
   }
 
-  return { width, height };
+  return { width, height, scaleAdjustment };
 };
 
 /**
@@ -594,12 +604,14 @@ export const calculateSurfaceAnchorShiftMeters = (
  * @param {SpriteImageOffset | undefined} offset - Offset configuration for the surface sprite.
  * @param {number} imageScale - User-provided scale multiplier applied to the offset distance.
  * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
+ * @param {number} [sizeScaleAdjustment=1] - Additional scale factor applied when sprite size is clamped.
  * @returns {{ east: number; north: number }} Offset vector in meters.
  */
 export const calculateSurfaceOffsetMeters = (
   offset: SpriteImageOffset | undefined,
   imageScale: number,
-  zoomScaleFactor: number
+  zoomScaleFactor: number,
+  sizeScaleAdjustment = 1
 ): { east: number; north: number } => {
   const offsetMeters =
     (offset?.offsetMeters ?? 0) * imageScale * zoomScaleFactor;
@@ -609,8 +621,8 @@ export const calculateSurfaceOffsetMeters = (
   }
   const rad = (offset?.offsetDeg ?? 0) * DEG2RAD;
   return {
-    east: offsetMeters * Math.sin(rad),
-    north: offsetMeters * Math.cos(rad),
+    east: offsetMeters * Math.sin(rad) * sizeScaleAdjustment,
+    north: offsetMeters * Math.cos(rad) * sizeScaleAdjustment,
   };
 };
 
@@ -992,7 +1004,8 @@ export const calculateBillboardCenterPosition = (
     offset,
     imageScale,
     zoomScaleFactor,
-    effectivePixelsPerMeter
+    effectivePixelsPerMeter,
+    pixelDims.scaleAdjustment
   );
 
   // centerX/Y represent the image origin in screen space after anchor handling.
@@ -1152,7 +1165,7 @@ export type SurfaceCenterParams = {
  * Output describing the resolved surface center and displacement details.
  * @typedef SurfaceCenterResult
  * @property {{ x: number; y: number } | null} center - Projected screen coordinates or `null` when projection fails.
- * @property {{ width: number; height: number }} worldDimensions - Sprite dimensions in world meters.
+ * @property {{ width: number; height: number; scaleAdjustment: number }} worldDimensions - Sprite dimensions in world meters.
  * @property {{ east: number; north: number }} totalDisplacement - Combined anchor and offset displacement in meters.
  * @property {SpriteLocation} displacedLngLat - Geographic coordinates after applying displacement.
  * @property {{ x: number; y: number } | null | undefined} [anchorlessCenter] - Anchorless screen coordinates when requested.
@@ -1161,7 +1174,7 @@ export type SurfaceCenterParams = {
  */
 export type SurfaceCenterResult = {
   center: { x: number; y: number } | null;
-  worldDimensions: { width: number; height: number };
+  worldDimensions: { width: number; height: number; scaleAdjustment: number };
   totalDisplacement: { east: number; north: number };
   displacedLngLat: SpriteLocation;
   anchorlessCenter?: { x: number; y: number } | null;
@@ -1261,7 +1274,8 @@ export const calculateSurfaceCenterPosition = (
   const offsetMeters = calculateSurfaceOffsetMeters(
     offset,
     imageScale,
-    zoomScaleFactor
+    zoomScaleFactor,
+    worldDims.scaleAdjustment
   );
 
   const totalEast = anchorShiftMeters.east + offsetMeters.east;

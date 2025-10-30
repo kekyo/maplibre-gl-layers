@@ -672,39 +672,63 @@ console.log(`透明度を調整したスプライト数: ${dimmed}`);
 
 `updateForEach` の第2引数で受け取るアップデータは再利用されます。コールバックの外に保持せず、その場で必要な変更を記述してください。現在の画像構成を調べたい場合は、`updater.getImageIndexMap()` でサブレイヤーとオーダーの組み合わせを取得できます。
 
-## スケーリングオプション
+## 初期化オプション
 
 `createSpriteLayer(options?: SpriteLayerOptions)` では、スプライトレイヤーの識別子とスケーリング挙動を調整するためのオプションを指定できます。
 
 ```typescript
+// SpriteLayerの初期化オプションを指定して生成
 const spriteLayer = createSpriteLayer({
   id: 'vehicles',
-  spriteScaling: {
-    metersPerPixel: 1,
+  spriteScaling: {  // スケーリングオプションの指定
     zoomMin: 8,
     zoomMax: 20,
     scaleMin: 0.1,
     scaleMax: 1,
     spriteMinPixel: 24,
     spriteMaxPixel: 100,
+    metersPerPixel: 1,
   },
 });
 ```
 
 - `id` - MapLibre に登録するレイヤー ID。省略すると `sprite-layer` が使用されます。
-- `spriteScaling.metersPerPixel` - テクスチャの 1px を地図上で何メートルとして扱うかの基準値です。
-  大きい値ほど同じズームでも画像が大きく表示されます。
-  0 以下や非有限値を指定した場合は 1 に戻し、`console.warn` で警告します。
-  この値は全ての計算に影響を与えるため、デフォルトの1を指定することを強く推奨します。
 - `spriteScaling.zoomMin` / `zoomMax` - ズーム範囲の下限と上限です。この範囲の内側では `scaleMin` から `scaleMax` へ線形補間、範囲外ではそれぞれの端値が適用されます。
   上下が逆になっていても自動で入れ替え、警告を一度だけ出力します。
 - `spriteScaling.scaleMin` / `scaleMax` - `zoomMin` / `zoomMax` で適用されるスケール係数。
   負の値は 0 に丸められてから補間に使用されます。
 - `spriteScaling.spriteMinPixel` / `spriteMaxPixel` - 描画後のスプライト（ビルボードとサーフェイス双方）の最大辺ピクセル数に対する下限・上限。
   0 を指定すると該当する制限を無効化します。視認性を保ちつつ極端な拡大を抑える目的で利用します。
+- `spriteScaling.metersPerPixel` - テクスチャの 1px を地図上で何メートルとして扱うかの基準値です。
+  大きい値ほど同じズームでも画像が大きく表示されます。
+  0 以下や非有限値を指定した場合は 1 に戻し、`console.warn` で警告します。
+  この値は全ての計算に影響を与えるため、デフォルトの1を指定することを強く推奨します。
+  スプライト画像の大きさを調整する場合は、画像毎に指定する`scale`を使用することができます。
 
 これらの値はレイヤー生成時に一度解決されます。動的に変更したい場合はレイヤーを再生成してください。
 無効な値を指定すると自動で補正され、開発中に気付きやすいよう `console.warn` 経由で通知されます。
+
+### スケーリングオプション
+
+スケーリングオプションを細かく調整する動機は、極端にズームインやズームアウトした時のレンダリング結果を改善することです。以下の例では、スケーリングオプションを指定しない場合にズームアウトした様子です。殆どのスプライトは非常に小さく、そこにスプライトが存在することすらわかりにくいです:
+
+![Unlimited](images/scaling1.png)
+
+適度にスケーリング制限を行う標準的なオプションとして、`STANDARD_SPRITE_SCALING_OPTIONS` を使用することができます。このオプションを使用すると、ズームイン・ズームアウト時のスプライト画像のスケーリングに制限が適用され、ズームアウト時も何ががそこに存在することはわかります:
+
+![Standard](images/scaling2.png)
+
+```typescript
+// 標準的なスケーリングオプションを指定して生成
+const spriteLayer = createSpriteLayer({
+  id: 'vehicles',
+  spriteScaling: STANDARD_SPRITE_SCALING_OPTIONS,
+});
+```
+
+[デモページ](https://kekyo.github.io/maplibre-gl-layers/) では、 `STANDARD_SPRITE_SCALING_OPTIONS` を使用しているので、ズームイン・ズームアウトで何が起きるのかを確かめてみると良いでしょう。
+
+注意: デフォルトのスケーリングオプションが「無制限」であるのは、制限を導入すると、正確なサイズ描画が失われるからです。特に画像やテキストの配置を試行錯誤する場合は、スケーリングオプションを無効化することを強くおすすめします。
 
 ---
 
