@@ -2839,7 +2839,8 @@ export const createSpriteLayer = <T = any>(
         const offsetMeters = calculateSurfaceOffsetMeters(
           offsetDef,
           imageScale,
-          zoomScaleFactor
+          zoomScaleFactor,
+          surfaceCenter.worldDimensions.scaleAdjustment
         );
         const cornerDisplacements = calculateSurfaceCornerDisplacements({
           worldWidthMeters: surfaceCenter.worldDimensions.width,
@@ -3155,7 +3156,8 @@ export const createSpriteLayer = <T = any>(
           const offsetMeters = calculateSurfaceOffsetMeters(
             offsetResolved,
             imageScale,
-            zoomScaleFactor
+            zoomScaleFactor,
+            worldDims.scaleAdjustment
           );
           const cornerDisplacements = calculateSurfaceCornerDisplacements({
             worldWidthMeters: worldDims.width,
