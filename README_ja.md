@@ -689,6 +689,11 @@ const spriteLayer = createSpriteLayer({
     spriteMaxPixel: 100,
     metersPerPixel: 1,
   },
+  textureFiltering: {  // テクスチャ品質の指定
+    minFilter: 'linear-mipmap-linear',
+    generateMipmaps: true,
+    maxAnisotropy: 4,
+  },
 });
 ```
 
@@ -704,8 +709,11 @@ const spriteLayer = createSpriteLayer({
   0 以下や非有限値を指定した場合は 1 に戻し、`console.warn` で警告します。
   この値は全ての計算に影響を与えるため、デフォルトの1を指定することを強く推奨します。
   スプライト画像の大きさを調整する場合は、画像毎に指定する`scale`を使用することができます。
+- `textureFiltering.minFilter` / `magFilter` - WebGL のテクスチャフィルタリングを上書きします。既定値はいずれも `linear` です。`minFilter` にミップマップ系 (`linear-mipmap-linear` など) を指定すると、新規登録される画像で自動的にミップマップが生成されます。
+- `textureFiltering.generateMipmaps` - ミップマップ必須でないフィルターを選んだ場合でもミップマップを生成します。WebGL2 もしくは 2 のベキ乗サイズの画像で大きく縮小した際の画質を改善できます。WebGL1 かつ非 2 のベキ乗画像でミップマップが生成できない場合は、自動的に `linear` フィルターへフォールバックします。
+- `textureFiltering.maxAnisotropy` - `EXT_texture_filter_anisotropic` 拡張が利用できる場合に異方性フィルタリング係数を指定します (1 以上)。地表に沿ったスプライトを浅い角度から見た際のシャープさを維持できます。指定値は GPU の上限でクランプされ、ミップマップが存在する場合のみ適用されます。
 
-これらの値はレイヤー生成時に一度解決されます。動的に変更したい場合はレイヤーを再生成してください。
+これらの値（スケーリング／テクスチャフィルタリング）はレイヤー生成時に一度解決されます。動的に変更したい場合はレイヤーを再生成してください。
 無効な値を指定すると自動で補正され、開発中に気付きやすいよう `console.warn` 経由で通知されます。
 
 ### スケーリングオプション

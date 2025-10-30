@@ -16,37 +16,41 @@
 import { type Map as MapLibreMap, MercatorCoordinate } from 'maplibre-gl';
 import type { CustomRenderMethodInput } from 'maplibre-gl';
 import { vec4, type mat4 } from 'gl-matrix';
-import type {
-  SpriteInit,
-  SpriteInitCollection,
-  SpriteMode,
-  SpriteLayerInterface,
-  SpriteLayerOptions,
-  SpriteAnchor,
-  SpriteLocation,
-  SpriteCurrentState,
-  SpriteLayerEventMap,
-  SpriteLayerEventListener,
-  SpriteUpdateEntry,
-  SpriteUpdaterEntry,
-  SpriteImageDefinitionInit,
-  SpriteImageDefinitionUpdate,
+import {
+  type SpriteInit,
+  type SpriteInitCollection,
+  type SpriteMode,
+  type SpriteLayerInterface,
+  type SpriteLayerOptions,
+  type SpriteTextureFilteringOptions,
+  type SpriteTextureMagFilter,
+  type SpriteTextureMinFilter,
+  type SpriteAnchor,
+  type SpriteLocation,
+  type SpriteCurrentState,
+  type SpriteLayerEventMap,
+  type SpriteLayerEventListener,
+  type SpriteUpdateEntry,
+  type SpriteUpdaterEntry,
+  type SpriteImageDefinitionInit,
+  type SpriteImageDefinitionUpdate,
   // @prettier-max-ignore-deprecated
-  SpriteUpdateBulkEntry,
-  SpriteMutateCallbacks,
-  SpriteMutateSourceItem,
-  SpriteImageOffset,
-  SpriteInterpolationOptions,
-  SpriteNumericInterpolationOptions,
-  SpriteImageOriginLocation,
-  SpriteScreenPoint,
-  SpriteLayerClickEvent,
-  SpriteImageState,
-  SpriteTextGlyphDimensions,
-  SpriteTextGlyphOptions,
-  SpriteTextGlyphHorizontalAlign,
-  SpriteTextGlyphPaddingPixel,
-  SpriteTextGlyphBorderSide,
+  type SpriteUpdateBulkEntry,
+  type SpriteMutateCallbacks,
+  type SpriteMutateSourceItem,
+  type SpriteImageOffset,
+  type SpriteInterpolationOptions,
+  type SpriteNumericInterpolationOptions,
+  type SpriteImageOriginLocation,
+  type SpriteScreenPoint,
+  type SpriteLayerClickEvent,
+  type SpriteImageState,
+  type SpriteTextGlyphDimensions,
+  type SpriteTextGlyphOptions,
+  type SpriteTextGlyphHorizontalAlign,
+  type SpriteTextGlyphPaddingPixel,
+  type SpriteTextGlyphBorderSide,
+  DEFAULT_TEXTURE_FILTERING_OPTIONS,
 } from './types';
 import { loadImageBitmap } from './utils';
 import { cloneSpriteLocation, spriteLocationsEqual } from './location';
@@ -153,6 +157,133 @@ const ENABLE_NDC_BIAS_SURFACE = true;
 const ORDER_MAX = 16;
 /** Bucket width used to encode sub-layer and order into a single number. */
 const ORDER_BUCKET = 16;
+
+/** List of acceptable minification filters exposed to callers. */
+const MIN_FILTER_VALUES: readonly SpriteTextureMinFilter[] = [
+  'nearest',
+  'linear',
+  'nearest-mipmap-nearest',
+  'nearest-mipmap-linear',
+  'linear-mipmap-nearest',
+  'linear-mipmap-linear',
+] as const;
+
+/** List of acceptable magnification filters. */
+const MAG_FILTER_VALUES: readonly SpriteTextureMagFilter[] = [
+  'nearest',
+  'linear',
+] as const;
+
+/** Minification filters that require mipmaps to produce complete textures. */
+const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> = new Set([
+  'nearest-mipmap-nearest',
+  'nearest-mipmap-linear',
+  'linear-mipmap-nearest',
+  'linear-mipmap-linear',
+]);
+
+interface ResolvedTextureFilteringOptions {
+  readonly minFilter: SpriteTextureMinFilter;
+  readonly magFilter: SpriteTextureMagFilter;
+  readonly generateMipmaps: boolean;
+  readonly maxAnisotropy: number;
+}
+
+const filterRequiresMipmaps = (filter: SpriteTextureMinFilter): boolean =>
+  MIPMAP_MIN_FILTERS.has(filter);
+
+const resolveTextureFilteringOptions = (
+  options?: SpriteTextureFilteringOptions
+): ResolvedTextureFilteringOptions => {
+  const minCandidate = options?.minFilter;
+  const minFilter: SpriteTextureMinFilter = MIN_FILTER_VALUES.includes(
+    minCandidate as SpriteTextureMinFilter
+  )
+    ? (minCandidate as SpriteTextureMinFilter)
+    : DEFAULT_TEXTURE_FILTERING_OPTIONS.minFilter!;
+
+  const magCandidate = options?.magFilter;
+  const magFilter: SpriteTextureMagFilter = MAG_FILTER_VALUES.includes(
+    magCandidate as SpriteTextureMagFilter
+  )
+    ? (magCandidate as SpriteTextureMagFilter)
+    : DEFAULT_TEXTURE_FILTERING_OPTIONS.magFilter!;
+
+  let generateMipmaps =
+    options?.generateMipmaps ??
+    DEFAULT_TEXTURE_FILTERING_OPTIONS.generateMipmaps!;
+  if (filterRequiresMipmaps(minFilter)) {
+    generateMipmaps = true;
+  }
+
+  let maxAnisotropy =
+    options?.maxAnisotropy ?? DEFAULT_TEXTURE_FILTERING_OPTIONS.maxAnisotropy!;
+  if (!Number.isFinite(maxAnisotropy) || maxAnisotropy < 1) {
+    maxAnisotropy = 1;
+  }
+
+  return {
+    minFilter,
+    magFilter,
+    generateMipmaps,
+    maxAnisotropy,
+  };
+};
+
+const ANISOTROPY_EXTENSION_NAMES = [
+  'EXT_texture_filter_anisotropic',
+  'WEBKIT_EXT_texture_filter_anisotropic',
+  'MOZ_EXT_texture_filter_anisotropic',
+] as const;
+
+const resolveAnisotropyExtension = (
+  glContext: WebGLRenderingContext
+): EXT_texture_filter_anisotropic | null => {
+  for (const name of ANISOTROPY_EXTENSION_NAMES) {
+    const extension = glContext.getExtension(name);
+    if (extension) {
+      return extension as EXT_texture_filter_anisotropic;
+    }
+  }
+  return null;
+};
+
+const isPowerOfTwo = (value: number): boolean =>
+  value > 0 && (value & (value - 1)) === 0;
+
+const resolveGlMinFilter = (
+  glContext: WebGLRenderingContext,
+  filter: SpriteTextureMinFilter
+): number => {
+  switch (filter) {
+    case 'nearest':
+      return glContext.NEAREST;
+    case 'nearest-mipmap-nearest':
+      return glContext.NEAREST_MIPMAP_NEAREST;
+    case 'nearest-mipmap-linear':
+      return glContext.NEAREST_MIPMAP_LINEAR;
+    case 'linear-mipmap-nearest':
+      return glContext.LINEAR_MIPMAP_NEAREST;
+    case 'linear-mipmap-linear':
+      return glContext.LINEAR_MIPMAP_LINEAR;
+    case 'linear':
+    default:
+      return glContext.LINEAR;
+  }
+};
+
+const resolveGlMagFilter = (
+  glContext: WebGLRenderingContext,
+  filter: SpriteTextureMagFilter
+): number => {
+  switch (filter) {
+    case 'nearest':
+      return glContext.NEAREST;
+    case 'linear':
+    default:
+      return glContext.LINEAR;
+  }
+};
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -1460,6 +1591,9 @@ export const createSpriteLayer = <T = any>(
   // Use caller-supplied layer ID when provided, otherwise fall back to a default identifier.
   const id = options?.id ?? 'sprite-layer';
   const resolvedScaling = resolveScalingOptions(options?.spriteScaling);
+  const resolvedTextureFiltering = resolveTextureFilteringOptions(
+    options?.textureFiltering
+  );
 
   /** WebGL context supplied by MapLibre, assigned during onAdd. */
   let gl: WebGLRenderingContext | null = null;
@@ -1477,6 +1611,10 @@ export const createSpriteLayer = <T = any>(
   let uniformTextureLocation: WebGLUniformLocation | null = null;
   /** Uniform location for sprite opacity. */
   let uniformOpacityLocation: WebGLUniformLocation | null = null;
+  /** Cached anisotropic filtering extension instance (when available). */
+  let anisotropyExtension: EXT_texture_filter_anisotropic | null = null;
+  /** Maximum anisotropy supported by the current context. */
+  let maxSupportedAnisotropy = 1;
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -2246,7 +2384,7 @@ export const createSpriteLayer = <T = any>(
         throw new Error('Failed to create texture.');
       }
       glContext.bindTexture(glContext.TEXTURE_2D, texture);
-      // Update wrapping/filtering to avoid seams during sprite rendering.
+      // Clamp wrapping to avoid sampling outside sprite edges.
       glContext.texParameteri(
         glContext.TEXTURE_2D,
         glContext.TEXTURE_WRAP_S,
@@ -2256,16 +2394,6 @@ export const createSpriteLayer = <T = any>(
         glContext.TEXTURE_2D,
         glContext.TEXTURE_WRAP_T,
         glContext.CLAMP_TO_EDGE
-      );
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_MIN_FILTER,
-        glContext.LINEAR
-      );
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_MAG_FILTER,
-        glContext.LINEAR
       );
       // Enable premultiplied alpha for natural blending on the canvas.
       glContext.pixelStorei(glContext.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
@@ -2277,6 +2405,71 @@ export const createSpriteLayer = <T = any>(
         glContext.UNSIGNED_BYTE,
         image.bitmap
       );
+
+      // Determine the desired filters up-front.
+      let minFilterEnum = resolveGlMinFilter(
+        glContext,
+        resolvedTextureFiltering.minFilter
+      );
+      const magFilterEnum = resolveGlMagFilter(
+        glContext,
+        resolvedTextureFiltering.magFilter
+      );
+
+      let usedMipmaps = false;
+      if (resolvedTextureFiltering.generateMipmaps) {
+        const isWebGL2 =
+          typeof WebGL2RenderingContext !== 'undefined' &&
+          glContext instanceof WebGL2RenderingContext;
+        const canUseMipmaps =
+          isWebGL2 || (isPowerOfTwo(image.width) && isPowerOfTwo(image.height));
+        if (canUseMipmaps) {
+          glContext.generateMipmap(glContext.TEXTURE_2D);
+          usedMipmaps = true;
+        } else {
+          // Fall back to linear filtering when mipmaps are unsupported.
+          minFilterEnum = glContext.LINEAR;
+        }
+      }
+
+      if (
+        !usedMipmaps &&
+        filterRequiresMipmaps(resolvedTextureFiltering.minFilter)
+      ) {
+        // Without mipmaps the requested filter would produce incomplete textures.
+        minFilterEnum = glContext.LINEAR;
+      }
+
+      glContext.texParameteri(
+        glContext.TEXTURE_2D,
+        glContext.TEXTURE_MIN_FILTER,
+        minFilterEnum
+      );
+      glContext.texParameteri(
+        glContext.TEXTURE_2D,
+        glContext.TEXTURE_MAG_FILTER,
+        magFilterEnum
+      );
+
+      if (
+        usedMipmaps &&
+        anisotropyExtension &&
+        resolvedTextureFiltering.maxAnisotropy > 1
+      ) {
+        const ext = anisotropyExtension;
+        const targetAnisotropy = Math.min(
+          resolvedTextureFiltering.maxAnisotropy,
+          maxSupportedAnisotropy
+        );
+        if (targetAnisotropy > 1) {
+          glContext.texParameterf(
+            glContext.TEXTURE_2D,
+            ext.TEXTURE_MAX_ANISOTROPY_EXT,
+            targetAnisotropy
+          );
+        }
+      }
+
       image.texture = texture;
     });
   };
@@ -2358,6 +2551,24 @@ export const createSpriteLayer = <T = any>(
   ): void => {
     map = mapInstance;
     gl = glContext;
+    anisotropyExtension = resolveAnisotropyExtension(glContext);
+    if (anisotropyExtension) {
+      const ext = anisotropyExtension;
+      const supported = glContext.getParameter(
+        ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT
+      ) as number | null;
+      if (
+        typeof supported === 'number' &&
+        Number.isFinite(supported) &&
+        supported >= 1
+      ) {
+        maxSupportedAnisotropy = supported;
+      } else {
+        maxSupportedAnisotropy = 1;
+      }
+    } else {
+      maxSupportedAnisotropy = 1;
+    }
 
     canvasElement = mapInstance.getCanvas();
     const registerDisposer = (disposer: () => void) => {
@@ -2529,6 +2740,8 @@ export const createSpriteLayer = <T = any>(
     attribUvLocation = -1;
     uniformTextureLocation = null;
     uniformOpacityLocation = null;
+    anisotropyExtension = null;
+    maxSupportedAnisotropy = 1;
   };
 
   /**

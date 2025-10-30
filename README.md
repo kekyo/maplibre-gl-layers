@@ -666,6 +666,11 @@ const spriteLayer = createSpriteLayer({
     spriteMaxPixel: 100,
     metersPerPixel: 1,
   },
+  textureFiltering: {  // Apply texture quality options
+    minFilter: 'linear-mipmap-linear',
+    generateMipmaps: true,
+    maxAnisotropy: 4,
+  },
 });
 ```
 
@@ -683,8 +688,11 @@ const spriteLayer = createSpriteLayer({
   The resolver clamps non-positive values back to the default (1 meter per pixel) and logs a warning.
   We strongly recommend specifying the default value of 1, as this value affects all calculations.
   To adjust the size of sprite images, you can use the `scale` property specified for each image.
+- `textureFiltering.minFilter` / `magFilter` - Override the WebGL texture filters used when sprites shrink or expand. The defaults match `linear` filtering in both directions. Setting `minFilter` to a mipmap variant (for example `linear-mipmap-linear`) automatically enables mipmap generation for newly registered images.
+- `textureFiltering.generateMipmaps` - Forces mipmap generation even when the chosen filter does not require it, improving quality for aggressively downscaled sprites on WebGL2 or power-of-two images. When the context cannot build mipmaps (for example WebGL1 with non power-of-two textures) the layer falls back to linear filtering automatically.
+- `textureFiltering.maxAnisotropy` - Requests anisotropic filtering (>= 1) when the runtime exposes `EXT_texture_filter_anisotropic`, helping surface-aligned sprites remain sharp at shallow viewing angles. The requested value is clamped to the GPU limit and only applied when mipmaps are available.
 
-All scaling values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
+All scaling values and texture filtering values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
 Invalid inputs are normalised and reported via `console.warn` to help catch configuration mistakes during development.
 
 ### Scaling Options

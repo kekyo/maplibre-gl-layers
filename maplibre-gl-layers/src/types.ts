@@ -559,16 +559,71 @@ export const STANDARD_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
 } as const;
 
 /**
+ * Allowed minification filters for sprite textures.
+ */
+export type SpriteTextureMinFilter =
+  | 'nearest'
+  | 'linear'
+  | 'nearest-mipmap-nearest'
+  | 'nearest-mipmap-linear'
+  | 'linear-mipmap-nearest'
+  | 'linear-mipmap-linear';
+
+/**
+ * Allowed magnification filters for sprite textures.
+ */
+export type SpriteTextureMagFilter = 'nearest' | 'linear';
+
+/**
+ * Texture filtering configuration.
+ *
+ * @property {SpriteTextureMinFilter | undefined} minFilter - Minification filter to apply (defaults to `linear`).
+ * @property {SpriteTextureMagFilter | undefined} magFilter - Magnification filter to apply (defaults to `linear`).
+ * @property {boolean | undefined} generateMipmaps - Generates mipmaps during upload when true (defaults to `false`).
+ * @property {number | undefined} maxAnisotropy - Desired anisotropy factor (>= 1) when EXT_texture_filter_anisotropic is available.
+ */
+export interface SpriteTextureFilteringOptions {
+  minFilter?: SpriteTextureMinFilter;
+  magFilter?: SpriteTextureMagFilter;
+  generateMipmaps?: boolean;
+  maxAnisotropy?: number;
+}
+
+/**
+ * Defaulted text filtering options.
+ */
+export const DEFAULT_TEXTURE_FILTERING_OPTIONS: SpriteTextureFilteringOptions =
+  {
+    minFilter: 'linear',
+    magFilter: 'linear',
+    generateMipmaps: false,
+    maxAnisotropy: 1,
+  } as const;
+
+/**
+ * Better text filtering options than default options.
+ */
+export const BETTER_TEXTURE_FILTERING_OPTIONS: SpriteTextureFilteringOptions = {
+  minFilter: 'linear-mipmap-linear',
+  magFilter: 'linear',
+  generateMipmaps: true,
+  maxAnisotropy: 8,
+} as const;
+
+/**
  * Options accepted when creating a SpriteLayer.
  *
  * @property {string | undefined} id - Optional layer identifier supplied to MapLibre.
  * @property {SpriteScalingOptions | undefined} spriteScaling - Optional scaling controls. Default is UNLIMITED_SPRITE_SCALING_OPTIONS.
+ * @property {SpriteTextureFilteringOptions | undefined} textureFiltering - Optional texture filtering overrides.
  */
 export interface SpriteLayerOptions {
   /** Optional layer identifier supplied to MapLibre. */
   id?: string;
   /** Optional scaling controls. */
   spriteScaling?: SpriteScalingOptions;
+  /** Optional texture filtering configuration. */
+  textureFiltering?: SpriteTextureFilteringOptions;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
