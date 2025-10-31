@@ -168,6 +168,8 @@ const SECONDARY_IMAGE_SCALE = 0.5;
 const SECONDARY_ORBIT_RADIUS_METERS = 180;
 /** Angular increment in degrees applied to the orbiting image during each step. */
 const SECONDARY_ORBIT_STEP_DEG = 20;
+/** Fixed angle (deg) used when the orbit mode is set to Shift. */
+const SECONDARY_SHIFT_ANGLE_DEG = 120;
 
 /** Threshold used to ignore tiny values near zero introduced by floating point error. */
 const EPSILON_DELTA = 1e-12;
@@ -184,7 +186,7 @@ const ARROW_HEAD_TOP_FRACTION = 0.085;
 const BILLBOARD_PRIMARY_ANCHOR_Y = 1 - 2 * ARROW_HEAD_TOP_FRACTION;
 
 /** Interaction states that control if and how the secondary image orbits the primary marker. */
-type SecondaryOrbitMode = 'hidden' | 'center' | 'orbit';
+type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -466,8 +468,7 @@ let updateLocationInterpolationButton: (() => void) | undefined;
 const createHud = () => {
   const locationFeedforwardEnabled =
     locationInterpolationMode === 'feedforward';
-  const rotateFeedforwardEnabled =
-    rotateInterpolationMode === 'feedforward';
+  const rotateFeedforwardEnabled = rotateInterpolationMode === 'feedforward';
   const orbitDegFeedforwardEnabled =
     orbitOffsetDegInterpolationMode === 'feedforward';
   const orbitMetersFeedforwardEnabled =
@@ -849,10 +850,20 @@ const createHud = () => {
             data-option="center"
             data-label="Center"
             aria-pressed="${currentSecondaryImageOrbitMode === 'center'}"
-            disabled
             data-testid="toggle-secondary-center"
           >
             Center
+          </button>
+          <button
+            type="button"
+            class="toggle-button${currentSecondaryImageOrbitMode === 'shift' ? ' active' : ''}"
+            data-control="secondary-image-mode"
+            data-option="shift"
+            data-label="Shift"
+            aria-pressed="${currentSecondaryImageOrbitMode === 'shift'}"
+            data-testid="toggle-secondary-shift"
+          >
+            Shift
           </button>
           <button
             type="button"
@@ -861,7 +872,6 @@ const createHud = () => {
             data-option="orbit"
             data-label="Orbit"
             aria-pressed="${currentSecondaryImageOrbitMode === 'orbit'}"
-            disabled
             data-testid="toggle-secondary-orbit"
           >
             Orbit
@@ -930,9 +940,7 @@ const createHud = () => {
             data-control="orbit-meters-interpolation-mode"
             data-option="feedback"
             data-label="Feedback"
-            aria-pressed="${
-              orbitMetersFeedforwardEnabled ? 'false' : 'true'
-            }"
+            aria-pressed="${orbitMetersFeedforwardEnabled ? 'false' : 'true'}"
             data-testid="toggle-orbit-meters-feedback"
           >
             Feedback
@@ -943,9 +951,7 @@ const createHud = () => {
             data-control="orbit-meters-interpolation-mode"
             data-option="feedforward"
             data-label="Feedforward"
-            aria-pressed="${
-              orbitMetersFeedforwardEnabled ? 'true' : 'false'
-            }"
+            aria-pressed="${orbitMetersFeedforwardEnabled ? 'true' : 'false'}"
             data-testid="toggle-orbit-meters-feedforward"
           >
             Feedforward
@@ -1898,18 +1904,22 @@ const main = async () => {
       if (!isSecondaryImageReady) {
         // When assets have not loaded yet, just remember the requested mode for later.
         currentSecondaryImageOrbitMode = mode;
-        if (mode !== 'orbit') {
-          // Reset the rotation so the eventual orbit starts from a neutral angle.
-          secondaryImageOrbitDegrees = 0;
-        }
+        secondaryImageOrbitDegrees =
+          mode === 'orbit'
+            ? secondaryImageOrbitDegrees
+            : mode === 'shift'
+              ? SECONDARY_SHIFT_ANGLE_DEG
+              : 0;
         updateSecondaryImageButtons?.();
         return;
       }
       currentSecondaryImageOrbitMode = mode;
-      if (mode !== 'orbit') {
-        // Snap the angle to zero when orbiting stops to keep the UI deterministic.
-        secondaryImageOrbitDegrees = 0;
-      }
+      secondaryImageOrbitDegrees =
+        mode === 'orbit'
+          ? secondaryImageOrbitDegrees
+          : mode === 'shift'
+            ? SECONDARY_SHIFT_ANGLE_DEG
+            : 0;
 
       spriteLayer.updateForEach((sprite, update) => {
         sprite.images.forEach((orderMap) => {
@@ -1932,6 +1942,16 @@ const main = async () => {
                 offset: {
                   offsetMeters: 0.0,
                   offsetDeg: 0.0,
+                },
+              };
+            } else if (mode === 'shift') {
+              // Shift mode keeps a fixed radius and angle without continuous orbiting.
+              imageUpdate = {
+                opacity: 1.0,
+                autoRotation: false,
+                offset: {
+                  offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+                  offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
                 },
               };
             } else {
@@ -2054,7 +2074,10 @@ const main = async () => {
     const createOrbitInterpolationOptions = ():
       | SpriteImageInterpolationOptions
       | undefined => {
-      if (!isOrbitDegInterpolationEnabled && !isOrbitMetersInterpolationEnabled) {
+      if (
+        !isOrbitDegInterpolationEnabled &&
+        !isOrbitMetersInterpolationEnabled
+      ) {
         // Skip interpolation when the user has disabled smoothing for orbit motion.
         return undefined;
       }
@@ -2749,7 +2772,8 @@ const main = async () => {
         };
         updateOrbitMetersInterpolationButton();
         orbitMetersInterpolationButton.addEventListener('click', () => {
-          isOrbitMetersInterpolationEnabled = !isOrbitMetersInterpolationEnabled;
+          isOrbitMetersInterpolationEnabled =
+            !isOrbitMetersInterpolationEnabled;
           updateOrbitMetersInterpolationButton?.();
           applyOrbitInterpolationToAll();
         });
@@ -2846,7 +2870,8 @@ const main = async () => {
             scale: SECONDARY_IMAGE_SCALE,
             opacity: currentSecondaryImageOrbitMode === 'hidden' ? 0.0 : 1.0,
             interpolation:
-              isOrbitDegInterpolationEnabled || isOrbitMetersInterpolationEnabled
+              isOrbitDegInterpolationEnabled ||
+              isOrbitMetersInterpolationEnabled
                 ? {
                     ...(isOrbitDegInterpolationEnabled
                       ? {

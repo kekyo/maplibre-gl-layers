@@ -12,13 +12,18 @@
 import type { SpriteInterpolationOptions, SpriteImageOffset } from './types';
 import type {
   InternalSpriteImageState,
-  NumericInterpolationState,
+  DegreeInterpolationState,
+  DistanceInterpolationState,
 } from './internalTypes';
 
 import {
-  createNumericInterpolationState,
-  evaluateNumericInterpolation,
-} from './numericInterpolation';
+  createDegreeInterpolationState,
+  evaluateDegreeInterpolation,
+} from './degreeInterpolation';
+import {
+  createDistanceInterpolationState,
+  evaluateDistanceInterpolation,
+} from './distanceInterpolation';
 import {
   normaliseAngleDeg,
   resolveRotationTarget,
@@ -26,27 +31,27 @@ import {
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-interface NumericInterpolationStepOptions {
+interface DegreeInterpolationStepOptions {
   readonly normalise?: (value: number) => number;
   readonly applyFinalValue?: (value: number) => void;
 }
 
-interface NumericInterpolationStepResult {
-  readonly state: NumericInterpolationState | null;
+interface DegreeInterpolationStepResult {
+  readonly state: DegreeInterpolationState | null;
   readonly active: boolean;
 }
 
-const stepNumericInterpolationState = (
-  interpolationState: NumericInterpolationState | null,
+const stepDegreeInterpolationState = (
+  interpolationState: DegreeInterpolationState | null,
   timestamp: number,
   applyValue: (value: number) => void,
-  options?: NumericInterpolationStepOptions
-): NumericInterpolationStepResult => {
+  options?: DegreeInterpolationStepOptions
+): DegreeInterpolationStepResult => {
   if (!interpolationState) {
     return { state: null, active: false };
   }
 
-  const evaluation = evaluateNumericInterpolation({
+  const evaluation = evaluateDegreeInterpolation({
     state: interpolationState,
     timestamp,
   });
@@ -119,7 +124,7 @@ const stepRotationInterpolation = (
   image: InternalSpriteImageState,
   timestamp: number
 ): boolean => {
-  const { state, active } = stepNumericInterpolationState(
+  const { state, active } = stepDegreeInterpolationState(
     image.rotationInterpolationState,
     timestamp,
     (value) => {
@@ -138,7 +143,7 @@ const stepOffsetDegInterpolation = (
   image: InternalSpriteImageState,
   timestamp: number
 ): boolean => {
-  const { state, active } = stepNumericInterpolationState(
+  const { state, active } = stepDegreeInterpolationState(
     image.offsetDegInterpolationState,
     timestamp,
     (value) => {
@@ -157,6 +162,42 @@ export const clearOffsetDegInterpolation = (
   image: InternalSpriteImageState
 ): void => {
   image.offsetDegInterpolationState = null;
+};
+
+/**
+ * Container used by the distance interpolation helper.
+ */
+interface DistanceInterpolationStepResult {
+  readonly state: DistanceInterpolationState | null;
+  readonly active: boolean;
+}
+
+const stepDistanceInterpolationState = (
+  interpolationState: DistanceInterpolationState | null,
+  timestamp: number,
+  applyValue: (value: number) => void
+): DistanceInterpolationStepResult => {
+  if (!interpolationState) {
+    return { state: null, active: false };
+  }
+
+  const evaluation = evaluateDistanceInterpolation({
+    state: interpolationState,
+    timestamp,
+  });
+
+  if (interpolationState.startTimestamp < 0) {
+    interpolationState.startTimestamp = evaluation.effectiveStartTimestamp;
+  }
+
+  applyValue(evaluation.value);
+
+  if (evaluation.completed) {
+    applyValue(interpolationState.finalValue);
+    return { state: null, active: false };
+  }
+
+  return { state: interpolationState, active: true };
 };
 
 /**
@@ -182,7 +223,7 @@ const applyOffsetDegUpdate = (
     return;
   }
 
-  const { state, requiresInterpolation } = createNumericInterpolationState({
+  const { state, requiresInterpolation } = createDegreeInterpolationState({
     currentValue: image.offset.offsetDeg,
     targetValue: nextOffset.offsetDeg,
     previousCommandValue: image.lastCommandOffsetDeg,
@@ -213,7 +254,7 @@ const applyOffsetMetersUpdate = (
     return;
   }
 
-  const { state, requiresInterpolation } = createNumericInterpolationState({
+  const { state, requiresInterpolation } = createDistanceInterpolationState({
     currentValue: image.offset.offsetMeters,
     targetValue: nextOffset.offsetMeters,
     previousCommandValue: image.lastCommandOffsetMeters,
@@ -234,7 +275,7 @@ const stepOffsetMetersInterpolation = (
   image: InternalSpriteImageState,
   timestamp: number
 ): boolean => {
-  const { state, active } = stepNumericInterpolationState(
+  const { state, active } = stepDistanceInterpolationState(
     image.offsetMetersInterpolationState,
     timestamp,
     (value) => {

@@ -6,7 +6,7 @@
 
 import type { EasingFunction, SpriteInterpolationOptions } from './types';
 import { resolveEasing } from './easing';
-import type { NumericInterpolationState } from './internalTypes';
+import type { DegreeInterpolationState } from './internalTypes';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -67,13 +67,13 @@ const normaliseOptions = (
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Parameters required to construct a {@link NumericInterpolationState}.
+ * Parameters required to construct a {@link DegreeInterpolationState}.
  * @property {number} currentValue - Current numeric value rendered on screen.
  * @property {number} targetValue - Desired value after interpolation completes.
  * @property {number | undefined} previousCommandValue - Prior commanded value used for feed-forward prediction.
  * @property {SpriteInterpolationOptions} options - Timing and easing configuration.
  */
-export interface CreateNumericInterpolationStateParams {
+export interface CreateDegreeInterpolationStateParams {
   currentValue: number;
   targetValue: number;
   previousCommandValue?: number;
@@ -81,23 +81,23 @@ export interface CreateNumericInterpolationStateParams {
 }
 
 /**
- * Result returned by {@link createNumericInterpolationState} containing state and a flag for activation.
- * @property {NumericInterpolationState} state - Resolved state object.
+ * Result returned by {@link createDegreeInterpolationState} containing state and a flag for activation.
+ * @property {DegreeInterpolationState} state - Resolved state object.
  * @property {boolean} requiresInterpolation - Indicates whether the caller should animate or snap.
  */
-export interface CreateNumericInterpolationStateResult {
-  readonly state: NumericInterpolationState;
+export interface CreateDegreeInterpolationStateResult {
+  readonly state: DegreeInterpolationState;
   readonly requiresInterpolation: boolean;
 }
 
 /**
  * Creates interpolation state describing how to move from the current value to the target value.
- * @param {CreateNumericInterpolationStateParams} params - Inputs describing the current, target, and options.
- * @returns {CreateNumericInterpolationStateResult} State data plus a flag indicating if animation is needed.
+ * @param {CreateDegreeInterpolationStateParams} params - Inputs describing the current, target, and options.
+ * @returns {CreateDegreeInterpolationStateResult} State data plus a flag indicating if animation is needed.
  */
-export const createNumericInterpolationState = (
-  params: CreateNumericInterpolationStateParams
-): CreateNumericInterpolationStateResult => {
+export const createDegreeInterpolationState = (
+  params: CreateDegreeInterpolationStateParams
+): CreateDegreeInterpolationStateResult => {
   const { currentValue, targetValue } = params;
   const options = normaliseOptions(params.options);
 
@@ -119,7 +119,7 @@ export const createNumericInterpolationState = (
   const requiresInterpolation =
     options.durationMs > 0 && Math.abs(delta) > NUMERIC_EPSILON;
 
-  const state: NumericInterpolationState = {
+  const state: DegreeInterpolationState = {
     durationMs: options.durationMs,
     easing: options.easing,
     from: currentValue,
@@ -138,11 +138,11 @@ export const createNumericInterpolationState = (
 
 /**
  * Parameters describing interpolation evaluation state.
- * @property {NumericInterpolationState} state - State generated via {@link createNumericInterpolationState}.
+ * @property {DegreeInterpolationState} state - State generated via {@link createDegreeInterpolationState}.
  * @property {number} timestamp - Timestamp in milliseconds used to sample the interpolation curve.
  */
-export interface EvaluateNumericInterpolationParams {
-  state: NumericInterpolationState;
+export interface EvaluateDegreeInterpolationParams {
+  state: DegreeInterpolationState;
   timestamp: number;
 }
 
@@ -152,7 +152,7 @@ export interface EvaluateNumericInterpolationParams {
  * @property {boolean} completed - Indicates whether interpolation reached the end.
  * @property {number} effectiveStartTimestamp - Start timestamp applied during evaluation.
  */
-export interface EvaluateNumericInterpolationResult {
+export interface EvaluateDegreeInterpolationResult {
   readonly value: number;
   readonly completed: boolean;
   readonly effectiveStartTimestamp: number;
@@ -181,12 +181,12 @@ const clamp01 = (value: number): number => {
 
 /**
  * Evaluates a numeric interpolation against the provided timestamp.
- * @param {EvaluateNumericInterpolationParams} params - Inputs containing interpolation state and sample timestamp.
- * @returns {EvaluateNumericInterpolationResult} Current value, completion flag, and effective start time.
+ * @param {EvaluateDegreeInterpolationParams} params - Inputs containing interpolation state and sample timestamp.
+ * @returns {EvaluateDegreeInterpolationResult} Current value, completion flag, and effective start time.
  */
-export const evaluateNumericInterpolation = (
-  params: EvaluateNumericInterpolationParams
-): EvaluateNumericInterpolationResult => {
+export const evaluateDegreeInterpolation = (
+  params: EvaluateDegreeInterpolationParams
+): EvaluateDegreeInterpolationResult => {
   const { state } = params;
   const timestamp = Number.isFinite(params.timestamp)
     ? params.timestamp
