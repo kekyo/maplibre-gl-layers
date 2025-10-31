@@ -433,13 +433,13 @@ spriteLayer.updateSprite(SPRITE_ID, {
 
 もちろん、これは予測座標なので、移動中に移動方向や速度が大きく変われば、誤った座標に移動し続けてしまうデメリットがあります。それでも、新しい座標が供給されれば、そちらの方にすばやく移動するように矯正されるので、座標のズレは収斂するでしょう。
 
-## 画像の回転角とオフセットの回転角の補間
+## 画像の回転角とオフセットの補間
 
-スプライト移動補間と似た機能として、画像の回転とオフセットの角度回転を補間することも出来ます。これらの機能は似ていますが、スプライト位置の補間とは別の機能です。
+スプライト移動補間と似た機能として、画像の回転とオフセット（角度・距離）を補間することも出来ます。これらの機能は似ていますが、スプライト移動の補間とは別の機能です。
 
-`interpolation`で、画像の回転角の補間を有効にできます。`rotateDeg`の補間用と`offset.offsetDeg`の補間用で個別に`durationMs`と任意の`easing`関数を指定できます。補間が完了するまでは毎フレーム角度が滑らかに変化し、設定を削除するか`null`を渡すと即座に停止します。
+各画像に用意されている `interpolation` で、`rotateDeg`・`offset.offsetDeg`・`offset.offsetMeters` の各パラメータを個別に補間できます。パラメータごとに `durationMs` と任意の `easing` 関数、補間モードを指定でき、補間が完了するまでは毎フレーム値が滑らかに変化します。設定を削除するか `null` を渡すと即座に停止します。
 
-以下に、画像の回転角とオフセットの角度のそれぞれで、補間を適用する例を示します:
+以下に、画像の回転角とオフセット角度・距離のそれぞれで補間を適用する例を示します:
 
 ```typescript
 // 画像の回転角を400msで補間しながら変更する
@@ -458,6 +458,15 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
   },
   interpolation: {
     offsetDeg: { durationMs: 600 },
+    offsetMeters: { durationMs: 600 },
+  },
+});
+
+// 補間を無効化するには `null` を指定する
+spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
+  interpolation: {
+    offsetDeg: null,
+    offsetMeters: null,
   },
 });
 ```

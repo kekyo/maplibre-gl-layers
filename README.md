@@ -408,13 +408,13 @@ With feedback, even if a new coordinate is set, the animation won't reach that c
 
 Of course, since this is a predicted coordinate, a disadvantage is that if the movement direction or speed changes significantly during the move, it will continue moving toward an incorrect coordinate. Nevertheless, when a new coordinate is supplied, it will be corrected to move quickly toward that new coordinate, so the coordinate deviation should converge.
 
-## Interpolating Rotation and Offset Angles
+## Interpolating Rotation and Offsets
 
-Similar to sprite movement interpolation, you can also interpolate image rotation and angle rotation for offset rotation. While these functions are similar, they are distinct from sprite position interpolation.
+Similar to sprite movement interpolation, you can also interpolate image rotation and the offset parameters. While these functions are similar, they are distinct from sprite position interpolation.
 
-Use `interpolation` to smooth changes to `rotateDeg` and/or `offset.offsetDeg`. Each accepts its own `durationMs` and optional easing function. While interpolation is active, the angles update every frame until the specified duration completes; passing `null` disables interpolation for that angle.
+Use the per-image `interpolation` property to smooth changes to `rotateDeg`, `offset.offsetDeg`, and `offset.offsetMeters`. Each channel accepts its own `durationMs`, optional easing function, and interpolation mode. While interpolation is active, the values update every frame until the specified duration completes; passing `null` disables interpolation for that channel.
 
-Below are examples of applying interpolation for the image rotation angle and offset angle respectively:
+Below are examples of applying interpolation for the image rotation angle and both offset parameters:
 
 ```typescript
 // Smoothly rotate the image to 180 degrees over 400 ms
@@ -433,6 +433,15 @@ spriteLayer.updateSpriteImage('vehicle-label', 1, 0, {
   },
   interpolation: {
     offsetDeg: { durationMs: 600 },
+    offsetMeters: { durationMs: 600 },
+  },
+});
+
+// To stop interpolation, set the relevant parameter to `null`
+spriteLayer.updateSpriteImage('vehicle-label', 1, 0, {
+  interpolation: {
+    offsetDeg: null,
+    offsetMeters: null,
   },
 });
 ```
