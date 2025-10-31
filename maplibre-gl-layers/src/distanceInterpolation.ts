@@ -12,17 +12,17 @@ import type { DistanceInterpolationState } from './internalTypes';
 
 const DISTANCE_EPSILON = 1e-6;
 
-const normaliseDuration = (durationMs: number): number =>
+const normalizeDuration = (durationMs: number): number =>
   Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0;
 
-const normaliseOptions = (
+const normalizeOptions = (
   options: SpriteInterpolationOptions
 ): {
   durationMs: number;
   easing: EasingFunction;
   mode: 'feedback' | 'feedforward';
 } => ({
-  durationMs: normaliseDuration(options.durationMs),
+  durationMs: normalizeDuration(options.durationMs),
   easing: resolveEasing(options.easing),
   mode: options.mode ?? 'feedback',
 });
@@ -43,7 +43,7 @@ export const createDistanceInterpolationState = (
   params: CreateDistanceInterpolationStateParams
 ): CreateDistanceInterpolationStateResult => {
   const { currentValue, targetValue } = params;
-  const options = normaliseOptions(params.options);
+  const options = normalizeOptions(params.options);
 
   let effectiveTarget = targetValue;
   const previousCommand = params.previousCommandValue;

@@ -6,19 +6,19 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  normaliseAngleDeg,
+  normalizeAngleDeg,
   resolveRotationTarget,
 } from '../src/rotationInterpolation';
 
-describe('normaliseAngleDeg', () => {
+describe('normalizeAngleDeg', () => {
   it('wraps negative angles into [0, 360)', () => {
-    expect(normaliseAngleDeg(-30)).toBeCloseTo(330);
-    expect(normaliseAngleDeg(-720)).toBe(0);
+    expect(normalizeAngleDeg(-30)).toBeCloseTo(330);
+    expect(normalizeAngleDeg(-720)).toBe(0);
   });
 
   it('wraps angles greater than 360 into [0, 360)', () => {
-    expect(normaliseAngleDeg(450)).toBeCloseTo(90);
-    expect(normaliseAngleDeg(720)).toBe(0);
+    expect(normalizeAngleDeg(450)).toBeCloseTo(90);
+    expect(normalizeAngleDeg(720)).toBe(0);
   });
 });
 
@@ -61,7 +61,7 @@ describe('resolveRotationTarget', () => {
     expect(state?.finalValue).toBeCloseTo(270);
   });
 
-  it('normalises target angle and reuses shortest path interpolation', () => {
+  it('normalizes target angle and reuses shortest path interpolation', () => {
     const result = resolveRotationTarget({
       currentAngleDeg: 350,
       targetAngleDeg: 10,

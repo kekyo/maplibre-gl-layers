@@ -22,7 +22,7 @@ const NUMERIC_EPSILON = 1e-6;
  * @param {number} durationMs - Duration in milliseconds supplied by the caller.
  * @returns {number} Non-negative, finite duration safe for interpolation math.
  */
-const normaliseDuration = (durationMs: number): number =>
+const normalizeDuration = (durationMs: number): number =>
   Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0;
 
 /**
@@ -30,7 +30,7 @@ const normaliseDuration = (durationMs: number): number =>
  * @param {number} delta - Difference between target and current angles in degrees.
  * @returns {number} Shortest equivalent delta within [-180, 180].
  */
-const normaliseDelta = (delta: number): number => {
+const normalizeDelta = (delta: number): number => {
   if (!Number.isFinite(delta)) {
     return 0;
   }
@@ -50,7 +50,7 @@ const normaliseDelta = (delta: number): number => {
  * @param {SpriteInterpolationOptions} options - Caller-supplied interpolation configuration.
  * @returns {{ durationMs: number; easing: EasingFunction }} Sanitized options ready for state creation.
  */
-const normaliseOptions = (
+const normalizeOptions = (
   options: SpriteInterpolationOptions
 ): {
   durationMs: number;
@@ -58,7 +58,7 @@ const normaliseOptions = (
   mode: 'feedback' | 'feedforward';
 } => {
   return {
-    durationMs: normaliseDuration(options.durationMs),
+    durationMs: normalizeDuration(options.durationMs),
     easing: resolveEasing(options.easing),
     mode: options.mode ?? 'feedback',
   };
@@ -99,7 +99,7 @@ export const createDegreeInterpolationState = (
   params: CreateDegreeInterpolationStateParams
 ): CreateDegreeInterpolationStateResult => {
   const { currentValue, targetValue } = params;
-  const options = normaliseOptions(params.options);
+  const options = normalizeOptions(params.options);
 
   let effectiveTarget = targetValue;
   const previousCommand = params.previousCommandValue;
@@ -108,11 +108,11 @@ export const createDegreeInterpolationState = (
     previousCommand !== undefined &&
     Number.isFinite(previousCommand)
   ) {
-    const commandDelta = normaliseDelta(targetValue - previousCommand);
+    const commandDelta = normalizeDelta(targetValue - previousCommand);
     effectiveTarget = targetValue + commandDelta;
   }
 
-  const delta = normaliseDelta(effectiveTarget - currentValue);
+  const delta = normalizeDelta(effectiveTarget - currentValue);
   const pathTarget = currentValue + delta;
 
   // Duration must be positive and delta must exceed epsilon before we animate.

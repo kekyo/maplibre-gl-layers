@@ -31,7 +31,7 @@ import type {
  * @property mode - Strategy used to resolve the target location (feedback or feedforward).
  * @property durationMs - Total time allocated for the interpolation in milliseconds.
  * @property easing - Resolved easing function applied to raw progress values.
- * @property startTimestamp - Epoch millisecond when the interpolation started, or -1 when uninitialised.
+ * @property startTimestamp - Epoch millisecond when the interpolation started, or -1 when uninitialized.
  * @property from - Origin sprite location cloned from the current render state.
  * @property to - Destination sprite location being interpolated towards.
  */

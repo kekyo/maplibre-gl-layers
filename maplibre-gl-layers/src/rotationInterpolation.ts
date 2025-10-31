@@ -15,7 +15,7 @@ import { createDegreeInterpolationState } from './degreeInterpolation';
  * @param {number} angle - Angle provided by the caller which may fall outside a single revolution.
  * @returns {number} Angle wrapped to [0, 360) with negative zero converted to zero.
  */
-export const normaliseAngleDeg = (angle: number): number => {
+export const normalizeAngleDeg = (angle: number): number => {
   if (!Number.isFinite(angle)) {
     return 0;
   }
@@ -59,11 +59,11 @@ export const resolveRotationTarget = (
   params: ResolveRotationTargetParams
 ): ResolveRotationTargetResult => {
   const options = params.options;
-  const targetAngle = normaliseAngleDeg(params.targetAngleDeg);
-  const currentAngle = normaliseAngleDeg(params.currentAngleDeg);
+  const targetAngle = normalizeAngleDeg(params.targetAngleDeg);
+  const currentAngle = normalizeAngleDeg(params.currentAngleDeg);
   const previousCommandAngleDeg =
     params.previousCommandAngleDeg !== undefined
-      ? normaliseAngleDeg(params.previousCommandAngleDeg)
+      ? normalizeAngleDeg(params.previousCommandAngleDeg)
       : undefined;
 
   // Without options or with a zero/negative duration we snap to the target directly.

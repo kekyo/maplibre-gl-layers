@@ -262,7 +262,7 @@ const isSvgMimeType = (mimeType: string | null): boolean => {
   return mimeType.toLowerCase().includes('image/svg');
 };
 
-const rasteriseSvgWithCanvas = async (
+const rasterizeSvgWithCanvas = async (
   blob: Blob,
   width: number,
   height: number,
@@ -270,7 +270,7 @@ const rasteriseSvgWithCanvas = async (
 ): Promise<ImageBitmap> => {
   if (typeof document === 'undefined') {
     throw new Error(
-      'SVG rasterisation fallback requires a browser environment'
+      'SVG rasterization fallback requires a browser environment'
     );
   }
 
@@ -280,7 +280,7 @@ const rasteriseSvgWithCanvas = async (
       const element = new Image();
       element.onload = () => resolve(element);
       element.onerror = () =>
-        reject(new Error('Failed to load SVG for rasterisation'));
+        reject(new Error('Failed to load SVG for rasterization'));
       element.src = blobUrl;
     });
 
@@ -289,7 +289,7 @@ const rasteriseSvgWithCanvas = async (
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) {
-      throw new Error('Failed to acquire 2D context for SVG rasterisation');
+      throw new Error('Failed to acquire 2D context for SVG rasterization');
     }
 
     ctx.clearRect(0, 0, width, height);
@@ -310,7 +310,7 @@ const rasteriseSvgWithCanvas = async (
             resolve(result);
           } else {
             reject(
-              new Error('Failed to convert canvas to blob during rasterisation')
+              new Error('Failed to convert canvas to blob during rasterization')
             );
           }
         });
@@ -339,8 +339,7 @@ const resolveSvgBitmapWithFallback = async (
   try {
     return await createImageBitmap(blob, bitmapOptions);
   } catch (error) {
-    console.warn('Falling back to canvas-based SVG rasterisation', error);
-    return await rasteriseSvgWithCanvas(blob, width, height, options);
+    return await rasterizeSvgWithCanvas(blob, width, height, options);
   }
 };
 

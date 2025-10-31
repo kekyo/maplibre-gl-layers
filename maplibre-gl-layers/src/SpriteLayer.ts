@@ -10,7 +10,7 @@
  * Module that manages large numbers of sprites as a custom MapLibre WebGL layer, handling scaling,
  * interpolation animations, and buffer management for parallel rendering.
  * Includes CustomLayerInterface implementations, texture utilities, interpolation logic,
- * ordering rules, and depth-normalisation helpers for avoiding Z-buffer issues.
+ * ordering rules, and depth-normalization helpers for avoiding Z-buffer issues.
  */
 
 import { type Map as MapLibreMap, MercatorCoordinate } from 'maplibre-gl';
@@ -68,7 +68,7 @@ import {
   createInterpolationState,
   evaluateInterpolation,
 } from './interpolation';
-import { normaliseAngleDeg } from './rotationInterpolation';
+import { normalizeAngleDeg } from './rotationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
   calculateMetersPerPixelAtLatitude,
@@ -485,7 +485,7 @@ export const applyAutoRotation = <T>(
   const resolvedAngleRaw = isFiniteNumber(bearingDeg)
     ? bearingDeg
     : sprite.lastAutoRotationAngleDeg;
-  const resolvedAngle = normaliseAngleDeg(resolvedAngleRaw);
+  const resolvedAngle = normalizeAngleDeg(resolvedAngleRaw);
 
   sprite.images.forEach((orderMap) => {
     orderMap.forEach((image) => {
@@ -671,7 +671,7 @@ const resolveTextGlyphPadding = (
 };
 
 /**
- * Normalises the border sides definition, defaulting to all sides when unspecified or invalid.
+ * Normalizes the border sides definition, defaulting to all sides when unspecified or invalid.
  * @param {readonly SpriteTextGlyphBorderSide[]} [sides] - Requested border sides.
  * @returns {ResolvedBorderSides} Derived sides ready for rendering.
  */
@@ -1270,7 +1270,7 @@ export const createImageStateFromInit = (
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
   const initialOffset = cloneOffset(imageInit.offset);
-  const initialRotateDeg = normaliseAngleDeg(imageInit.rotateDeg ?? 0);
+  const initialRotateDeg = normalizeAngleDeg(imageInit.rotateDeg ?? 0);
   const state: InternalSpriteImageState = {
     subLayer,
     order,
@@ -1705,7 +1705,7 @@ export const createSpriteLayer = <T = any>(
 
     const totalRotDeg = Number.isFinite(img.displayedRotateDeg)
       ? img.displayedRotateDeg
-      : normaliseAngleDeg(
+      : normalizeAngleDeg(
           (img.resolvedBaseRotateDeg ?? 0) + (img.rotateDeg ?? 0)
         );
     const imageScaleLocal = img.scale ?? 1;
@@ -2628,7 +2628,7 @@ export const createSpriteLayer = <T = any>(
       // Prefer the dynamically interpolated rotation when available; otherwise synthesize it from base + manual rotations.
       const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
         ? imageEntry.displayedRotateDeg
-        : normaliseAngleDeg(
+        : normalizeAngleDeg(
             (imageEntry.resolvedBaseRotateDeg ?? 0) +
               (imageEntry.rotateDeg ?? 0)
           );
@@ -3057,7 +3057,7 @@ export const createSpriteLayer = <T = any>(
           );
           const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
             ? imageEntry.displayedRotateDeg
-            : normaliseAngleDeg(
+            : normalizeAngleDeg(
                 (imageEntry.resolvedBaseRotateDeg ?? 0) +
                   (imageEntry.rotateDeg ?? 0)
               );
@@ -3206,7 +3206,7 @@ export const createSpriteLayer = <T = any>(
    * Registers an image URL or existing ImageBitmap with the image registry.
    * @param {string} imageId - Image identifier used by sprites.
    * @param {string | ImageBitmap} imageSource - Image URL or existing ImageBitmap to load.
-   * @param {SpriteImageRegisterOptions | undefined} [options] - Optional controls for SVG rasterisation.
+   * @param {SpriteImageRegisterOptions | undefined} [options] - Optional controls for SVG rasterization.
    * @returns {Promise<boolean>} Resolves to `true` when registered; `false` if the ID already exists.
    * @remarks Sprites must register images before referencing them.
    */
@@ -3670,7 +3670,7 @@ export const createSpriteLayer = <T = any>(
   /**
    * Expands a batch sprite payload into iterable entries.
    * @param {SpriteInitCollection<T>} collection - Batch payload.
-   * @returns {Array<[string, SpriteInit<T>]>} Normalised entries.
+   * @returns {Array<[string, SpriteInit<T>]>} Normalized entries.
    */
   const resolveSpriteInitCollection = (
     collection: SpriteInitCollection<T>

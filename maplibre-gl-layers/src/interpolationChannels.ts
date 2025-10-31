@@ -6,7 +6,7 @@
 
 /**
  * Utility helpers for managing sprite image interpolation channels.
- * Centralises rotation and offset channel operations so SpriteLayer stays focused on orchestration.
+ * Centralizes rotation and offset channel operations so SpriteLayer stays focused on orchestration.
  */
 
 import type { SpriteInterpolationOptions, SpriteImageOffset } from './types';
@@ -25,14 +25,14 @@ import {
   evaluateDistanceInterpolation,
 } from './distanceInterpolation';
 import {
-  normaliseAngleDeg,
+  normalizeAngleDeg,
   resolveRotationTarget,
 } from './rotationInterpolation';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
 interface DegreeInterpolationStepOptions {
-  readonly normalise?: (value: number) => number;
+  readonly normalize?: (value: number) => number;
   readonly applyFinalValue?: (value: number) => void;
 }
 
@@ -60,14 +60,14 @@ const stepDegreeInterpolationState = (
     interpolationState.startTimestamp = evaluation.effectiveStartTimestamp;
   }
 
-  const normaliseValue = options?.normalise ?? ((value: number) => value);
+  const normalizeValue = options?.normalize ?? ((value: number) => value);
   const applyFinalValue = options?.applyFinalValue ?? applyValue;
 
-  const interpolatedValue = normaliseValue(evaluation.value);
+  const interpolatedValue = normalizeValue(evaluation.value);
   applyValue(interpolatedValue);
 
   if (evaluation.completed) {
-    const finalValue = normaliseValue(interpolationState.finalValue);
+    const finalValue = normalizeValue(interpolationState.finalValue);
     applyFinalValue(finalValue);
     return { state: null, active: false };
   }
@@ -79,7 +79,7 @@ const updateImageDisplayedRotation = (
   image: InternalSpriteImageState,
   optionsOverride?: SpriteInterpolationOptions | null
 ): void => {
-  const targetAngle = normaliseAngleDeg(
+  const targetAngle = normalizeAngleDeg(
     image.resolvedBaseRotateDeg + image.rotateDeg
   );
   const currentAngle = Number.isFinite(image.displayedRotateDeg)
@@ -131,7 +131,7 @@ const stepRotationInterpolation = (
       image.displayedRotateDeg = value;
     },
     {
-      normalise: normaliseAngleDeg,
+      normalize: normalizeAngleDeg,
     }
   );
 

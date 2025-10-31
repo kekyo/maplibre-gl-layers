@@ -51,27 +51,27 @@ const computeFeedforwardTarget = (
 };
 
 /**
- * Normalised representation of interpolation options with defaults applied.
+ * Normalized representation of interpolation options with defaults applied.
  *
  * @property durationMs - Clamped non-negative duration in milliseconds.
  * @property mode - Strategy that guides how the destination is computed.
  * @property easing - Optional easing function carried through for later resolution.
  */
-interface NormalisedInterpolationOptions {
+interface NormalizedInterpolationOptions {
   durationMs: number;
   mode: SpriteInterpolationMode;
   easing?: EasingFunction;
 }
 
 /**
- * Normalises raw interpolation options by clamping duration and applying defaults.
+ * Normalizes raw interpolation options by clamping duration and applying defaults.
  *
  * @param options - Caller-provided interpolation options.
  * @returns Options safe for downstream consumption.
  */
-const normaliseOptions = (
+const normalizeOptions = (
   options: SpriteInterpolationOptions
-): NormalisedInterpolationOptions => {
+): NormalizedInterpolationOptions => {
   return {
     durationMs: Math.max(0, options.durationMs),
     mode: options.mode ?? 'feedback',
@@ -117,7 +117,7 @@ export const createInterpolationState = (
   params: CreateInterpolationStateParams
 ): CreateInterpolationStateResult => {
   const { currentLocation, lastCommandLocation, nextCommandLocation } = params;
-  const options = normaliseOptions(params.options);
+  const options = normalizeOptions(params.options);
   const from = cloneSpriteLocation(currentLocation);
   const easing = resolveEasing(options.easing);
 

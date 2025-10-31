@@ -702,7 +702,7 @@ const spriteLayer = createSpriteLayer({
 - `textureFiltering.maxAnisotropy` - Requests anisotropic filtering (>= 1) when the runtime exposes `EXT_texture_filter_anisotropic`, helping surface-aligned sprites remain sharp at shallow viewing angles. The requested value is clamped to the GPU limit and only applied when mipmaps are available.
 
 All scaling values and texture filtering values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
-Invalid inputs are normalised and reported via `console.warn` to help catch configuration mistakes during development.
+Invalid inputs are normalized and reported via `console.warn` to help catch configuration mistakes during development.
 
 ### Scaling Options
 

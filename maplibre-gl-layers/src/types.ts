@@ -404,7 +404,7 @@ export interface SpriteMutateCallbacks<
    * (or `null`) to skip creation.
    *
    * @param sourceItem Source item that produced the sprite ID.
-   * @returns Sprite initialiser to insert, or `undefined`/`null` to skip.
+   * @returns Sprite initializer to insert, or `undefined`/`null` to skip.
    */
   add: (sourceItem: TSourceItem) => SpriteInit<TTag> | null | undefined;
   /**
@@ -590,7 +590,7 @@ export interface SpriteImageRegisterOptions {
   readonly width?: number;
   /** Target height in CSS pixels. When only one dimension is supplied, the aspect ratio is preserved if known. */
   readonly height?: number;
-  /** Resampling quality used during rasterisation. */
+  /** Resampling quality used during rasterization. */
   readonly resizeQuality?: ResizeQuality;
   /** SVG-specific configuration. */
   readonly svg?: SpriteImageSvgOptions;
@@ -844,7 +844,7 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    * @param {readonly TSourceItem[]} sourceItems - Source items that describe desired sprite state.
    * @param {SpriteMutateCallbacks<TTag, TSourceItem>} mutator - Callbacks responsible for creation and modification.
    * @returns {number} Number of sprites that changed. Counts each `add` that returns a non-null
-   * initialiser and each `modify` that either invoked the updater helper or returned `'remove'`.
+   * initializer and each `modify` that either invoked the updater helper or returned `'remove'`.
    */
   readonly mutateSprites: <TSourceItem extends SpriteMutateSourceItem>(
     sourceItems: readonly TSourceItem[],
