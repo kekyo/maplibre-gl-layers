@@ -462,14 +462,40 @@ export interface SpriteLayerClickEvent<T> {
 }
 
 /**
+ * Event dispatched when a sprite is hovered by a pointing device.
+ *
+ * @template T Tag type stored on sprites.
+ * @property {'spritehover'} type - Discriminated event type.
+ * @property {SpriteCurrentState<T>} sprite - Snapshot of the sprite that was hit.
+ * @property {SpriteImageState} image - Sprite image that received the interaction.
+ * @property {SpriteScreenPoint} screenPoint - Screen position of the interaction.
+ * @property {MouseEvent | PointerEvent} originalEvent - Original hover-capable DOM event.
+ */
+export interface SpriteLayerHoverEvent<T> {
+  /** Discriminated event type. */
+  readonly type: 'spritehover';
+  /** Snapshot of the sprite that was hit. */
+  readonly sprite: SpriteCurrentState<T>;
+  /** Sprite image that received the interaction. */
+  readonly image: SpriteImageState;
+  /** Screen position of the interaction. */
+  readonly screenPoint: SpriteScreenPoint;
+  /** Original hover-capable DOM event. */
+  readonly originalEvent: MouseEvent | PointerEvent;
+}
+
+/**
  * Map of events emitted by SpriteLayer.
  *
  * @template T Tag type stored on sprites.
  * @property {SpriteLayerClickEvent<T>} spriteclick - Event fired when a sprite image is clicked.
+ * @property {SpriteLayerHoverEvent<T>} spritehover - Event fired when a sprite image is hovered.
  */
 export interface SpriteLayerEventMap<T> {
   /** Event fired when a sprite image is clicked. */
   readonly spriteclick: SpriteLayerClickEvent<T>;
+  /** Event fired when a sprite image is hovered. */
+  readonly spritehover: SpriteLayerHoverEvent<T>;
 }
 
 /**
