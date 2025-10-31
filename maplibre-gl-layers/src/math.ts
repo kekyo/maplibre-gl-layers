@@ -4,13 +4,13 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './types';
 import type {
   SpriteAnchor,
   SpriteImageOffset,
   SpriteLocation,
   SpriteScalingOptions,
 } from './types';
+import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './const';
 
 /**
  * WGS84-compatible Earth radius in meters.

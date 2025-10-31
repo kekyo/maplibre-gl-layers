@@ -160,10 +160,15 @@ export const clearOffsetDegInterpolation = (
 };
 
 /**
- * Applies an offset update, optionally creating interpolation when requested.
- * Caller must provide a cloned `nextOffset` to avoid mutating external objects.
+ * Clears any running offset distance interpolation in meters.
  */
-export const applyOffsetDegUpdate = (
+export const clearOffsetMetersInterpolation = (
+  image: InternalSpriteImageState
+): void => {
+  image.offsetMetersInterpolationState = null;
+};
+
+const applyOffsetDegUpdate = (
   image: InternalSpriteImageState,
   nextOffset: SpriteImageOffset,
   interpolationOptions?: SpriteInterpolationOptions | null
@@ -171,7 +176,7 @@ export const applyOffsetDegUpdate = (
   const options = interpolationOptions;
 
   if (!options || options.durationMs <= 0) {
-    image.offset = nextOffset;
+    image.offset.offsetDeg = nextOffset.offsetDeg;
     image.offsetDegInterpolationState = null;
     image.lastCommandOffsetDeg = nextOffset.offsetDeg;
     return;
@@ -187,12 +192,58 @@ export const applyOffsetDegUpdate = (
   image.lastCommandOffsetDeg = nextOffset.offsetDeg;
 
   if (requiresInterpolation) {
-    image.offset.offsetMeters = nextOffset.offsetMeters;
     image.offsetDegInterpolationState = state;
   } else {
-    image.offset = nextOffset;
+    image.offset.offsetDeg = nextOffset.offsetDeg;
     image.offsetDegInterpolationState = null;
   }
+};
+
+const applyOffsetMetersUpdate = (
+  image: InternalSpriteImageState,
+  nextOffset: SpriteImageOffset,
+  interpolationOptions?: SpriteInterpolationOptions | null
+): void => {
+  const options = interpolationOptions;
+
+  if (!options || options.durationMs <= 0) {
+    image.offset.offsetMeters = nextOffset.offsetMeters;
+    image.offsetMetersInterpolationState = null;
+    image.lastCommandOffsetMeters = nextOffset.offsetMeters;
+    return;
+  }
+
+  const { state, requiresInterpolation } = createNumericInterpolationState({
+    currentValue: image.offset.offsetMeters,
+    targetValue: nextOffset.offsetMeters,
+    previousCommandValue: image.lastCommandOffsetMeters,
+    options,
+  });
+
+  image.lastCommandOffsetMeters = nextOffset.offsetMeters;
+
+  if (requiresInterpolation) {
+    image.offsetMetersInterpolationState = state;
+  } else {
+    image.offset.offsetMeters = nextOffset.offsetMeters;
+    image.offsetMetersInterpolationState = null;
+  }
+};
+
+const stepOffsetMetersInterpolation = (
+  image: InternalSpriteImageState,
+  timestamp: number
+): boolean => {
+  const { state, active } = stepNumericInterpolationState(
+    image.offsetMetersInterpolationState,
+    timestamp,
+    (value) => {
+      image.offset.offsetMeters = value;
+    }
+  );
+
+  image.offsetMetersInterpolationState = state;
+  return active;
 };
 
 type ImageInterpolationStepper = (
@@ -203,6 +254,7 @@ type ImageInterpolationStepper = (
 const IMAGE_INTERPOLATION_STEPPERS: readonly ImageInterpolationStepper[] = [
   stepRotationInterpolation,
   stepOffsetDegInterpolation,
+  stepOffsetMetersInterpolation,
 ];
 
 /**
@@ -219,4 +271,21 @@ export const stepSpriteImageInterpolations = (
     }
   }
   return active;
+};
+
+interface ApplyOffsetUpdateOptions {
+  readonly deg?: SpriteInterpolationOptions | null;
+  readonly meters?: SpriteInterpolationOptions | null;
+}
+
+/**
+ * Applies offset updates across both angular and radial channels.
+ */
+export const applyOffsetUpdate = (
+  image: InternalSpriteImageState,
+  nextOffset: SpriteImageOffset,
+  options: ApplyOffsetUpdateOptions = {}
+): void => {
+  applyOffsetDegUpdate(image, nextOffset, options.deg);
+  applyOffsetMetersUpdate(image, nextOffset, options.meters);
 };

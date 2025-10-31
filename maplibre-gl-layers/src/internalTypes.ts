@@ -187,8 +187,10 @@ export interface InternalSpriteImageState {
   rotationInterpolationState: NumericInterpolationState | null;
   rotationInterpolationOptions: SpriteInterpolationOptions | null;
   offsetDegInterpolationState: NumericInterpolationState | null;
+  offsetMetersInterpolationState: NumericInterpolationState | null;
   lastCommandRotateDeg: number;
   lastCommandOffsetDeg: number;
+  lastCommandOffsetMeters: number;
   hitTestCorners?: [
     MutableSpriteScreenPoint,
     MutableSpriteScreenPoint,

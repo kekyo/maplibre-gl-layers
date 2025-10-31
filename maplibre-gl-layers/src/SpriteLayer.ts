@@ -46,7 +46,6 @@ import {
   type SpriteTextGlyphHorizontalAlign,
   type SpriteTextGlyphPaddingPixel,
   type SpriteTextGlyphBorderSide,
-  DEFAULT_TEXTURE_FILTERING_OPTIONS,
 } from './types';
 import type {
   ResolvedTextureFilteringOptions,
@@ -93,11 +92,13 @@ import {
   UV_CORNERS,
 } from './math';
 import {
-  applyOffsetDegUpdate,
+  applyOffsetUpdate,
   clearOffsetDegInterpolation,
+  clearOffsetMetersInterpolation,
   stepSpriteImageInterpolations,
   syncImageRotationChannel,
 } from './interpolationChannels';
+import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './const';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -1289,8 +1290,10 @@ export const createImageStateFromInit = (
     rotationInterpolationState: null,
     rotationInterpolationOptions: null,
     offsetDegInterpolationState: null,
+    offsetMetersInterpolationState: null,
     lastCommandRotateDeg: initialRotateDeg,
     lastCommandOffsetDeg: initialOffset.offsetDeg,
+    lastCommandOffsetMeters: initialOffset.offsetMeters,
   };
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
   const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
@@ -3971,17 +3974,27 @@ export const createSpriteLayer = <T = any>(
     }
     const interpolationOptions = imageUpdate.interpolation;
     // Optional interpolation payloads allow independent control over offset and rotation animations.
-    const offsetInterpolationOption = interpolationOptions?.offsetDeg;
+    const offsetDegInterpolationOption = interpolationOptions?.offsetDeg;
+    const offsetMetersInterpolationOption = interpolationOptions?.offsetMeters;
     // Pull out rotateDeg interpolation hints when the payload includes them.
     const rotateInterpolationOption = interpolationOptions?.rotateDeg;
     let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
     if (imageUpdate.offset !== undefined) {
       const clonedOffset = cloneOffset(imageUpdate.offset);
-      applyOffsetDegUpdate(state, clonedOffset, offsetInterpolationOption);
-    } else if (offsetInterpolationOption === null) {
-      // Explicit null clears any running offset interpolation.
-      clearOffsetDegInterpolation(state);
+      applyOffsetUpdate(state, clonedOffset, {
+        deg: offsetDegInterpolationOption,
+        meters: offsetMetersInterpolationOption,
+      });
+    } else {
+      if (offsetDegInterpolationOption === null) {
+        // Explicit null clears any running angular interpolation.
+        clearOffsetDegInterpolation(state);
+      }
+      if (offsetMetersInterpolationOption === null) {
+        // Explicit null clears any running distance interpolation.
+        clearOffsetMetersInterpolation(state);
+      }
     }
     if (rotateInterpolationOption !== undefined) {
       // Caller supplied new rotation interpolation preferences.
