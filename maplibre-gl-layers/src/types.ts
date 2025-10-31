@@ -451,10 +451,10 @@ export interface SpriteScreenPoint {
 export interface SpriteLayerClickEvent<T> {
   /** Discriminated event type. */
   readonly type: 'spriteclick';
-  /** Snapshot of the sprite that was hit. */
-  readonly sprite: SpriteCurrentState<T>;
-  /** Sprite image that received the interaction. */
-  readonly image: SpriteImageState;
+  /** Snapshot of the sprite that was hit, or `undefined` when it no longer exists. */
+  readonly sprite: SpriteCurrentState<T> | undefined;
+  /** Sprite image that received the interaction, or `undefined` when missing. */
+  readonly image: SpriteImageState | undefined;
   /** Screen position of the interaction. */
   readonly screenPoint: SpriteScreenPoint;
   /** Original DOM event. */
@@ -474,10 +474,10 @@ export interface SpriteLayerClickEvent<T> {
 export interface SpriteLayerHoverEvent<T> {
   /** Discriminated event type. */
   readonly type: 'spritehover';
-  /** Snapshot of the sprite that was hit. */
-  readonly sprite: SpriteCurrentState<T>;
-  /** Sprite image that received the interaction. */
-  readonly image: SpriteImageState;
+  /** Snapshot of the sprite that was hit, or `undefined` when it no longer exists. */
+  readonly sprite: SpriteCurrentState<T> | undefined;
+  /** Sprite image that received the interaction, or `undefined` when missing. */
+  readonly image: SpriteImageState | undefined;
   /** Screen position of the interaction. */
   readonly screenPoint: SpriteScreenPoint;
   /** Original hover-capable DOM event. */

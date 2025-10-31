@@ -1296,6 +1296,26 @@ const main = async () => {
       | SpriteLayerHoverEvent<DemoSpriteTag>
       | SpriteLayerClickEvent<DemoSpriteTag>
   ) => {
+    const spriteState = event.sprite;
+    const imageState = event.image;
+
+    if (!spriteState || !imageState) {
+      if (selectedPlaceholderEl) {
+        selectedPlaceholderEl.hidden = false;
+      }
+      if (selectedDetailsEl) {
+        selectedDetailsEl.hidden = true;
+      }
+      (
+        Object.values(selectedFieldEls) as Array<HTMLSpanElement | undefined>
+      ).forEach((field) => {
+        if (field) {
+          field.textContent = '--';
+        }
+      });
+      return;
+    }
+
     if (selectedPlaceholderEl) {
       // Hide the placeholder summary whenever a real sprite has been chosen.
       selectedPlaceholderEl.hidden = true;
@@ -1306,26 +1326,26 @@ const main = async () => {
     }
     if (selectedFieldEls.id) {
       // Update the sprite ID readout if the corresponding DOM node exists.
-      selectedFieldEls.id.textContent = event.sprite.spriteId;
+      selectedFieldEls.id.textContent = spriteState.spriteId;
     }
     if (selectedFieldEls.mode) {
       // Display the rendering mode (surface or billboard) for the selected image entry.
-      selectedFieldEls.mode.textContent = event.image.mode;
+      selectedFieldEls.mode.textContent = imageState.mode;
     }
     if (selectedFieldEls.image) {
       // Provide the exact image identifier that rendered the clicked sprite.
-      selectedFieldEls.image.textContent = event.image.imageId;
+      selectedFieldEls.image.textContent = imageState.imageId;
     }
     if (selectedFieldEls.visible) {
       // Reflect whether the sprite image was visible (non-zero opacity) at the time of the click.
       selectedFieldEls.visible.textContent =
-        event.image.opacity !== 0.0 ? 'Visible' : 'Hidden';
+        imageState.opacity !== 0.0 ? 'Visible' : 'Hidden';
     }
     if (selectedFieldEls.lnglat) {
       // Show the geographic coordinates for the sprite's current location.
       selectedFieldEls.lnglat.textContent = formatLngLat(
-        event.sprite.currentLocation.lng,
-        event.sprite.currentLocation.lat
+        spriteState.currentLocation.lng,
+        spriteState.currentLocation.lat
       );
     }
     if (selectedFieldEls.screen) {
@@ -1334,7 +1354,7 @@ const main = async () => {
     }
     if (selectedFieldEls.tag) {
       // Render the metadata summary extracted from the sprite tag for debugging.
-      selectedFieldEls.tag.textContent = describeTag(event.sprite.tag ?? null);
+      selectedFieldEls.tag.textContent = describeTag(spriteState.tag ?? null);
     }
   };
 
@@ -1376,7 +1396,13 @@ const main = async () => {
   const handleSpriteClick = (
     event: SpriteLayerClickEvent<DemoSpriteTag>
   ): void => {
-    const currentTag = event.sprite.tag;
+    const spriteState = event.sprite;
+    if (!spriteState) {
+      renderSpriteDetails(event);
+      return;
+    }
+
+    const currentTag = spriteState.tag;
     if (!currentTag) {
       return;
     }
@@ -1398,8 +1424,8 @@ const main = async () => {
       dy: -currentTag.dy,
       lastStepLng: -currentTag.lastStepLng,
       lastStepLat: -currentTag.lastStepLat,
-      worldLng: event.sprite.currentLocation.lng,
-      worldLat: event.sprite.currentLocation.lat,
+      worldLng: spriteState.currentLocation.lng,
+      worldLat: spriteState.currentLocation.lat,
     };
 
     if (currentTag.path) {
@@ -1412,9 +1438,9 @@ const main = async () => {
         pathVectorLng * pathVectorLng + pathVectorLat * pathVectorLat;
       if (pathLengthSq > 0) {
         const originToCurrentLng =
-          event.sprite.currentLocation.lng - path.startLng;
+          spriteState.currentLocation.lng - path.startLng;
         const originToCurrentLat =
-          event.sprite.currentLocation.lat - path.startLat;
+          spriteState.currentLocation.lat - path.startLat;
         progress =
           (originToCurrentLng * pathVectorLng +
             originToCurrentLat * pathVectorLat) /
@@ -1446,7 +1472,7 @@ const main = async () => {
       invertedTag.lastStepLat = invertedTag.dy * MOVEMENT_STEP_FACTOR;
     }
 
-    spriteLayer.updateSprite(event.sprite.spriteId, {
+    spriteLayer.updateSprite(spriteState.spriteId, {
       tag: invertedTag,
     });
   };

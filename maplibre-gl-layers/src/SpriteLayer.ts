@@ -2031,18 +2031,26 @@ export const createSpriteLayer = <T = any>(
   /**
    * Resolves sprite and image state for a hit-test entry.
    * @param {HitTestEntry} hitEntry - Hit-test entry returned from the lookup.
-   * @returns {{ sprite: SpriteCurrentState<T>; image: SpriteImageState } | null} Sprite/image state pair or `null`.
+   * @returns {{ sprite: SpriteCurrentState<T> | undefined; image: SpriteImageState | undefined }} Sprite/image state pair.
    */
   const resolveSpriteEventPayload = (
-    hitEntry: HitTestEntry
-  ): { sprite: SpriteCurrentState<T>; image: SpriteImageState } | null => {
-    const spriteState = getSpriteState(hitEntry.sprite.spriteId);
-    // Skip dispatch if the sprite was removed between hit-test collection and event handling.
-    if (!spriteState) {
-      return null;
+    hitEntry: HitTestEntry | null
+  ): {
+    sprite: SpriteCurrentState<T> | undefined;
+    image: SpriteImageState | undefined;
+  } => {
+    if (!hitEntry) {
+      return {
+        sprite: undefined,
+        image: undefined,
+      };
     }
+    const spriteState = getSpriteState(hitEntry.sprite.spriteId);
+    const imageState =
+      spriteState?.images
+        .get(hitEntry.image.subLayer)
+        ?.get(hitEntry.image.order) ?? undefined;
 
-    const imageState = hitEntry.image as unknown as SpriteImageState;
     return {
       sprite: spriteState,
       image: imageState,
@@ -2067,9 +2075,6 @@ export const createSpriteLayer = <T = any>(
     }
 
     const payload = resolveSpriteEventPayload(hitEntry);
-    if (!payload) {
-      return;
-    }
 
     const clickEvent: SpriteLayerClickEvent<T> = {
       type: 'spriteclick',
@@ -2091,7 +2096,7 @@ export const createSpriteLayer = <T = any>(
    * @param {MouseEvent | PointerEvent} originalEvent - Native input event.
    */
   const dispatchSpriteHover = (
-    hitEntry: HitTestEntry,
+    hitEntry: HitTestEntry | null,
     screenPoint: SpriteScreenPoint,
     originalEvent: MouseEvent | PointerEvent
   ): void => {
@@ -2102,9 +2107,6 @@ export const createSpriteLayer = <T = any>(
     }
 
     const payload = resolveSpriteEventPayload(hitEntry);
-    if (!payload) {
-      return;
-    }
 
     const hoverEvent: SpriteLayerHoverEvent<T> = {
       type: 'spritehover',
@@ -2126,12 +2128,10 @@ export const createSpriteLayer = <T = any>(
    */
   const resolveHitTestResult = (
     nativeEvent: MouseEvent | PointerEvent | TouchEvent
-  ): { hitEntry: HitTestEntry; screenPoint: SpriteScreenPoint } | null => {
-    // No hit-test entries means nothing is interactable during this frame.
-    if (hitTestEntries.length === 0) {
-      return null;
-    }
-
+  ): {
+    hitEntry: HitTestEntry | null;
+    screenPoint: SpriteScreenPoint;
+  } | null => {
     const screenPoint = resolveScreenPointFromEvent(nativeEvent);
     // Input may lack coordinates (e.g., touchend without touches); abort hit-testing in that case.
     if (!screenPoint) {
@@ -2140,11 +2140,7 @@ export const createSpriteLayer = <T = any>(
 
     const hitEntry = findTopmostHitEntry(screenPoint);
     // No sprites intersected the event point; nothing to dispatch.
-    if (!hitEntry) {
-      return null;
-    }
-
-    return { hitEntry, screenPoint };
+    return { hitEntry: hitEntry ?? null, screenPoint };
   };
 
   /**
@@ -2160,7 +2156,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     const hitResult = resolveHitTestResult(nativeEvent);
-    if (!hitResult) {
+    if (!hitResult || !hitResult.hitEntry) {
       return;
     }
 
