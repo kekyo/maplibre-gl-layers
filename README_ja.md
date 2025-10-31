@@ -4,7 +4,7 @@
 
 ![maplibre-gl-layers](images/maplibre-gl-layers-120.png)
 
-[![Project Status: Concept - Minimal or no implementation has been done yet, or the repository is only intended to be a limited example, demo, or proof-of-concept.](https://www.repostatus.org/badges/latest/concept.svg)](https://www.repostatus.org/#concept)
+[![Project Status: WIP - Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm version](https://img.shields.io/npm/v/maplibre-gl-layers.svg)](https://www.npmjs.com/package/maplibre-gl-layers)
 
@@ -507,20 +507,49 @@ spriteLayer.addSprite('vehicle-group', {
 
 ## イベントハンドラ
 
-SpriteLayerは`spriteclick`イベントをサポートしており、スプライトをクリック・タップした際に呼び出されます。イベントハンドラ内から`updateSprite`を呼び出せば、ユーザー操作に応じた移動補間も簡単に実装できます。
+SpriteLayerは次のインタラクションイベントを提供しています:
+
+- `spriteclick`: 画像をクリック／タップしたときに発火します。
+- `spritehover`: ポインタが画像上を移動するたびに発火します。
+
+どちらのイベントも、対象の画像を検出できない場合は、`sprite`/`image`が`undefined`の状態で通知されます。
+
+イベントハンドラ内から`updateSprite`などを呼び出せば、ユーザー操作に応じた挙動を簡単に実装できます。
 
 ```typescript
-// スプライトがクリック・タップされたときに呼び出される
+// MapLibreの地図がクリック・タップされたときに呼び出される
 spriteLayer.on('spriteclick', ({ sprite, screenPoint }) => {
-  const { spriteId } = sprite;
-  // クリック位置を基準にした次の座標を計算し、500msで移動させる
-  const nextLocation = {
-    lng: sprite.currentLocation.lng + 0.002,
-    lat: sprite.currentLocation.lat,
-  };
-  spriteLayer.updateSprite(spriteId, {
-    location: nextLocation,
-    interpolation: { durationMs: 500, mode: 'feedback' },
+  // クリックされた位置にスプライト画像がある
+  if (sprite) {
+    const { spriteId } = sprite;
+    // クリック位置を基準にした次の座標を計算し、500msで移動させる
+    const nextLocation = {
+      lng: sprite.currentLocation.lng + 0.002,
+      lat: sprite.currentLocation.lat,
+    };
+    spriteLayer.updateSprite(spriteId, {
+      location: nextLocation,
+      interpolation: { durationMs: 500, mode: 'feedback' },
+    });
+  }
+});
+```
+
+ホバーイベントを使えば、ツールチップやハイライトも実現できます。
+
+```typescript
+// MapLibreの地図上をホバーしたときに呼び出される
+spriteLayer.on('spritehover', ({ sprite, image }) => {
+  // スプライト画像が検出されない
+  if (!sprite || !image) {
+    hideTooltip();
+    return;
+  }
+  // スプライトと画像の情報を表示
+  showTooltip({
+    id: sprite.spriteId,
+    imageId: image.imageId,
+    mode: image.mode,
   });
 });
 ```
