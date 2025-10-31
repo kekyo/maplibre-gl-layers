@@ -39,8 +39,7 @@ import {
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
   type SpriteImageOffset,
-  type SpriteLocationInterpolationOptions,
-  type SpriteNumericInterpolationOptions,
+  type SpriteInterpolationOptions,
   type SpriteImageOriginLocation,
   type SpriteScreenPoint,
   type SpriteLayerClickEvent,
@@ -1332,7 +1331,7 @@ interface InternalSpriteImageState {
   /**
    * Default interpolation options for display rotation.
    */
-  rotationInterpolationOptions: SpriteNumericInterpolationOptions | null;
+  rotationInterpolationOptions: SpriteInterpolationOptions | null;
   /**
    * Interpolation state used for offset.offsetDeg.
    */
@@ -1405,7 +1404,7 @@ interface InternalSpriteCurrentState<TTag> {
   /**
    * Most recently requested interpolation options, or null if none pending.
    */
-  pendingInterpolationOptions: SpriteLocationInterpolationOptions | null;
+  pendingInterpolationOptions: SpriteInterpolationOptions | null;
   /**
    * Most recently commanded location, regardless of interpolation.
    */
@@ -1473,11 +1472,11 @@ export const cloneOffset = (offset?: SpriteImageOffset): SpriteImageOffset => {
 /**
  * Updates the displayed rotation for an image, optionally using override interpolation options.
  * @param {InternalSpriteImageState} image - Image state to mutate.
- * @param {SpriteNumericInterpolationOptions | null} [optionsOverride] - Temporary interpolation override.
+ * @param {SpriteInterpolationOptions | null} [optionsOverride] - Temporary interpolation override.
  */
 const updateImageDisplayedRotation = (
   image: InternalSpriteImageState,
-  optionsOverride?: SpriteNumericInterpolationOptions | null
+  optionsOverride?: SpriteInterpolationOptions | null
 ): void => {
   const targetAngle = normaliseAngleDeg(
     image.resolvedBaseRotateDeg + image.rotateDeg
@@ -1509,28 +1508,13 @@ const updateImageDisplayedRotation = (
 };
 
 /**
- * Deep-clones movement interpolation options to prevent shared references between sprites.
- * @param {SpriteLocationInterpolationOptions} options - Options provided by the user.
- * @returns {SpriteLocationInterpolationOptions} Cloned options object.
+ * Deep-clones interpolation options to prevent shared references between sprites.
+ * @param {SpriteInterpolationOptions} options - Options provided by the user.
+ * @returns {SpriteInterpolationOptions} Cloned options object.
  */
 export const cloneInterpolationOptions = (
-  options: SpriteLocationInterpolationOptions
-): SpriteLocationInterpolationOptions => {
-  return {
-    mode: options.mode,
-    durationMs: options.durationMs,
-    easing: options.easing,
-  };
-};
-
-/**
- * Deep-clones numeric interpolation options to avoid shared mutable state.
- * @param {SpriteNumericInterpolationOptions} options - Options provided by the user.
- * @returns {SpriteNumericInterpolationOptions} Cloned options object.
- */
-const cloneNumericInterpolationOptions = (
-  options: SpriteNumericInterpolationOptions
-): SpriteNumericInterpolationOptions => {
+  options: SpriteInterpolationOptions
+): SpriteInterpolationOptions => {
   return {
     mode: options.mode,
     durationMs: options.durationMs,
@@ -1581,7 +1565,7 @@ export const createImageStateFromInit = (
   const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
   if (rotateInitOption) {
     state.rotationInterpolationOptions =
-      cloneNumericInterpolationOptions(rotateInitOption);
+      cloneInterpolationOptions(rotateInitOption);
   }
 
   updateImageDisplayedRotation(state);
@@ -4299,7 +4283,7 @@ export const createSpriteLayer = <T = any>(
     const offsetInterpolationOption = interpolationOptions?.offsetDeg;
     // Pull out rotateDeg interpolation hints when the payload includes them.
     const rotateInterpolationOption = interpolationOptions?.rotateDeg;
-    let rotationOverride: SpriteNumericInterpolationOptions | null | undefined;
+    let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
     if (imageUpdate.offset !== undefined) {
       const newOffset = cloneOffset(imageUpdate.offset);
@@ -4337,7 +4321,7 @@ export const createSpriteLayer = <T = any>(
         state.rotationInterpolationOptions = null;
         rotationOverride = null;
       } else {
-        const cloned = cloneNumericInterpolationOptions(
+        const cloned = cloneInterpolationOptions(
           rotateInterpolationOption
         );
         state.rotationInterpolationOptions = cloned;
@@ -4529,7 +4513,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     let interpolationOptionsForLocation:
-      | SpriteLocationInterpolationOptions
+      | SpriteInterpolationOptions
       | null
       | undefined = undefined;
     let interpolationExplicitlySpecified = false;

@@ -85,8 +85,8 @@ export type SpriteInterpolationMode = 'feedback' | 'feedforward';
 /** Easing function signature used to map interpolation progress. */
 export type EasingFunction = (progress: number) => number;
 
-/** Options for interpolating numeric values such as angles. */
-export interface SpriteNumericInterpolationOptions {
+/** Options for interpolating values. */
+export interface SpriteInterpolationOptions {
   /** Interpolation mode; defaults to feedback. */
   mode?: SpriteInterpolationMode;
   /** Duration in milliseconds. */
@@ -98,9 +98,9 @@ export interface SpriteNumericInterpolationOptions {
 /** Interpolation configuration for rotateDeg and offsetDeg. */
 export interface SpriteImageInterpolationOptions {
   /** Interpolation settings for rotateDeg; null disables interpolation. */
-  rotateDeg?: SpriteNumericInterpolationOptions | null;
+  rotateDeg?: SpriteInterpolationOptions | null;
   /** Interpolation settings for offset.offsetDeg; null disables interpolation. */
-  offsetDeg?: SpriteNumericInterpolationOptions | null;
+  offsetDeg?: SpriteInterpolationOptions | null;
 }
 
 /**
@@ -298,16 +298,6 @@ export interface SpriteCurrentState<TTag> {
   readonly tag: TTag | null;
 }
 
-/** Options controlling position interpolation. */
-export interface SpriteLocationInterpolationOptions {
-  /** Interpolation mode; defaults to feedback. */
-  mode?: SpriteInterpolationMode;
-  /** Duration in milliseconds. */
-  durationMs: number;
-  /** Easing function mapping interpolation progress. Defaults to linear. */
-  easing?: EasingFunction;
-}
-
 /**
  * Base structure for sprite updates.
  *
@@ -323,7 +313,7 @@ export interface SpriteUpdateEntryBase<TTag> {
   /** Optional target location for the sprite. */
   location?: SpriteLocation;
   /** Optional interpolation settings; `null` disables interpolation. */
-  interpolation?: SpriteLocationInterpolationOptions | null;
+  interpolation?: SpriteInterpolationOptions | null;
   /** Optional tag value to replace the current one; `null` clears the tag. */
   tag?: TTag | null;
 }
