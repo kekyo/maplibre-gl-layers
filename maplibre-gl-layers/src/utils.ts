@@ -4,20 +4,30 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type {
-  SpriteImageRegisterOptions,
-  SpriteImageSvgOptions,
-} from './types';
+import type { SpriteImageRegisterOptions } from './types';
 
 interface ParsedSvgSize {
   readonly width?: number;
   readonly height?: number;
-  readonly aspectRatio?: number;
-  readonly hasExplicitSize: boolean;
+  readonly viewBoxWidth?: number;
+  readonly viewBoxHeight?: number;
+  readonly hasViewBox: boolean;
 }
 
-const DEFAULT_SVG_WIDTH = 300;
-const DEFAULT_SVG_HEIGHT = 150;
+export type SvgSizeResolutionErrorCode =
+  | 'size-missing'
+  | 'viewbox-disabled'
+  | 'invalid-dimensions';
+
+export class SvgSizeResolutionError extends Error implements Error {
+  readonly code: SvgSizeResolutionErrorCode;
+
+  constructor(message: string, code: SvgSizeResolutionErrorCode) {
+    super(message);
+    this.name = 'SvgSizeResolutionError';
+    this.code = code;
+  }
+}
 
 const parseNumericLength = (
   value: string | null | undefined
@@ -64,7 +74,7 @@ const parseSvgSize = (svgText: string): ParsedSvgSize => {
     const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
     const svg = doc.documentElement;
     if (!svg || svg.tagName.toLowerCase() !== 'svg') {
-      return { hasExplicitSize: false };
+      return { hasViewBox: false };
     }
 
     const attrWidth = parseNumericLength(svg.getAttribute('width'));
@@ -75,7 +85,9 @@ const parseSvgSize = (svgText: string): ParsedSvgSize => {
     const width = attrWidth ?? styleWidth;
     const height = attrHeight ?? styleHeight;
 
-    let aspectRatio: number | undefined;
+    let viewBoxWidth: number | undefined;
+    let viewBoxHeight: number | undefined;
+    let hasViewBox = false;
     const viewBox = svg.getAttribute('viewBox');
     if (viewBox) {
       const parts = viewBox
@@ -83,71 +95,164 @@ const parseSvgSize = (svgText: string): ParsedSvgSize => {
         .map((part) => Number.parseFloat(part))
         .filter((part) => Number.isFinite(part));
       if (parts.length === 4) {
-        const viewBoxWidth = parts[2]!;
-        const viewBoxHeight = parts[3]!;
+        viewBoxWidth = parts[2]!;
+        viewBoxHeight = parts[3]!;
         if (viewBoxWidth > 0 && viewBoxHeight > 0) {
-          aspectRatio = viewBoxWidth / viewBoxHeight;
+          hasViewBox = true;
+        } else {
+          viewBoxWidth = undefined;
+          viewBoxHeight = undefined;
         }
       }
     }
 
-    if (width && height && height > 0) {
-      aspectRatio = width / height;
-    }
-
     return {
-      width,
-      height,
-      aspectRatio,
-      hasExplicitSize: width !== undefined || height !== undefined,
+      width: width !== undefined && width > 0 ? width : undefined,
+      height: height !== undefined && height > 0 ? height : undefined,
+      viewBoxWidth,
+      viewBoxHeight,
+      hasViewBox,
     };
   } catch {
-    return { hasExplicitSize: false };
+    return { hasViewBox: false };
   }
 };
 
-const resolveSvgResizeDimensions = (
-  parsed: ParsedSvgSize,
-  options: SpriteImageSvgOptions | undefined
+const determineSvgRasterDimensions = (
+  parsed: ParsedSvgSize | null,
+  options: SpriteImageRegisterOptions | undefined
 ): { width: number; height: number } => {
-  const optionWidth = options?.width;
-  const optionHeight = options?.height;
+  const overrideWidth = options?.width;
+  const overrideHeight = options?.height;
 
-  let targetWidth: number | undefined;
-  let targetHeight: number | undefined;
+  if (
+    overrideWidth !== undefined &&
+    overrideHeight !== undefined &&
+    overrideWidth > 0 &&
+    overrideHeight > 0
+  ) {
+    return {
+      width: Math.max(1, Math.round(overrideWidth)),
+      height: Math.max(1, Math.round(overrideHeight)),
+    };
+  }
 
-  if (parsed.hasExplicitSize) {
-    targetWidth = optionWidth ?? parsed.width;
-    targetHeight = optionHeight ?? parsed.height;
-    if (
-      targetWidth !== undefined &&
-      targetHeight === undefined &&
-      parsed.aspectRatio
-    ) {
-      targetHeight = targetWidth / parsed.aspectRatio;
-    } else if (
-      targetHeight !== undefined &&
-      targetWidth === undefined &&
-      parsed.aspectRatio
-    ) {
-      targetWidth = targetHeight * parsed.aspectRatio;
-    }
-  } else {
-    targetWidth = optionWidth ?? DEFAULT_SVG_WIDTH;
-    targetHeight = optionHeight ?? DEFAULT_SVG_HEIGHT;
-    if (parsed.aspectRatio) {
-      if (optionWidth !== undefined && optionHeight === undefined) {
-        targetHeight = optionWidth / parsed.aspectRatio;
-      } else if (optionHeight !== undefined && optionWidth === undefined) {
-        targetWidth = optionHeight * parsed.aspectRatio;
+  const intrinsicWidth = parsed?.width;
+  const intrinsicHeight = parsed?.height;
+
+  const hasValidViewBox = Boolean(
+    parsed?.hasViewBox &&
+      parsed.viewBoxWidth !== undefined &&
+      parsed.viewBoxHeight !== undefined &&
+      parsed.viewBoxWidth > 0 &&
+      parsed.viewBoxHeight > 0
+  );
+  const viewBoxAspect = hasValidViewBox
+    ? (parsed!.viewBoxWidth as number) / (parsed!.viewBoxHeight as number)
+    : undefined;
+
+  let baseWidth: number | undefined;
+  let baseHeight: number | undefined;
+  let aspect =
+    intrinsicWidth !== undefined &&
+    intrinsicHeight !== undefined &&
+    intrinsicHeight > 0
+      ? intrinsicWidth / intrinsicHeight
+      : viewBoxAspect;
+
+  if (
+    intrinsicWidth !== undefined &&
+    intrinsicWidth > 0 &&
+    intrinsicHeight !== undefined &&
+    intrinsicHeight > 0
+  ) {
+    baseWidth = intrinsicWidth;
+    baseHeight = intrinsicHeight;
+  } else if (
+    intrinsicWidth !== undefined &&
+    intrinsicWidth > 0 &&
+    aspect !== undefined
+  ) {
+    baseWidth = intrinsicWidth;
+    baseHeight = intrinsicWidth / aspect;
+  } else if (
+    intrinsicHeight !== undefined &&
+    intrinsicHeight > 0 &&
+    aspect !== undefined
+  ) {
+    baseHeight = intrinsicHeight;
+    baseWidth = intrinsicHeight * aspect;
+  } else if (hasValidViewBox && options?.svg?.useViewBoxDimensions) {
+    baseWidth = parsed!.viewBoxWidth as number;
+    baseHeight = parsed!.viewBoxHeight as number;
+    aspect = baseWidth / baseHeight;
+  }
+
+  if (
+    (baseWidth === undefined || baseHeight === undefined) &&
+    hasValidViewBox &&
+    !options?.svg?.useViewBoxDimensions
+  ) {
+    throw new SvgSizeResolutionError(
+      'SVG width/height attributes are missing and useViewBoxDimensions option is disabled.',
+      'viewbox-disabled'
+    );
+  }
+
+  if (baseWidth === undefined || baseHeight === undefined) {
+    throw new SvgSizeResolutionError(
+      'SVG image lacks sufficient sizing information.',
+      'size-missing'
+    );
+  }
+
+  aspect = aspect ?? baseWidth / baseHeight;
+
+  let finalWidth = baseWidth;
+  let finalHeight = baseHeight;
+
+  if (overrideWidth !== undefined && overrideWidth > 0) {
+    finalWidth = overrideWidth;
+    if (overrideHeight === undefined) {
+      if (aspect === undefined) {
+        throw new SvgSizeResolutionError(
+          'Unable to infer SVG height from width; aspect ratio is undefined.',
+          'invalid-dimensions'
+        );
       }
+      finalHeight = finalWidth / aspect;
     }
   }
 
-  const width = Math.max(1, Math.round(targetWidth ?? DEFAULT_SVG_WIDTH));
-  const height = Math.max(1, Math.round(targetHeight ?? DEFAULT_SVG_HEIGHT));
+  if (overrideHeight !== undefined && overrideHeight > 0) {
+    finalHeight = overrideHeight;
+    if (overrideWidth === undefined) {
+      if (aspect === undefined) {
+        throw new SvgSizeResolutionError(
+          'Unable to infer SVG width from height; aspect ratio is undefined.',
+          'invalid-dimensions'
+        );
+      }
+      finalWidth = finalHeight * aspect;
+    }
+  }
 
-  return { width, height };
+  if (
+    !Number.isFinite(finalWidth) ||
+    !Number.isFinite(finalHeight) ||
+    finalWidth <= 0 ||
+    finalHeight <= 0
+  ) {
+    throw new SvgSizeResolutionError(
+      'Resolved SVG dimensions are invalid.',
+      'invalid-dimensions'
+    );
+  }
+
+  return {
+    width: Math.max(1, Math.round(finalWidth)),
+    height: Math.max(1, Math.round(finalHeight)),
+  };
 };
 
 const isSvgMimeType = (mimeType: string | null): boolean => {
@@ -157,11 +262,136 @@ const isSvgMimeType = (mimeType: string | null): boolean => {
   return mimeType.toLowerCase().includes('image/svg');
 };
 
+const rasteriseSvgWithCanvas = async (
+  blob: Blob,
+  width: number,
+  height: number,
+  options: SpriteImageRegisterOptions | undefined
+): Promise<ImageBitmap> => {
+  if (typeof document === 'undefined') {
+    throw new Error(
+      'SVG rasterisation fallback requires a browser environment'
+    );
+  }
+
+  const blobUrl = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () =>
+        reject(new Error('Failed to load SVG for rasterisation'));
+      element.src = blobUrl;
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Failed to acquire 2D context for SVG rasterisation');
+    }
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.imageSmoothingEnabled = true;
+    if (options?.resizeQuality === 'pixelated') {
+      ctx.imageSmoothingEnabled = false;
+    } else if (options?.resizeQuality) {
+      ctx.imageSmoothingQuality = options.resizeQuality;
+    }
+    ctx.drawImage(image, 0, 0, width, height);
+
+    try {
+      return await createImageBitmap(canvas);
+    } catch {
+      const canvasBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((result) => {
+          if (result) {
+            resolve(result);
+          } else {
+            reject(
+              new Error('Failed to convert canvas to blob during rasterisation')
+            );
+          }
+        });
+      });
+      return await createImageBitmap(canvasBlob);
+    }
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+};
+
+const resolveSvgBitmapWithFallback = async (
+  blob: Blob,
+  width: number,
+  height: number,
+  options: SpriteImageRegisterOptions | undefined
+): Promise<ImageBitmap> => {
+  const bitmapOptions: ImageBitmapOptions = {
+    resizeWidth: width,
+    resizeHeight: height,
+  };
+  if (options?.resizeQuality) {
+    bitmapOptions.resizeQuality = options.resizeQuality;
+  }
+
+  try {
+    return await createImageBitmap(blob, bitmapOptions);
+  } catch (error) {
+    console.warn('Falling back to canvas-based SVG rasterisation', error);
+    return await rasteriseSvgWithCanvas(blob, width, height, options);
+  }
+};
+
+const internalReadImageBitmap = async (
+  blob: Blob,
+  shouldTreatAsSvg: boolean,
+  options?: SpriteImageRegisterOptions
+): Promise<ImageBitmap> => {
+  const svgOptions = options?.svg;
+
+  if (shouldTreatAsSvg) {
+    let parsed: ParsedSvgSize | null = null;
+    if (svgOptions?.inspectSize !== false) {
+      const text = await blob.text();
+      parsed = parseSvgSize(text);
+    }
+
+    const { width, height } = determineSvgRasterDimensions(parsed, options);
+    return await resolveSvgBitmapWithFallback(blob, width, height, options);
+  }
+
+  return await createImageBitmap(blob, {
+    resizeWidth: options?.width,
+    resizeHeight: options?.height,
+    resizeQuality: options?.resizeQuality,
+  });
+};
+
+/**
+ * Helper that read an ImageBitmap from a blob.
+ * @param blob Target blob.
+ * @param options Optional reading options.
+ * @returns Promise resolving to the ImageBitmap.
+ * @remarks This function helps reading SVG with better manner.
+ */
+export const readImageBitmap = (
+  blob: Blob,
+  options?: SpriteImageRegisterOptions
+): Promise<ImageBitmap> => {
+  const svgOptions = options?.svg;
+  const shouldTreatAsSvg = svgOptions?.assumeSvg === true;
+
+  return internalReadImageBitmap(blob, shouldTreatAsSvg, options);
+};
+
 /**
  * Helper that loads an ImageBitmap from a URL.
  * @param url Target image URL.
- * @param options Optional SVG-aware loading options.
+ * @param options Optional loading options.
  * @returns Promise resolving to the ImageBitmap.
+ * @remarks This function helps loading SVG with better manner.
  */
 export const loadImageBitmap = async (
   url: string,
@@ -174,34 +404,8 @@ export const loadImageBitmap = async (
 
   const mimeType = response.headers.get('content-type');
   const blob = await response.blob();
-
-  const svgOptions = options?.svg;
   const shouldTreatAsSvg =
-    svgOptions?.assumeSvg === true || isSvgMimeType(mimeType);
+    options?.svg?.assumeSvg === true || isSvgMimeType(mimeType);
 
-  if (shouldTreatAsSvg) {
-    let parsed: ParsedSvgSize = { hasExplicitSize: false };
-    if (svgOptions?.inspectSize !== false) {
-      const text = await blob.text();
-      parsed = parseSvgSize(text);
-    }
-
-    if (
-      svgOptions?.width !== undefined ||
-      svgOptions?.height !== undefined ||
-      svgOptions?.inspectSize !== false
-    ) {
-      const { width, height } = resolveSvgResizeDimensions(parsed, svgOptions);
-      const bitmapOptions: ImageBitmapOptions = {
-        resizeWidth: width,
-        resizeHeight: height,
-      };
-      if (svgOptions?.resizeQuality) {
-        bitmapOptions.resizeQuality = svgOptions.resizeQuality;
-      }
-      return await createImageBitmap(blob, bitmapOptions);
-    }
-  }
-
-  return await createImageBitmap(blob);
+  return await internalReadImageBitmap(blob, shouldTreatAsSvg, options);
 };

@@ -575,18 +575,23 @@ export interface SpriteImageSvgOptions {
   readonly assumeSvg?: boolean;
   /** Enables parsing of the SVG markup to detect intrinsic sizing. Defaults to true for SVG images. */
   readonly inspectSize?: boolean;
-  /** Target width in CSS pixels. When only one dimension is supplied, the aspect ratio is preserved if known. */
-  readonly width?: number;
-  /** Target height in CSS pixels. When only one dimension is supplied, the aspect ratio is preserved if known. */
-  readonly height?: number;
-  /** Resampling quality used during rasterisation. */
-  readonly resizeQuality?: ResizeQuality;
+  /**
+   * Uses the SVG viewBox dimensions as the raster size when width/height attributes are missing.
+   * When disabled (default), such SVGs fail to load instead of inferring a size.
+   */
+  readonly useViewBoxDimensions?: boolean;
 }
 
 /**
  * Options accepted by {@link SpriteLayerInterface.registerImage}.
  */
 export interface SpriteImageRegisterOptions {
+  /** Target width in CSS pixels. When only one dimension is supplied, the aspect ratio is preserved if known. */
+  readonly width?: number;
+  /** Target height in CSS pixels. When only one dimension is supplied, the aspect ratio is preserved if known. */
+  readonly height?: number;
+  /** Resampling quality used during rasterisation. */
+  readonly resizeQuality?: ResizeQuality;
   /** SVG-specific configuration. */
   readonly svg?: SpriteImageSvgOptions;
 }
