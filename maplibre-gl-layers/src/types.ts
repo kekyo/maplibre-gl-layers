@@ -567,6 +567,37 @@ export interface SpriteLayerOptions {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * Options used when registering SVG images.
+ */
+export interface SpriteImageSvgOptions {
+  /** Treat the resource as SVG even when the MIME type is missing or incorrect. */
+  readonly assumeSvg?: boolean;
+  /** Enables parsing of the SVG markup to detect intrinsic sizing. Defaults to true for SVG images. */
+  readonly inspectSize?: boolean;
+  /**
+   * Uses the SVG viewBox dimensions as the raster size when width/height attributes are missing.
+   * When disabled (default), such SVGs fail to load instead of inferring a size.
+   */
+  readonly useViewBoxDimensions?: boolean;
+}
+
+/**
+ * Options accepted by {@link SpriteLayerInterface.registerImage}.
+ */
+export interface SpriteImageRegisterOptions {
+  /** Target width in CSS pixels. When only one dimension is supplied, the aspect ratio is preserved if known. */
+  readonly width?: number;
+  /** Target height in CSS pixels. When only one dimension is supplied, the aspect ratio is preserved if known. */
+  readonly height?: number;
+  /** Resampling quality used during rasterisation. */
+  readonly resizeQuality?: ResizeQuality;
+  /** SVG-specific configuration. */
+  readonly svg?: SpriteImageSvgOptions;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
 /** Horizontal alignment options for text glyphs. */
 export type SpriteTextGlyphHorizontalAlign = 'left' | 'center' | 'right';
 
@@ -651,11 +682,13 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    *
    * @param {string} imageId - Unique image identifier.
    * @param {string | ImageBitmap} image - Image source (URL or ImageBitmap) to upload.
+   * @param {SpriteImageRegisterOptions | undefined} options - Optional SVG handling controls.
    * @returns {Promise<boolean>} Resolves to `true` when the image was registered; `false` if the ID already existed.
    */
   readonly registerImage: (
     imageId: string,
-    image: string | ImageBitmap
+    image: string | ImageBitmap,
+    options?: SpriteImageRegisterOptions
   ) => Promise<boolean>;
   /**
    * Registers a text glyph texture for later use.

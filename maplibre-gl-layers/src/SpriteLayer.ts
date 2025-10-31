@@ -46,6 +46,7 @@ import {
   type SpriteTextGlyphHorizontalAlign,
   type SpriteTextGlyphPaddingPixel,
   type SpriteTextGlyphBorderSide,
+  type SpriteImageRegisterOptions,
 } from './types';
 import type {
   ResolvedTextureFilteringOptions,
@@ -61,7 +62,7 @@ import type {
   InternalSpriteImageState,
   InternalSpriteCurrentState,
 } from './internalTypes';
-import { loadImageBitmap } from './utils';
+import { loadImageBitmap, SvgSizeResolutionError } from './utils';
 import { cloneSpriteLocation, spriteLocationsEqual } from './location';
 import {
   createInterpolationState,
@@ -3205,18 +3206,32 @@ export const createSpriteLayer = <T = any>(
    * Registers an image URL or existing ImageBitmap with the image registry.
    * @param {string} imageId - Image identifier used by sprites.
    * @param {string | ImageBitmap} imageSource - Image URL or existing ImageBitmap to load.
+   * @param {SpriteImageRegisterOptions | undefined} [options] - Optional controls for SVG rasterisation.
    * @returns {Promise<boolean>} Resolves to `true` when registered; `false` if the ID already exists.
    * @remarks Sprites must register images before referencing them.
    */
   const registerImage = async (
     imageId: string,
-    imageSource: string | ImageBitmap
+    imageSource: string | ImageBitmap,
+    options?: SpriteImageRegisterOptions
   ): Promise<boolean> => {
     // Load from URL when given a string; otherwise reuse the provided bitmap directly.
-    const bitmap =
-      typeof imageSource === 'string'
-        ? await loadImageBitmap(imageSource)
-        : imageSource;
+    let bitmap: ImageBitmap;
+    try {
+      bitmap =
+        typeof imageSource === 'string'
+          ? await loadImageBitmap(imageSource, options)
+          : imageSource;
+    } catch (error) {
+      if (error instanceof SvgSizeResolutionError) {
+        console.warn(
+          `[SpriteLayer] Unable to register image "${imageId}": ${error.message}`,
+          error
+        );
+        return false;
+      }
+      throw error;
+    }
     // Reject duplicate registrations to keep texture management consistent.
     if (images.has(imageId)) {
       // Avoid overwriting an existing texture registration using the same identifier.

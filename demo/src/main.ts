@@ -15,6 +15,7 @@ import type {
   SpriteImageDefinitionUpdate,
   SpriteInitEntry,
   SpriteTextGlyphOptions,
+  SpriteImageRegisterOptions,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -973,6 +974,21 @@ const createHud = () => {
           Arrow Shape: ${
             currentArrowShapeMode === 'elongated' ? 'Elongated' : 'Square'
           }
+        </button>
+        <input
+          type="file"
+          accept="image/*"
+          data-control="arrow-image-file-input"
+          data-testid="input-arrow-image"
+          hidden
+        />
+        <button
+          type="button"
+          class="toggle-button"
+          data-control="arrow-image-file-button"
+          data-testid="btn-arrow-image"
+        >
+          Replace Primary Arrow Image
         </button>
       </div>
       <div class="control-group" data-testid="group-camera">
@@ -2548,6 +2564,67 @@ const main = async () => {
             currentArrowShapeMode === 'elongated' ? 'square' : 'elongated';
           updateArrowShapeButton();
           applyIconHeightMode(currentArrowShapeMode);
+        });
+      }
+
+      const arrowImageInput = queryFirst<HTMLInputElement>(
+        '[data-control="arrow-image-file-input"]'
+      );
+      const arrowImageButton = queryFirst<HTMLButtonElement>(
+        '[data-control="arrow-image-file-button"]'
+      );
+      if (arrowImageInput && arrowImageButton && ICON_SPECS.length > 0) {
+        const baseIconId = ICON_SPECS[0]!.id;
+        const replacePrimaryArrowImage = async (file: File) => {
+          const objectUrl = URL.createObjectURL(file);
+          const lowerName = file.name.toLowerCase();
+          const isSvg =
+            file.type === 'image/svg+xml' || lowerName.endsWith('.svg');
+          let registerOptions: SpriteImageRegisterOptions | undefined;
+          if (isSvg) {
+            registerOptions = {
+              svg: {
+                assumeSvg: true,
+                useViewBoxDimensions: true,
+              },
+            };
+          }
+
+          try {
+            for (const mode of ICON_HEIGHT_MODES) {
+              const imageId = getIconImageId(baseIconId, mode);
+              spriteLayer.unregisterImage(imageId);
+              const registered = await spriteLayer.registerImage(
+                imageId,
+                objectUrl,
+                registerOptions
+              );
+              if (!registered) {
+                console.warn(
+                  `Failed to register replacement image for ${imageId}`
+                );
+              }
+            }
+            // Re-apply the current height mode so sprites refresh immediately.
+            applyIconHeightMode(currentArrowShapeMode);
+          } catch (error) {
+            console.error('Failed to replace arrow image', error);
+          } finally {
+            URL.revokeObjectURL(objectUrl);
+            arrowImageInput.value = '';
+          }
+        };
+
+        arrowImageButton.addEventListener('click', () => {
+          arrowImageInput.click();
+        });
+
+        arrowImageInput.addEventListener('change', async () => {
+          const file = arrowImageInput.files?.[0];
+          if (!file) {
+            return;
+          }
+          await replacePrimaryArrowImage(file);
         });
       }
 
