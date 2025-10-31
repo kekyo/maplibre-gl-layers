@@ -482,21 +482,50 @@ Keep in mind:
 
 ## Event Handlers
 
-SpriteLayer exposes a `spriteclick` event that fires when a sprite is clicked or tapped. Inside the handler you can call `updateSprite` to trigger movement interpolation based on user interaction.
+SpriteLayer exposes interaction events so your application can react to clicks and hovers:
+
+- `spriteclick` fires when the user clicks or taps on an image.
+- `spritehover` fires whenever the pointer moves over an image.
+
+If either event fails to detect the target image, it will notify with `sprite`/`image` set to `undefined`.
+
+Inside either handler you can call `updateSprite` or other APIs to react to user interaction.
 
 ```typescript
-// Called when the sprite is clicked or tapped
+// When a MapLibre map is clicked or tapped
 spriteLayer.on('spriteclick', ({ sprite }) => {
-  const { spriteId } = sprite;
-  // Calculating the next coordinates based on the click position
-  // and moving them over 500ms
-  const nextLocation = {
-    lng: sprite.currentLocation.lng + 0.002,
-    lat: sprite.currentLocation.lat,
-  };
-  spriteLayer.updateSprite(spriteId, {
-    location: nextLocation,
-    interpolation: { durationMs: 500, mode: 'feedback' },
+  // A sprite image is present at the clicked position
+  if (sprite) {
+    const { spriteId } = sprite;
+    // Calculating the next coordinates based on the click position
+    // and moving them over 500ms
+    const nextLocation = {
+      lng: sprite.currentLocation.lng + 0.002,
+      lat: sprite.currentLocation.lat,
+    };
+    spriteLayer.updateSprite(spriteId, {
+      location: nextLocation,
+      interpolation: { durationMs: 500, mode: 'feedback' },
+    });
+  }
+});
+```
+
+You can also surface hover highlights or tooltips:
+
+```typescript
+// When hovering over the MapLibre map
+spriteLayer.on('spritehover', ({ sprite, image }) => {
+  // Sprite image not detected
+  if (!sprite || !image) {
+    hideTooltip();
+    return;
+  }
+  // Display sprite and image information
+  showTooltip({
+    spriteId: sprite.spriteId,
+    imageId: image.imageId,
+    mode: image.mode,
   });
 });
 ```
