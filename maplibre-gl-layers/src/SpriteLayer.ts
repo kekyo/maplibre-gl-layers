@@ -662,19 +662,19 @@ const DEFAULT_TEXT_GLYPH_RENDER_PIXEL_RATIO = 1;
 const MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO = 4;
 const MIN_TEXT_GLYPH_FONT_SIZE = 4;
 
-type ResolvedTextGlyphPadding = {
+interface ResolvedTextGlyphPadding {
   readonly top: number;
   readonly right: number;
   readonly bottom: number;
   readonly left: number;
-};
+}
 
-type ResolvedBorderSides = {
+interface ResolvedBorderSides {
   readonly top: boolean;
   readonly right: boolean;
   readonly bottom: boolean;
   readonly left: boolean;
-};
+}
 
 interface ResolvedTextGlyphOptions {
   readonly fontFamily: string;
@@ -1256,7 +1256,7 @@ const drawTextWithLetterSpacing = (
   }
 };
 
-type MutableSpriteScreenPoint = { x: number; y: number };
+interface MutableSpriteScreenPoint { x: number; y: number };
 
 /**
  * Base attributes for an image that composes a sprite.
