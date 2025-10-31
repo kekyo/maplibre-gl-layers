@@ -168,6 +168,8 @@ const SECONDARY_IMAGE_SCALE = 0.5;
 const SECONDARY_ORBIT_RADIUS_METERS = 180;
 /** Angular increment in degrees applied to the orbiting image during each step. */
 const SECONDARY_ORBIT_STEP_DEG = 20;
+/** Fixed angle (deg) used when the orbit mode is set to Shift. */
+const SECONDARY_SHIFT_ANGLE_DEG = 120;
 
 /** Threshold used to ignore tiny values near zero introduced by floating point error. */
 const EPSILON_DELTA = 1e-12;
@@ -184,7 +186,7 @@ const ARROW_HEAD_TOP_FRACTION = 0.085;
 const BILLBOARD_PRIMARY_ANCHOR_Y = 1 - 2 * ARROW_HEAD_TOP_FRACTION;
 
 /** Interaction states that control if and how the secondary image orbits the primary marker. */
-type SecondaryOrbitMode = 'hidden' | 'center' | 'orbit';
+type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -416,10 +418,12 @@ let currentSpriteMode: SpriteMode = 'surface';
 let isAutoRotationEnabled = true;
 /** Enables movement interpolation; when false, updates happen per step only. */
 let isMovementInterpolationEnabled = true;
-/** Current interpolation mode. */
-let currentInterpolationMode: SpriteInterpolationMode = 'feedback';
+/** Interpolation mode applied to sprite location updates. */
+let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
 let isRotateInterpolationEnabled = true;
+/** Interpolation mode applied to primary image rotation. */
+let rotateInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Height mode used for arrow icons. */
 let currentArrowShapeMode: IconHeightMode = 'elongated';
 /** Flag indicating whether the movement timer is active. */
@@ -428,8 +432,14 @@ let isMovementLoopEnabled = true;
 let currentSecondaryImageOrbitMode: SecondaryOrbitMode = 'hidden';
 /** Currently selected secondary image type. */
 let currentSecondaryImageType: SecondaryImageType = 'box';
-/** Whether we interpolate the offset angle of the secondary image. */
-let isOrbitInterpolationEnabled = true;
+/** Whether we interpolate the orbital angle of the secondary image. */
+let isOrbitDegInterpolationEnabled = true;
+/** Whether we interpolate the orbital distance of the secondary image. */
+let isOrbitMetersInterpolationEnabled = true;
+/** Interpolation mode applied to orbital angle changes. */
+let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
+/** Interpolation mode applied to orbital distance changes. */
+let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
 /** Indicates whether supplemental images have been registered. */
@@ -440,19 +450,29 @@ let updateSecondaryImageButtons: (() => void) | undefined;
 let updateSecondaryImageTypeButtons: (() => void) | undefined;
 /** UI updater for the rotate-interpolation toggle. */
 let updateRotateInterpolationButton: (() => void) | undefined;
-/** UI updater for the orbit-interpolation toggle. */
-let updateOrbitInterpolationButton: (() => void) | undefined;
+/** UI updater for the orbit degree interpolation toggle. */
+let updateOrbitDegInterpolationButton: (() => void) | undefined;
+/** UI updater for the orbit meters interpolation toggle. */
+let updateOrbitMetersInterpolationButton: (() => void) | undefined;
 /** Rotation angle in degrees for secondary images. */
 let secondaryImageOrbitDegrees = 0;
 /** UI updater for the movement toggle. */
 let updateMovementToggleButton: (() => void) | undefined;
+/** UI updater for the location interpolation toggle. */
+let updateLocationInterpolationButton: (() => void) | undefined;
 
 /**
  * Template that builds the application HUD.
  * @returns {string} HTML string inserted into the root element.
  */
 const createHud = () => {
-  const feedforwardEnabled = currentInterpolationMode === 'feedforward';
+  const locationFeedforwardEnabled =
+    locationInterpolationMode === 'feedforward';
+  const rotateFeedforwardEnabled = rotateInterpolationMode === 'feedforward';
+  const orbitDegFeedforwardEnabled =
+    orbitOffsetDegInterpolationMode === 'feedforward';
+  const orbitMetersFeedforwardEnabled =
+    orbitOffsetMetersInterpolationMode === 'feedforward';
   return `
     <div id="map" data-testid="map-canvas"></div>
     <aside id="panel" data-testid="panel-info">
@@ -703,21 +723,50 @@ const createHud = () => {
           Auto rotation: ${isAutoRotationEnabled ? 'ON' : 'OFF'}
         </button>
       </div>
-      <div class="control-group" data-testid="group-interpolation">
-        <h1>Interpolation</h1>
+      <div class="control-group" data-testid="group-location-interpolation">
+        <h1>Location interpolation</h1>
         <div>
           <button
             type="button"
             class="toggle-button${isMovementInterpolationEnabled ? ' active' : ''}"
-            data-control="interpolation-toggle"
+            data-control="location-interpolation-toggle"
             data-label="Move Interpolation"
             data-active-text="On"
             data-inactive-text="Off"
             aria-pressed="${isMovementInterpolationEnabled}"
-            data-testid="toggle-interpolation"
+            data-testid="toggle-location-interpolation"
           >
             Move Interpolation: ${isMovementInterpolationEnabled ? 'On' : 'Off'}
           </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${locationFeedforwardEnabled ? '' : ' active'}"
+            data-control="location-interpolation-mode"
+            data-option="feedback"
+            data-label="Feedback"
+            aria-pressed="${locationFeedforwardEnabled ? 'false' : 'true'}"
+            data-testid="toggle-location-feedback"
+          >
+            Feedback
+          </button>
+          <button
+            type="button"
+            class="toggle-button${locationFeedforwardEnabled ? ' active' : ''}"
+            data-control="location-interpolation-mode"
+            data-option="feedforward"
+            data-label="Feedforward"
+            aria-pressed="${locationFeedforwardEnabled ? 'true' : 'false'}"
+            data-testid="toggle-location-feedforward"
+          >
+            Feedforward
+          </button>
+        </div>
+      </div>
+      <div class="control-group" data-testid="group-rotation-interpolation">
+        <h1>Rotation interpolation</h1>
+        <div>
           <button
             type="button"
             class="toggle-button${isRotateInterpolationEnabled ? ' active' : ''}"
@@ -734,23 +783,23 @@ const createHud = () => {
         <div>
           <button
             type="button"
-            class="toggle-button${feedforwardEnabled ? '' : ' active'}"
-            data-control="interpolation-mode"
+            class="toggle-button${rotateFeedforwardEnabled ? '' : ' active'}"
+            data-control="rotate-interpolation-mode"
             data-option="feedback"
             data-label="Feedback"
-            aria-pressed="${feedforwardEnabled ? 'false' : 'true'}"
-            data-testid="toggle-interpolation-feedback"
+            aria-pressed="${rotateFeedforwardEnabled ? 'false' : 'true'}"
+            data-testid="toggle-rotate-feedback"
           >
             Feedback
           </button>
           <button
             type="button"
-            class="toggle-button${feedforwardEnabled ? ' active' : ''}"
-            data-control="interpolation-mode"
+            class="toggle-button${rotateFeedforwardEnabled ? ' active' : ''}"
+            data-control="rotate-interpolation-mode"
             data-option="feedforward"
             data-label="Feedforward"
-            aria-pressed="${feedforwardEnabled ? 'true' : 'false'}"
-            data-testid="toggle-interpolation-feedforward"
+            aria-pressed="${rotateFeedforwardEnabled ? 'true' : 'false'}"
+            data-testid="toggle-rotate-feedforward"
           >
             Feedforward
           </button>
@@ -801,10 +850,20 @@ const createHud = () => {
             data-option="center"
             data-label="Center"
             aria-pressed="${currentSecondaryImageOrbitMode === 'center'}"
-            disabled
             data-testid="toggle-secondary-center"
           >
             Center
+          </button>
+          <button
+            type="button"
+            class="toggle-button${currentSecondaryImageOrbitMode === 'shift' ? ' active' : ''}"
+            data-control="secondary-image-mode"
+            data-option="shift"
+            data-label="Shift"
+            aria-pressed="${currentSecondaryImageOrbitMode === 'shift'}"
+            data-testid="toggle-secondary-shift"
+          >
+            Shift
           </button>
           <button
             type="button"
@@ -813,24 +872,89 @@ const createHud = () => {
             data-option="orbit"
             data-label="Orbit"
             aria-pressed="${currentSecondaryImageOrbitMode === 'orbit'}"
-            disabled
             data-testid="toggle-secondary-orbit"
           >
             Orbit
           </button>
         </div>
+        <div class="secondary-interpolation-group">
+          <button
+            type="button"
+            class="toggle-button${isOrbitDegInterpolationEnabled ? ' active' : ''}"
+            data-control="orbit-deg-interpolation-toggle"
+            data-label="Orbit Degree Interpolation"
+            data-active-text="On"
+            data-inactive-text="Off"
+            aria-pressed="${isOrbitDegInterpolationEnabled}"
+            data-testid="toggle-orbit-deg-interpolation"
+          >
+            Orbit Degree Interpolation: ${
+              isOrbitDegInterpolationEnabled ? 'On' : 'Off'
+            }
+          </button>
+        </div>
         <div>
           <button
             type="button"
-            class="toggle-button${isOrbitInterpolationEnabled ? ' active' : ''}"
-            data-control="orbit-interpolation-toggle"
-            data-label="Orbit Interpolation"
+            class="toggle-button${orbitDegFeedforwardEnabled ? '' : ' active'}"
+            data-control="orbit-deg-interpolation-mode"
+            data-option="feedback"
+            data-label="Feedback"
+            aria-pressed="${orbitDegFeedforwardEnabled ? 'false' : 'true'}"
+            data-testid="toggle-orbit-deg-feedback"
+          >
+            Feedback
+          </button>
+          <button
+            type="button"
+            class="toggle-button${orbitDegFeedforwardEnabled ? ' active' : ''}"
+            data-control="orbit-deg-interpolation-mode"
+            data-option="feedforward"
+            data-label="Feedforward"
+            aria-pressed="${orbitDegFeedforwardEnabled ? 'true' : 'false'}"
+            data-testid="toggle-orbit-deg-feedforward"
+          >
+            Feedforward
+          </button>
+        </div>
+        <div class="secondary-interpolation-group">
+          <button
+            type="button"
+            class="toggle-button${isOrbitMetersInterpolationEnabled ? ' active' : ''}"
+            data-control="orbit-meters-interpolation-toggle"
+            data-label="Orbit Meters Interpolation"
             data-active-text="On"
             data-inactive-text="Off"
-            aria-pressed="${isOrbitInterpolationEnabled}"
-            data-testid="toggle-orbit-interpolation"
+            aria-pressed="${isOrbitMetersInterpolationEnabled}"
+            data-testid="toggle-orbit-meters-interpolation"
           >
-            Orbit Interpolation: ${isOrbitInterpolationEnabled ? 'On' : 'Off'}
+            Orbit Meters Interpolation: ${
+              isOrbitMetersInterpolationEnabled ? 'On' : 'Off'
+            }
+          </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${orbitMetersFeedforwardEnabled ? '' : ' active'}"
+            data-control="orbit-meters-interpolation-mode"
+            data-option="feedback"
+            data-label="Feedback"
+            aria-pressed="${orbitMetersFeedforwardEnabled ? 'false' : 'true'}"
+            data-testid="toggle-orbit-meters-feedback"
+          >
+            Feedback
+          </button>
+          <button
+            type="button"
+            class="toggle-button${orbitMetersFeedforwardEnabled ? ' active' : ''}"
+            data-control="orbit-meters-interpolation-mode"
+            data-option="feedforward"
+            data-label="Feedforward"
+            aria-pressed="${orbitMetersFeedforwardEnabled ? 'true' : 'false'}"
+            data-testid="toggle-orbit-meters-feedforward"
+          >
+            Feedforward
           </button>
         </div>
       </div>
@@ -1427,9 +1551,10 @@ const main = async () => {
                 },
               };
               const orbitInterpolation = createOrbitInterpolationOptions();
-              if (orbitInterpolation) {
-                imageUpdate.interpolation = orbitInterpolation;
-              }
+              imageUpdate.interpolation = orbitInterpolation ?? {
+                offsetDeg: null,
+                offsetMeters: null,
+              };
               update.updateImage(image.subLayer, image.order, imageUpdate);
             }
           });
@@ -1551,6 +1676,21 @@ const main = async () => {
     };
 
     /**
+     * Applies location interpolation settings across all sprites.
+     */
+    const applyLocationInterpolationToAll = () => {
+      spriteLayer.updateForEach((_sprite, update) => {
+        update.interpolation = isMovementInterpolationEnabled
+          ? {
+              mode: locationInterpolationMode,
+              durationMs: MOVEMENT_INTERVAL_MS,
+            }
+          : null;
+        return true;
+      });
+    };
+
+    /**
      * Toggles rotation interpolation on every primary sprite so the animation speed stays consistent.
      *
      * @param {boolean} enabled - Whether interpolation should remain active.
@@ -1566,7 +1706,10 @@ const main = async () => {
             const imageUpdate: SpriteImageDefinitionUpdate = {
               interpolation: enabled
                 ? {
-                    rotateDeg: { durationMs: MOVEMENT_INTERVAL_MS },
+                    rotateDeg: {
+                      mode: rotateInterpolationMode,
+                      durationMs: MOVEMENT_INTERVAL_MS,
+                    },
                   }
                 : { rotateDeg: null },
             };
@@ -1578,11 +1721,9 @@ const main = async () => {
     };
 
     /**
-     * Enables or disables interpolation on the orbit offset so secondary images animate smoothly.
-     *
-     * @param {boolean} enabled - Whether interpolation should be applied.
+     * Enables or disables interpolation on the orbit offsets so secondary images animate smoothly.
      */
-    const applyOrbitInterpolationToAll = (enabled: boolean) => {
+    const applyOrbitInterpolationToAll = () => {
       spriteLayer.updateForEach((sprite, spriteUpdate) => {
         sprite.images.forEach((orderMap) => {
           orderMap.forEach((image) => {
@@ -1591,11 +1732,20 @@ const main = async () => {
               return;
             }
             const imageUpdate: SpriteImageDefinitionUpdate = {
-              interpolation: enabled
-                ? {
-                    offsetDeg: { durationMs: MOVEMENT_INTERVAL_MS },
-                  }
-                : { offsetDeg: null },
+              interpolation: {
+                offsetDeg: isOrbitDegInterpolationEnabled
+                  ? {
+                      mode: orbitOffsetDegInterpolationMode,
+                      durationMs: MOVEMENT_INTERVAL_MS,
+                    }
+                  : null,
+                offsetMeters: isOrbitMetersInterpolationEnabled
+                  ? {
+                      mode: orbitOffsetMetersInterpolationMode,
+                      durationMs: MOVEMENT_INTERVAL_MS,
+                    }
+                  : null,
+              },
             };
             spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -1754,18 +1904,22 @@ const main = async () => {
       if (!isSecondaryImageReady) {
         // When assets have not loaded yet, just remember the requested mode for later.
         currentSecondaryImageOrbitMode = mode;
-        if (mode !== 'orbit') {
-          // Reset the rotation so the eventual orbit starts from a neutral angle.
-          secondaryImageOrbitDegrees = 0;
-        }
+        secondaryImageOrbitDegrees =
+          mode === 'orbit'
+            ? secondaryImageOrbitDegrees
+            : mode === 'shift'
+              ? SECONDARY_SHIFT_ANGLE_DEG
+              : 0;
         updateSecondaryImageButtons?.();
         return;
       }
       currentSecondaryImageOrbitMode = mode;
-      if (mode !== 'orbit') {
-        // Snap the angle to zero when orbiting stops to keep the UI deterministic.
-        secondaryImageOrbitDegrees = 0;
-      }
+      secondaryImageOrbitDegrees =
+        mode === 'orbit'
+          ? secondaryImageOrbitDegrees
+          : mode === 'shift'
+            ? SECONDARY_SHIFT_ANGLE_DEG
+            : 0;
 
       spriteLayer.updateForEach((sprite, update) => {
         sprite.images.forEach((orderMap) => {
@@ -1790,6 +1944,16 @@ const main = async () => {
                   offsetDeg: 0.0,
                 },
               };
+            } else if (mode === 'shift') {
+              // Shift mode keeps a fixed radius and angle without continuous orbiting.
+              imageUpdate = {
+                opacity: 1.0,
+                autoRotation: false,
+                offset: {
+                  offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+                  offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
+                },
+              };
             } else {
               // Orbit mode offsets the sprite by the configured radius and maintains the current angle.
               imageUpdate = {
@@ -1805,6 +1969,11 @@ const main = async () => {
             if (orbitInterpolation) {
               // Only attach interpolation data when the global toggle allows it.
               imageUpdate.interpolation = orbitInterpolation;
+            } else {
+              imageUpdate.interpolation = {
+                offsetDeg: null,
+                offsetMeters: null,
+              };
             }
             update.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -1891,7 +2060,7 @@ const main = async () => {
       }
       return {
         rotateDeg: {
-          mode: currentInterpolationMode,
+          mode: rotateInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
         },
       };
@@ -1905,16 +2074,27 @@ const main = async () => {
     const createOrbitInterpolationOptions = ():
       | SpriteImageInterpolationOptions
       | undefined => {
-      if (!isOrbitInterpolationEnabled) {
+      if (
+        !isOrbitDegInterpolationEnabled &&
+        !isOrbitMetersInterpolationEnabled
+      ) {
         // Skip interpolation when the user has disabled smoothing for orbit motion.
         return undefined;
       }
-      return {
-        offsetDeg: {
-          mode: currentInterpolationMode,
+      const options: SpriteImageInterpolationOptions = {};
+      if (isOrbitDegInterpolationEnabled) {
+        options.offsetDeg = {
+          mode: orbitOffsetDegInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
-        },
-      };
+        };
+      }
+      if (isOrbitMetersInterpolationEnabled) {
+        options.offsetMeters = {
+          mode: orbitOffsetMetersInterpolationMode,
+          durationMs: MOVEMENT_INTERVAL_MS,
+        };
+      }
+      return options;
     };
 
     /**
@@ -2051,6 +2231,47 @@ const main = async () => {
           }
         }
         return null;
+      };
+
+      const registerInterpolationModeButtons = (
+        selector: string,
+        getMode: () => SpriteInterpolationMode,
+        onChange: (mode: SpriteInterpolationMode) => void
+      ) => {
+        const buttons = Array.from<HTMLButtonElement>(
+          queryAll<HTMLButtonElement>(selector)
+        );
+        if (buttons.length === 0) {
+          return;
+        }
+        const updateButtons = () => {
+          const current = getMode();
+          buttons.forEach((button) => {
+            const option = button.dataset.option as
+              | SpriteInterpolationMode
+              | undefined;
+            if (!option) {
+              return;
+            }
+            setToggleButtonState(button, current === option, 'select');
+          });
+        };
+        updateButtons();
+        buttons.forEach((button) => {
+          const option = button.dataset.option as
+            | SpriteInterpolationMode
+            | undefined;
+          if (!option) {
+            return;
+          }
+          button.addEventListener('click', () => {
+            if (getMode() === option) {
+              return;
+            }
+            onChange(option);
+            updateButtons();
+          });
+        });
       };
 
       const spriteCountActiveEl = queryFirst<HTMLElement>(
@@ -2366,43 +2587,42 @@ const main = async () => {
         });
       });
 
-      const interpolationButtons = Array.from(
-        queryAll<HTMLButtonElement>('[data-control="interpolation-mode"]')
-      );
-      const updateInterpolationModeButtons = () => {
-        interpolationButtons.forEach((button) => {
-          const option = button.dataset.option;
-          if (!option) {
-            // Buttons without a mode option are ignored as malformed.
-            return;
-          }
-          const feedforwardButton = option as SpriteInterpolationMode;
-          setToggleButtonState(
-            button,
-            currentInterpolationMode === feedforwardButton,
-            'select'
-          );
-        });
-      };
-
-      updateInterpolationModeButtons();
-      interpolationButtons.forEach((button) => {
-        const option = button.dataset.option;
-        if (!option) {
-          // Skip click binding for buttons lacking a mode identifier.
-          return;
-        }
-        button.addEventListener('click', () => {
-          const wantsFeedforward = option as SpriteInterpolationMode;
-          if (currentInterpolationMode === wantsFeedforward) {
-            // User selected the already-active interpolation mode; no work required.
-            return;
-          }
-          currentInterpolationMode = wantsFeedforward;
-          updateInterpolationModeButtons();
+      registerInterpolationModeButtons(
+        '[data-control="location-interpolation-mode"]',
+        () => locationInterpolationMode,
+        (mode) => {
+          locationInterpolationMode = mode;
+          applyLocationInterpolationToAll();
           reinitializeMovement();
-        });
-      });
+        }
+      );
+
+      registerInterpolationModeButtons(
+        '[data-control="rotate-interpolation-mode"]',
+        () => rotateInterpolationMode,
+        (mode) => {
+          rotateInterpolationMode = mode;
+          applyRotateInterpolationToAll(isRotateInterpolationEnabled);
+        }
+      );
+
+      registerInterpolationModeButtons(
+        '[data-control="orbit-deg-interpolation-mode"]',
+        () => orbitOffsetDegInterpolationMode,
+        (mode) => {
+          orbitOffsetDegInterpolationMode = mode;
+          applyOrbitInterpolationToAll();
+        }
+      );
+
+      registerInterpolationModeButtons(
+        '[data-control="orbit-meters-interpolation-mode"]',
+        () => orbitOffsetMetersInterpolationMode,
+        (mode) => {
+          orbitOffsetMetersInterpolationMode = mode;
+          applyOrbitInterpolationToAll();
+        }
+      );
 
       const movementToggleButton = queryFirst<HTMLButtonElement>(
         '[data-control="movement-toggle"]'
@@ -2501,56 +2721,61 @@ const main = async () => {
         });
       }
 
-      const orbitInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="orbit-interpolation-toggle"]'
+      const locationInterpolationToggleButton = queryFirst<HTMLButtonElement>(
+        '[data-control="location-interpolation-toggle"]'
       );
-      if (orbitInterpolationButton) {
-        // Orbit interpolation toggle is optional; guard to avoid null dereferences.
-        updateOrbitInterpolationButton = () => {
+      if (locationInterpolationToggleButton) {
+        updateLocationInterpolationButton = () => {
           setToggleButtonState(
-            orbitInterpolationButton,
-            isOrbitInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateOrbitInterpolationButton();
-        orbitInterpolationButton.addEventListener('click', () => {
-          isOrbitInterpolationEnabled = !isOrbitInterpolationEnabled;
-          updateOrbitInterpolationButton?.();
-          applyOrbitInterpolationToAll(isOrbitInterpolationEnabled);
-        });
-      }
-
-      const interpolationToggleButton = queryFirst<HTMLButtonElement>(
-        '[data-control="interpolation-toggle"]'
-      );
-      if (interpolationToggleButton) {
-        // Movement interpolation toggle might be absent in simplified control panels.
-        const updateInterpolationToggleButton = () => {
-          setToggleButtonState(
-            interpolationToggleButton,
+            locationInterpolationToggleButton,
             isMovementInterpolationEnabled,
             'binary'
           );
         };
-        updateInterpolationToggleButton();
-        interpolationToggleButton.addEventListener('click', () => {
-          // Toggle movement interpolation each time the button is pressed.
+        updateLocationInterpolationButton();
+        locationInterpolationToggleButton.addEventListener('click', () => {
           isMovementInterpolationEnabled = !isMovementInterpolationEnabled;
-          updateInterpolationToggleButton();
+          updateLocationInterpolationButton?.();
+          applyLocationInterpolationToAll();
+        });
+      }
 
-          // Apply the new setting to every sprite.
-          spriteLayer.updateForEach((_, update) => {
-            // When enabled, set interpolation mode and duration; otherwise disable interpolation.
-            update.interpolation = isMovementInterpolationEnabled
-              ? {
-                  mode: currentInterpolationMode,
-                  durationMs: MOVEMENT_INTERVAL_MS,
-                }
-              : null;
-            return true;
-          });
-          updateInterpolationModeButtons();
+      const orbitDegInterpolationButton = queryFirst<HTMLButtonElement>(
+        '[data-control="orbit-deg-interpolation-toggle"]'
+      );
+      if (orbitDegInterpolationButton) {
+        updateOrbitDegInterpolationButton = () => {
+          setToggleButtonState(
+            orbitDegInterpolationButton,
+            isOrbitDegInterpolationEnabled,
+            'binary'
+          );
+        };
+        updateOrbitDegInterpolationButton();
+        orbitDegInterpolationButton.addEventListener('click', () => {
+          isOrbitDegInterpolationEnabled = !isOrbitDegInterpolationEnabled;
+          updateOrbitDegInterpolationButton?.();
+          applyOrbitInterpolationToAll();
+        });
+      }
+
+      const orbitMetersInterpolationButton = queryFirst<HTMLButtonElement>(
+        '[data-control="orbit-meters-interpolation-toggle"]'
+      );
+      if (orbitMetersInterpolationButton) {
+        updateOrbitMetersInterpolationButton = () => {
+          setToggleButtonState(
+            orbitMetersInterpolationButton,
+            isOrbitMetersInterpolationEnabled,
+            'binary'
+          );
+        };
+        updateOrbitMetersInterpolationButton();
+        orbitMetersInterpolationButton.addEventListener('click', () => {
+          isOrbitMetersInterpolationEnabled =
+            !isOrbitMetersInterpolationEnabled;
+          updateOrbitMetersInterpolationButton?.();
+          applyOrbitInterpolationToAll();
         });
       }
 
@@ -2626,7 +2851,12 @@ const main = async () => {
             rotateDeg: primaryPlacement.rotateDeg,
             anchor: primaryPlacement.anchor,
             interpolation: isRotateInterpolationEnabled
-              ? { rotateDeg: { durationMs: MOVEMENT_INTERVAL_MS } }
+              ? {
+                  rotateDeg: {
+                    mode: rotateInterpolationMode,
+                    durationMs: MOVEMENT_INTERVAL_MS,
+                  },
+                }
               : undefined,
           },
           // Orbiting satellite indicator.
@@ -2639,9 +2869,28 @@ const main = async () => {
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
             scale: SECONDARY_IMAGE_SCALE,
             opacity: currentSecondaryImageOrbitMode === 'hidden' ? 0.0 : 1.0,
-            interpolation: isOrbitInterpolationEnabled
-              ? { offsetDeg: { durationMs: MOVEMENT_INTERVAL_MS } }
-              : undefined,
+            interpolation:
+              isOrbitDegInterpolationEnabled ||
+              isOrbitMetersInterpolationEnabled
+                ? {
+                    ...(isOrbitDegInterpolationEnabled
+                      ? {
+                          offsetDeg: {
+                            mode: orbitOffsetDegInterpolationMode,
+                            durationMs: MOVEMENT_INTERVAL_MS,
+                          },
+                        }
+                      : {}),
+                    ...(isOrbitMetersInterpolationEnabled
+                      ? {
+                          offsetMeters: {
+                            mode: orbitOffsetMetersInterpolationMode,
+                            durationMs: MOVEMENT_INTERVAL_MS,
+                          },
+                        }
+                      : {}),
+                  }
+                : undefined,
           },
         ],
       };
@@ -2680,13 +2929,15 @@ const main = async () => {
       spriteLayer.addSprites(initialSpriteEntries);
     }
 
+    applyLocationInterpolationToAll();
+
     if (isRotateInterpolationEnabled) {
       // Apply rotation interpolation immediately so the initial state matches the toggle.
       applyRotateInterpolationToAll(true);
     }
-    if (isOrbitInterpolationEnabled) {
+    if (isOrbitDegInterpolationEnabled || isOrbitMetersInterpolationEnabled) {
       // Ensure orbit interpolation is set when the feature starts enabled.
-      applyOrbitInterpolationToAll(true);
+      applyOrbitInterpolationToAll();
     }
     // Apply the layer visibility flag so initial state matches the toggle.
     applyLayerVisibility(isActive);
@@ -2801,7 +3052,7 @@ const main = async () => {
         if (hasMovement) {
           update.interpolation = isMovementInterpolationEnabled
             ? {
-                mode: currentInterpolationMode,
+                mode: locationInterpolationMode,
                 durationMs: MOVEMENT_INTERVAL_MS,
               }
             : null;

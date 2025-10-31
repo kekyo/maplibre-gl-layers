@@ -101,6 +101,8 @@ export interface SpriteImageInterpolationOptions {
   rotateDeg?: SpriteInterpolationOptions | null;
   /** Interpolation settings for offset.offsetDeg; null disables interpolation. */
   offsetDeg?: SpriteInterpolationOptions | null;
+  /** Interpolation settings for offset.offsetMeters; null disables interpolation. */
+  offsetMeters?: SpriteInterpolationOptions | null;
 }
 
 /**
@@ -517,34 +519,6 @@ export interface SpriteScalingOptions {
 }
 
 /**
- * Unlimited (default) values that fill in missing {@link SpriteScalingOptions} fields supplied by callers.
- * metersPerPixel is 1.
- */
-export const UNLIMITED_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
-  metersPerPixel: 1.0,
-  zoomMin: 0,
-  zoomMax: 30,
-  scaleMin: 1,
-  scaleMax: 1,
-  spriteMinPixel: 0,
-  spriteMaxPixel: 100000,
-} as const;
-
-/**
- * Standard values that fill in missing {@link SpriteScalingOptions} fields supplied by callers.
- * metersPerPixel is 1.
- */
-export const STANDARD_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
-  metersPerPixel: 1.0,
-  zoomMin: 8.0,
-  zoomMax: 20.0,
-  scaleMin: 0.1,
-  scaleMax: 1.0,
-  spriteMinPixel: 24,
-  spriteMaxPixel: 100,
-} as const;
-
-/**
  * Allowed minification filters for sprite textures.
  */
 export type SpriteTextureMinFilter =
@@ -574,27 +548,6 @@ export interface SpriteTextureFilteringOptions {
   generateMipmaps?: boolean;
   maxAnisotropy?: number;
 }
-
-/**
- * Defaulted text filtering options.
- */
-export const DEFAULT_TEXTURE_FILTERING_OPTIONS: SpriteTextureFilteringOptions =
-  {
-    minFilter: 'linear',
-    magFilter: 'linear',
-    generateMipmaps: false,
-    maxAnisotropy: 1,
-  } as const;
-
-/**
- * Better text filtering options than default options.
- */
-export const BETTER_TEXTURE_FILTERING_OPTIONS: SpriteTextureFilteringOptions = {
-  minFilter: 'linear-mipmap-linear',
-  magFilter: 'linear',
-  generateMipmaps: true,
-  maxAnisotropy: 8,
-} as const;
 
 /**
  * Options accepted when creating a SpriteLayer.

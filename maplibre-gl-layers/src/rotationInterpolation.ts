@@ -5,8 +5,8 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type { SpriteInterpolationOptions } from './types';
-import type { NumericInterpolationState } from './internalTypes';
-import { createNumericInterpolationState } from './numericInterpolation';
+import type { DegreeInterpolationState } from './internalTypes';
+import { createDegreeInterpolationState } from './degreeInterpolation';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -43,11 +43,11 @@ export interface ResolveRotationTargetParams {
 /**
  * Result produced by {@link resolveRotationTarget} when determining the next rotation step.
  * @property {number} nextAngleDeg - Angle that should be applied immediately.
- * @property {NumericInterpolationState | null} interpolationState - Optional state for animating toward the target.
+ * @property {DegreeInterpolationState | null} interpolationState - Optional state for animating toward the target.
  */
 export interface ResolveRotationTargetResult {
   readonly nextAngleDeg: number;
-  readonly interpolationState: NumericInterpolationState | null;
+  readonly interpolationState: DegreeInterpolationState | null;
 }
 
 /**
@@ -74,7 +74,7 @@ export const resolveRotationTarget = (
     };
   }
 
-  const { state, requiresInterpolation } = createNumericInterpolationState({
+  const { state, requiresInterpolation } = createDegreeInterpolationState({
     currentValue: currentAngle,
     targetValue: targetAngle,
     previousCommandValue: previousCommandAngleDeg,

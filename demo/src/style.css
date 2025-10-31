@@ -141,6 +141,16 @@ a {
   margin-bottom: 0;
 }
 
+.button-row {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.secondary-interpolation-group {
+  margin-top: 8px;
+}
+
 .range-control {
   display: flex;
   flex-direction: column;

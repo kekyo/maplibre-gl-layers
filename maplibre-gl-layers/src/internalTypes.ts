@@ -53,7 +53,16 @@ export interface SpriteInterpolationState {
  * @property {number} finalValue - Caller-requested final value (used once interpolation completes).
  * @property {number} startTimestamp - Timestamp when interpolation began, `-1` until evaluation starts.
  */
-export interface NumericInterpolationState {
+export interface DegreeInterpolationState {
+  readonly durationMs: number;
+  readonly easing: EasingFunction;
+  readonly from: number;
+  readonly to: number;
+  readonly finalValue: number;
+  startTimestamp: number;
+}
+
+export interface DistanceInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
   readonly from: number;
@@ -184,11 +193,13 @@ export interface InternalSpriteImageState {
   autoRotationMinDistanceMeters: number;
   resolvedBaseRotateDeg: number;
   originLocation?: SpriteImageOriginLocation;
-  rotationInterpolationState: NumericInterpolationState | null;
+  rotationInterpolationState: DegreeInterpolationState | null;
   rotationInterpolationOptions: SpriteInterpolationOptions | null;
-  offsetDegInterpolationState: NumericInterpolationState | null;
+  offsetDegInterpolationState: DegreeInterpolationState | null;
+  offsetMetersInterpolationState: DistanceInterpolationState | null;
   lastCommandRotateDeg: number;
   lastCommandOffsetDeg: number;
+  lastCommandOffsetMeters: number;
   hitTestCorners?: [
     MutableSpriteScreenPoint,
     MutableSpriteScreenPoint,

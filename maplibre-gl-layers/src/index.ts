@@ -4,5 +4,6 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-export * from './types.ts';
-export * from './SpriteLayer.ts';
+export * from './types';
+export * from './const';
+export * from './SpriteLayer';

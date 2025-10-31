@@ -6,13 +6,13 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  createNumericInterpolationState,
-  evaluateNumericInterpolation,
-} from '../src/numericInterpolation';
+  createDegreeInterpolationState,
+  evaluateDegreeInterpolation,
+} from '../src/degreeInterpolation';
 
-describe('createNumericInterpolationState', () => {
+describe('createDegreeInterpolationState', () => {
   it('requires interpolation for non-zero angular delta', () => {
-    const { state, requiresInterpolation } = createNumericInterpolationState({
+    const { state, requiresInterpolation } = createDegreeInterpolationState({
       currentValue: 0,
       targetValue: 90,
       options: { durationMs: 1000 },
@@ -25,7 +25,7 @@ describe('createNumericInterpolationState', () => {
   });
 
   it('uses shortest path for large positive delta', () => {
-    const { state, requiresInterpolation } = createNumericInterpolationState({
+    const { state, requiresInterpolation } = createDegreeInterpolationState({
       currentValue: 0,
       targetValue: 270,
       options: { durationMs: 1000 },
@@ -37,7 +37,7 @@ describe('createNumericInterpolationState', () => {
   });
 
   it('keeps forward rotation when delta is small positive even if exceeding 360', () => {
-    const { state, requiresInterpolation } = createNumericInterpolationState({
+    const { state, requiresInterpolation } = createDegreeInterpolationState({
       currentValue: 359,
       targetValue: 375,
       options: { durationMs: 1000 },
@@ -50,21 +50,21 @@ describe('createNumericInterpolationState', () => {
   });
 });
 
-describe('evaluateNumericInterpolation', () => {
+describe('evaluateDegreeInterpolation', () => {
   it('interpolates along the shortest path and snaps to final value at completion', () => {
-    const { state } = createNumericInterpolationState({
+    const { state } = createDegreeInterpolationState({
       currentValue: 0,
       targetValue: 270,
       options: { durationMs: 1000 },
     });
 
-    const start = evaluateNumericInterpolation({
+    const start = evaluateDegreeInterpolation({
       state,
       timestamp: 500,
     });
     state.startTimestamp = start.effectiveStartTimestamp;
 
-    const midway = evaluateNumericInterpolation({
+    const midway = evaluateDegreeInterpolation({
       state,
       timestamp: state.startTimestamp + 500,
     });
@@ -72,7 +72,7 @@ describe('evaluateNumericInterpolation', () => {
     expect(midway.completed).toBe(false);
     expect(midway.value).toBeCloseTo(-45);
 
-    const end = evaluateNumericInterpolation({
+    const end = evaluateDegreeInterpolation({
       state,
       timestamp: state.startTimestamp + 1500,
     });
@@ -82,13 +82,13 @@ describe('evaluateNumericInterpolation', () => {
   });
 
   it('returns final value immediately when duration is zero or delta is negligible', () => {
-    const { state } = createNumericInterpolationState({
+    const { state } = createDegreeInterpolationState({
       currentValue: 0,
       targetValue: 360,
       options: { durationMs: 0 },
     });
 
-    const result = evaluateNumericInterpolation({
+    const result = evaluateDegreeInterpolation({
       state,
       timestamp: 0,
     });
