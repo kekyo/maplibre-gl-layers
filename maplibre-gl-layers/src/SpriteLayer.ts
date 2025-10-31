@@ -34,8 +34,6 @@ import {
   type SpriteUpdaterEntry,
   type SpriteImageDefinitionInit,
   type SpriteImageDefinitionUpdate,
-  // @prettier-max-ignore-deprecated
-  type SpriteUpdateBulkEntry,
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
   type SpriteImageOffset,
@@ -4670,51 +4668,6 @@ export const createSpriteLayer = <T = any>(
         return true;
     }
   };
-
-  /**
-   * Applies multiple sprite updates in bulk.
-   * @param {SpriteUpdateBulkEntry<T>[]} updateBulkList - Array of updates to apply sequentially.
-   * @returns {number} Number of sprites that changed.
-   * @deprecated Use {@link SpriteLayerInterface.mutateSprites} for clearer mutation flows.
-   */
-  const updateBulk = (updateBulkList: SpriteUpdateBulkEntry<T>[]): number => {
-    let updatedCount = 0;
-    let isRequiredRender = false;
-
-    // Apply updates in sequence.
-    updateBulkList.forEach((update) => {
-      const result = updateSpriteInternal(update.spriteId, update);
-
-      switch (result) {
-        case 'notfound':
-        // Sprite missing; nothing to do for this entry.
-        case 'ignored':
-          break;
-        case 'updated':
-          // State changed without requiring an immediate redraw.
-          updatedCount++;
-          break;
-        // When rendering must occur because of this update
-        case 'isRequiredRender':
-          // Refresh render targets.
-          ensureRenderTargetEntries();
-          // Request a redraw so changes appear immediately.
-          scheduleRender();
-          updatedCount++;
-          isRequiredRender = true;
-          break;
-      }
-    });
-
-    // If any update required rendering,
-    if (isRequiredRender) {
-      // At least one update demanded a redraw; refresh buffers once more after the batch.
-      ensureRenderTargetEntries();
-      scheduleRender();
-    }
-
-    return updatedCount;
-  };
   /**
    * Adds, updates, or removes sprites based on arbitrary source items.
    * @template TSourceItem Source item type that exposes a sprite identifier.
@@ -4986,7 +4939,6 @@ export const createSpriteLayer = <T = any>(
     updateSpriteImage,
     removeSpriteImage,
     updateSprite,
-    updateBulk,
     mutateSprites,
     updateForEach,
     on: addEventListener,

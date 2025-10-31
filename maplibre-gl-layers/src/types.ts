@@ -345,12 +345,6 @@ export interface SpriteUpdateEntry<TTag> extends SpriteUpdateEntryBase<TTag> {
   images?: SpriteImageDefinitionUpdateEntry[];
 }
 
-/** @deprecated Scheduled for removal in a future release. Use {@link SpriteLayerInterface.mutateSprites} instead. */
-export interface SpriteUpdateBulkEntry<T> extends SpriteUpdateEntry<T> {
-  /** @deprecated Scheduled for removal in a future release. Use {@link SpriteLayerInterface.mutateSprites} instead. */
-  spriteId: string;
-}
-
 /**
  * Callback-based helper for mutating sprite state.
  *
@@ -858,13 +852,6 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
     spriteId: string,
     update: SpriteUpdateEntry<TTag>
   ) => boolean;
-  /**
-   * @deprecated Use {@link SpriteLayerInterface.mutateSprites} instead for clearer mutation flows.
-   */
-  readonly updateBulk: (
-    // @prettier-max-ignore-deprecated
-    updateBulkList: SpriteUpdateBulkEntry<TTag>[]
-  ) => number;
   /**
    * Adds, updates, or removes sprites based on an arbitrary collection of source items.
    *
