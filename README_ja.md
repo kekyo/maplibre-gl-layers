@@ -4,7 +4,7 @@
 
 ![maplibre-gl-layers](images/maplibre-gl-layers-120.png)
 
-[![Project Status: Concept - Minimal or no implementation has been done yet, or the repository is only intended to be a limited example, demo, or proof-of-concept.](https://www.repostatus.org/badges/latest/concept.svg)](https://www.repostatus.org/#concept)
+[![Project Status: WIP - Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm version](https://img.shields.io/npm/v/maplibre-gl-layers.svg)](https://www.npmjs.com/package/maplibre-gl-layers)
 
@@ -433,19 +433,19 @@ spriteLayer.updateSprite(SPRITE_ID, {
 
 もちろん、これは予測座標なので、移動中に移動方向や速度が大きく変われば、誤った座標に移動し続けてしまうデメリットがあります。それでも、新しい座標が供給されれば、そちらの方にすばやく移動するように矯正されるので、座標のズレは収斂するでしょう。
 
-## 画像の回転角とオフセットの回転角の補間
+## 画像の回転角とオフセットの補間
 
-スプライト移動補間と似た機能として、画像の回転とオフセットの角度回転を補間することも出来ます。これらの機能は似ていますが、スプライト位置の補間とは別の機能です。
+スプライト移動補間と似た機能として、画像の回転とオフセット（角度・距離）を補間することも出来ます。これらの機能は似ていますが、スプライト移動の補間とは別の機能です。
 
-`rotationInterpolation`で、画像の回転角の補間を有効にできます。`rotateDeg`の補間用と`offset.offsetDeg`の補間用で個別に`durationMs`と任意の`easing`関数を指定できます。補間が完了するまでは毎フレーム角度が滑らかに変化し、設定を削除するか`null`を渡すと即座に停止します。
+各画像に用意されている `interpolation` で、`rotateDeg`・`offset.offsetDeg`・`offset.offsetMeters` の各パラメータを個別に補間できます。パラメータごとに `durationMs` と任意の `easing` 関数、補間モードを指定でき、補間が完了するまでは毎フレーム値が滑らかに変化します。設定を削除するか `null` を渡すと即座に停止します。
 
-以下に、画像の回転角とオフセットの角度のそれぞれで、補間を適用する例を示します:
+以下に、画像の回転角とオフセット角度・距離のそれぞれで補間を適用する例を示します:
 
 ```typescript
 // 画像の回転角を400msで補間しながら変更する
 spriteLayer.updateSpriteImage('vehicle-anchor', 0, 0, {
   rotateDeg: 180, // 現在の角度から180度に向かって回転
-  rotationInterpolation: {
+  interpolation: {
     rotateDeg: { durationMs: 400 },
   },
 });
@@ -456,8 +456,17 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
     offsetMeters: 12,
     offsetDeg: 45, // 現在の角度から45度に向かって回転
   },
-  rotationInterpolation: {
+  interpolation: {
     offsetDeg: { durationMs: 600 },
+    offsetMeters: { durationMs: 600 },
+  },
+});
+
+// 補間を無効化するには `null` を指定する
+spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
+  interpolation: {
+    offsetDeg: null,
+    offsetMeters: null,
   },
 });
 ```
@@ -498,20 +507,49 @@ spriteLayer.addSprite('vehicle-group', {
 
 ## イベントハンドラ
 
-SpriteLayerは`spriteclick`イベントをサポートしており、スプライトをクリック・タップした際に呼び出されます。イベントハンドラ内から`updateSprite`を呼び出せば、ユーザー操作に応じた移動補間も簡単に実装できます。
+SpriteLayerは次のインタラクションイベントを提供しています:
+
+- `spriteclick`: 画像をクリック／タップしたときに発火します。
+- `spritehover`: ポインタが画像上を移動するたびに発火します。
+
+どちらのイベントも、対象の画像を検出できない場合は、`sprite`/`image`が`undefined`の状態で通知されます。
+
+イベントハンドラ内から`updateSprite`などを呼び出せば、ユーザー操作に応じた挙動を簡単に実装できます。
 
 ```typescript
-// スプライトがクリック・タップされたときに呼び出される
+// MapLibreの地図がクリック・タップされたときに呼び出される
 spriteLayer.on('spriteclick', ({ sprite, screenPoint }) => {
-  const { spriteId } = sprite;
-  // クリック位置を基準にした次の座標を計算し、500msで移動させる
-  const nextLocation = {
-    lng: sprite.currentLocation.lng + 0.002,
-    lat: sprite.currentLocation.lat,
-  };
-  spriteLayer.updateSprite(spriteId, {
-    location: nextLocation,
-    interpolation: { durationMs: 500, mode: 'feedback' },
+  // クリックされた位置にスプライト画像がある
+  if (sprite) {
+    const { spriteId } = sprite;
+    // クリック位置を基準にした次の座標を計算し、500msで移動させる
+    const nextLocation = {
+      lng: sprite.currentLocation.lng + 0.002,
+      lat: sprite.currentLocation.lat,
+    };
+    spriteLayer.updateSprite(spriteId, {
+      location: nextLocation,
+      interpolation: { durationMs: 500, mode: 'feedback' },
+    });
+  }
+});
+```
+
+ホバーイベントを使えば、ツールチップやハイライトも実現できます。
+
+```typescript
+// MapLibreの地図上をホバーしたときに呼び出される
+spriteLayer.on('spritehover', ({ sprite, image }) => {
+  // スプライト画像が検出されない
+  if (!sprite || !image) {
+    hideTooltip();
+    return;
+  }
+  // スプライトと画像の情報を表示
+  showTooltip({
+    id: sprite.spriteId,
+    imageId: image.imageId,
+    mode: image.mode,
   });
 });
 ```

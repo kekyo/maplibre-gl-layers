@@ -10,55 +10,13 @@ import type {
   SpriteInterpolationOptions,
   SpriteLocation,
 } from './types';
+import type { SpriteInterpolationState } from './internalTypes';
+
 import { cloneSpriteLocation, lerpSpriteLocation } from './location';
 import { resolveEasing } from './easing';
 import { spriteLocationsEqual } from './location';
 
-/**
- * Runtime state describing the active interpolation between two sprite locations.
- * Consumers reuse the same state across ticks to avoid re-allocations while animation is running.
- *
- * @property mode - Strategy used to resolve the target location (feedback or feedforward).
- * @property durationMs - Total time allocated for the interpolation in milliseconds.
- * @property easing - Resolved easing function applied to raw progress values.
- * @property startTimestamp - Epoch millisecond when the interpolation started, or -1 when uninitialised.
- * @property from - Origin sprite location cloned from the current render state.
- * @property to - Destination sprite location being interpolated towards.
- */
-export interface SpriteInterpolationState {
-  readonly mode: SpriteInterpolationMode;
-  readonly durationMs: number;
-  readonly easing: EasingFunction;
-  startTimestamp: number;
-  readonly from: SpriteLocation;
-  readonly to: SpriteLocation;
-}
-
-/**
- * Parameters required to create a fresh interpolation state for the next animation segment.
- *
- * @property currentLocation - Sprite location currently rendered on screen.
- * @property lastCommandLocation - Previously commanded target, used for feedforward extrapolation.
- * @property nextCommandLocation - Upcoming commanded target that the sprite should reach.
- * @property options - Raw interpolation options supplied by the caller.
- */
-export interface CreateInterpolationStateParams {
-  currentLocation: SpriteLocation;
-  lastCommandLocation?: SpriteLocation;
-  nextCommandLocation: SpriteLocation;
-  options: SpriteInterpolationOptions;
-}
-
-/**
- * Result of preparing interpolation state, including a flag denoting whether any lerp is needed.
- *
- * @property state - Prepared interpolation state ready for evaluation.
- * @property requiresInterpolation - Indicates whether lerping is needed or an immediate snap is sufficient.
- */
-export interface CreateInterpolationStateResult {
-  readonly state: SpriteInterpolationState;
-  readonly requiresInterpolation: boolean;
-}
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Computes a feed-forward target by extrapolating the delta between the two most recent locations.
@@ -93,33 +51,61 @@ const computeFeedforwardTarget = (
 };
 
 /**
- * Normalised representation of interpolation options with defaults applied.
+ * Normalized representation of interpolation options with defaults applied.
  *
  * @property durationMs - Clamped non-negative duration in milliseconds.
  * @property mode - Strategy that guides how the destination is computed.
  * @property easing - Optional easing function carried through for later resolution.
  */
-interface NormalisedInterpolationOptions {
+interface NormalizedInterpolationOptions {
   durationMs: number;
   mode: SpriteInterpolationMode;
   easing?: EasingFunction;
 }
 
 /**
- * Normalises raw interpolation options by clamping duration and applying defaults.
+ * Normalizes raw interpolation options by clamping duration and applying defaults.
  *
  * @param options - Caller-provided interpolation options.
  * @returns Options safe for downstream consumption.
  */
-const normaliseOptions = (
+const normalizeOptions = (
   options: SpriteInterpolationOptions
-): NormalisedInterpolationOptions => {
+): NormalizedInterpolationOptions => {
   return {
     durationMs: Math.max(0, options.durationMs),
     mode: options.mode ?? 'feedback',
     easing: options.easing,
   };
 };
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Parameters required to create a fresh interpolation state for the next animation segment.
+ *
+ * @property currentLocation - Sprite location currently rendered on screen.
+ * @property lastCommandLocation - Previously commanded target, used for feedforward extrapolation.
+ * @property nextCommandLocation - Upcoming commanded target that the sprite should reach.
+ * @property options - Raw interpolation options supplied by the caller.
+ */
+export interface CreateInterpolationStateParams {
+  currentLocation: SpriteLocation;
+  lastCommandLocation?: SpriteLocation;
+  nextCommandLocation: SpriteLocation;
+  options: SpriteInterpolationOptions;
+}
+
+/**
+ * Result of preparing interpolation state, including a flag denoting whether any lerp is needed.
+ *
+ * @property state - Prepared interpolation state ready for evaluation.
+ * @property requiresInterpolation - Indicates whether lerping is needed or an immediate snap is sufficient.
+ */
+export interface CreateInterpolationStateResult {
+  readonly state: SpriteInterpolationState;
+  readonly requiresInterpolation: boolean;
+}
 
 /**
  * Creates interpolation state for the next sprite movement and signals if interpolation is necessary.
@@ -131,7 +117,7 @@ export const createInterpolationState = (
   params: CreateInterpolationStateParams
 ): CreateInterpolationStateResult => {
   const { currentLocation, lastCommandLocation, nextCommandLocation } = params;
-  const options = normaliseOptions(params.options);
+  const options = normalizeOptions(params.options);
   const from = cloneSpriteLocation(currentLocation);
   const easing = resolveEasing(options.easing);
 
@@ -158,6 +144,8 @@ export const createInterpolationState = (
 
   return { state, requiresInterpolation };
 };
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Parameters required to evaluate an interpolation tick at a given moment.

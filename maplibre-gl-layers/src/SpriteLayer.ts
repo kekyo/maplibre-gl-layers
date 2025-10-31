@@ -10,7 +10,7 @@
  * Module that manages large numbers of sprites as a custom MapLibre WebGL layer, handling scaling,
  * interpolation animations, and buffer management for parallel rendering.
  * Includes CustomLayerInterface implementations, texture utilities, interpolation logic,
- * ordering rules, and depth-normalisation helpers for avoiding Z-buffer issues.
+ * ordering rules, and depth-normalization helpers for avoiding Z-buffer issues.
  */
 
 import { type Map as MapLibreMap, MercatorCoordinate } from 'maplibre-gl';
@@ -19,7 +19,6 @@ import { vec4, type mat4 } from 'gl-matrix';
 import {
   type SpriteInit,
   type SpriteInitCollection,
-  type SpriteMode,
   type SpriteLayerInterface,
   type SpriteLayerOptions,
   type SpriteTextureFilteringOptions,
@@ -34,13 +33,11 @@ import {
   type SpriteUpdaterEntry,
   type SpriteImageDefinitionInit,
   type SpriteImageDefinitionUpdate,
-  // @prettier-max-ignore-deprecated
-  type SpriteUpdateBulkEntry,
+  type SpriteLayerHoverEvent,
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
   type SpriteImageOffset,
   type SpriteInterpolationOptions,
-  type SpriteNumericInterpolationOptions,
   type SpriteImageOriginLocation,
   type SpriteScreenPoint,
   type SpriteLayerClickEvent,
@@ -50,24 +47,29 @@ import {
   type SpriteTextGlyphHorizontalAlign,
   type SpriteTextGlyphPaddingPixel,
   type SpriteTextGlyphBorderSide,
-  DEFAULT_TEXTURE_FILTERING_OPTIONS,
+  type SpriteImageRegisterOptions,
 } from './types';
-import { loadImageBitmap } from './utils';
+import type {
+  ResolvedTextureFilteringOptions,
+  RegisteredImage,
+  ResolvedTextGlyphPadding,
+  ResolvedBorderSides,
+  ResolvedTextGlyphOptions,
+  MutableSpriteScreenPoint,
+  MatrixInput,
+  ClipContext,
+  Canvas2DContext,
+  Canvas2DSource,
+  InternalSpriteImageState,
+  InternalSpriteCurrentState,
+} from './internalTypes';
+import { loadImageBitmap, SvgSizeResolutionError } from './utils';
 import { cloneSpriteLocation, spriteLocationsEqual } from './location';
 import {
   createInterpolationState,
   evaluateInterpolation,
-  type SpriteInterpolationState,
 } from './interpolation';
-import {
-  createNumericInterpolationState,
-  evaluateNumericInterpolation,
-  type NumericInterpolationState,
-} from './numericInterpolation';
-import {
-  normaliseAngleDeg,
-  resolveRotationTarget,
-} from './rotationInterpolation';
+import { normalizeAngleDeg } from './rotationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
   calculateMetersPerPixelAtLatitude,
@@ -91,6 +93,14 @@ import {
   TRIANGLE_INDICES,
   UV_CORNERS,
 } from './math';
+import {
+  applyOffsetUpdate,
+  clearOffsetDegInterpolation,
+  clearOffsetMetersInterpolation,
+  stepSpriteImageInterpolations,
+  syncImageRotationChannel,
+} from './interpolationChannels';
+import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './const';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -103,7 +113,7 @@ import {
 // * A sprite may contain zero or more images, each with its own SpriteImageDefinition attributes.
 // * When isEnabled is false, the sprite has zero images, every image has opacity 0.0, or all image IDs are invalid,
 //   the sprite can be ignored for the remainder of the pipeline.
-// * When movement interpolation (SpriteInterpolationOptions) is enabled, it operates per sprite (not per image),
+// * When movement interpolation (SpriteLocationInterpolationOptions) is enabled, it operates per sprite (not per image),
 //   producing an interpolated position B relative to the base position A. Rotation angles are not interpolated.
 //   SpriteInterpolationMode supports feedback and feed-forward:
 //   * Feedback: interpolate between the previous and current base locations over durationMs when the position changes.
@@ -181,13 +191,6 @@ const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> = new Set([
   'linear-mipmap-nearest',
   'linear-mipmap-linear',
 ]);
-
-interface ResolvedTextureFilteringOptions {
-  readonly minFilter: SpriteTextureMinFilter;
-  readonly magFilter: SpriteTextureMagFilter;
-  readonly generateMipmaps: boolean;
-  readonly maxAnisotropy: number;
-}
 
 const filterRequiresMipmaps = (filter: SpriteTextureMinFilter): boolean =>
   MIPMAP_MIN_FILTERS.has(filter);
@@ -286,20 +289,6 @@ const resolveGlMagFilter = (
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
-
-/**
- * Compact representation of an Array-like 4x4 matrix.
- * Accepts typed arrays sourced from MapLibre internals.
- */
-type MatrixInput = ArrayLike<number>;
-
-/**
- * Cached clip-space context containing the mercator matrix required to project coordinates.
- * @property {MatrixInput} mercatorMatrix - Matrix mapping Mercator coordinates to clip space.
- */
-type ClipContext = {
-  readonly mercatorMatrix: MatrixInput;
-};
 
 /**
  * Computes the perspective ratio from MapLibre's internal transform.
@@ -497,7 +486,7 @@ export const applyAutoRotation = <T>(
   const resolvedAngleRaw = isFiniteNumber(bearingDeg)
     ? bearingDeg
     : sprite.lastAutoRotationAngleDeg;
-  const resolvedAngle = normaliseAngleDeg(resolvedAngleRaw);
+  const resolvedAngle = normalizeAngleDeg(resolvedAngleRaw);
 
   sprite.images.forEach((orderMap) => {
     orderMap.forEach((image) => {
@@ -506,7 +495,7 @@ export const applyAutoRotation = <T>(
         return;
       }
       image.resolvedBaseRotateDeg = resolvedAngle;
-      updateImageDisplayedRotation(image);
+      syncImageRotationChannel(image);
     });
   });
 
@@ -637,24 +626,6 @@ export const createShaderProgram = (
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * Image metadata ready for use as a WebGL texture.
- * @property {string} id - Unique identifier registered with the MapLibre layer.
- * @property {number} width - Image width in source pixels.
- * @property {number} height - Image height in source pixels.
- * @property {ImageBitmap} bitmap - Backing bitmap used for uploads.
- * @property {WebGLTexture} [texture] - GPU texture bound to the bitmap.
- */
-interface RegisteredImage {
-  id: string;
-  width: number;
-  height: number;
-  bitmap: ImageBitmap;
-  texture: WebGLTexture | undefined;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////
-
 const DEFAULT_TEXT_GLYPH_FONT_FAMILY = 'sans-serif';
 const DEFAULT_TEXT_GLYPH_FONT_STYLE: 'normal' | 'italic' = 'normal';
 const DEFAULT_TEXT_GLYPH_FONT_WEIGHT = 'normal';
@@ -664,37 +635,6 @@ const DEFAULT_TEXT_GLYPH_FONT_SIZE = 32;
 const DEFAULT_TEXT_GLYPH_RENDER_PIXEL_RATIO = 1;
 const MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO = 4;
 const MIN_TEXT_GLYPH_FONT_SIZE = 4;
-
-type ResolvedTextGlyphPadding = {
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
-  readonly left: number;
-};
-
-type ResolvedBorderSides = {
-  readonly top: boolean;
-  readonly right: boolean;
-  readonly bottom: boolean;
-  readonly left: boolean;
-};
-
-interface ResolvedTextGlyphOptions {
-  readonly fontFamily: string;
-  readonly fontStyle: 'normal' | 'italic';
-  readonly fontWeight: string;
-  readonly fontSizePixel: number;
-  readonly color: string;
-  readonly letterSpacingPixel: number;
-  readonly backgroundColor?: string;
-  readonly paddingPixel: ResolvedTextGlyphPadding;
-  readonly borderColor?: string;
-  readonly borderWidthPixel: number;
-  readonly borderRadiusPixel: number;
-  readonly borderSides: ResolvedBorderSides;
-  readonly textAlign: SpriteTextGlyphHorizontalAlign;
-  readonly renderPixelRatio: number;
-}
 
 /**
  * Resolves text padding into a fully populated structure with non-negative values.
@@ -732,7 +672,7 @@ const resolveTextGlyphPadding = (
 };
 
 /**
- * Normalises the border sides definition, defaulting to all sides when unspecified or invalid.
+ * Normalizes the border sides definition, defaulting to all sides when unspecified or invalid.
  * @param {readonly SpriteTextGlyphBorderSide[]} [sides] - Requested border sides.
  * @returns {ResolvedBorderSides} Derived sides ready for rendering.
  */
@@ -905,12 +845,6 @@ const clampGlyphDimension = (value: number): number => {
   const rounded = Math.round(value);
   return rounded > 0 ? rounded : 1;
 };
-
-type Canvas2DContext =
-  | CanvasRenderingContext2D
-  | OffscreenCanvasRenderingContext2D;
-
-type Canvas2DSource = HTMLCanvasElement | OffscreenCanvas;
 
 /**
  * Creates a 2D canvas context using either `OffscreenCanvas` or a DOM canvas as fallback.
@@ -1259,161 +1193,6 @@ const drawTextWithLetterSpacing = (
   }
 };
 
-type MutableSpriteScreenPoint = { x: number; y: number };
-
-/**
- * Base attributes for an image that composes a sprite.
- */
-interface InternalSpriteImageState {
-  /**
-   * Sub-layer identifier.
-   */
-  subLayer: number;
-  /**
-   * Ordering value within the sub-layer.
-   */
-  order: number;
-  /**
-   * Image ID referenced for rendering.
-   */
-  imageId: string;
-  /**
-   * Rendering mode. Defaults to surface.
-   */
-  mode: SpriteMode;
-  /**
-   * Opacity applied to the image alpha. Defaults to 1.0.
-   */
-  opacity: number;
-  /**
-   * Multiplier for real-world meters corresponding to one image pixel. 1.0 = 1 meter. Defaults to 1.0.
-   */
-  scale: number;
-  /**
-   * Anchor position within the sprite. Defaults to [0.0, 0.0].
-   */
-  anchor: SpriteAnchor;
-  /**
-   * Offset from the sprite coordinate. Defaults to no offset.
-   */
-  offset: SpriteImageOffset;
-  /**
-   * Requested rotation angle in degrees. Defaults to 0.
-   * Billboard mode: Clockwise rotation relative to the viewport.
-   * Surface mode: Clockwise azimuth from geographic north.
-   */
-  rotateDeg: number;
-  /**
-   * Rotation currently applied during rendering.
-   */
-  displayedRotateDeg: number;
-  /**
-   * Whether auto-rotation is enabled. Defaults to true in surface mode and false in billboard mode.
-   * The sprite orientation is derived from its movement vector when enabled.
-   */
-  autoRotation: boolean;
-  /**
-   * Minimum distance in meters required before auto-rotation updates. Defaults to 20 m.
-   * Values <= 0 trigger immediate updates.
-   */
-  autoRotationMinDistanceMeters: number;
-  /**
-   * Base rotation determined by auto-rotation. Initially 0.
-   */
-  resolvedBaseRotateDeg: number;
-  /**
-   * Reference sub-layer used as the origin for offsets. Defaults to sprite coordinates.
-   */
-  originLocation?: SpriteImageOriginLocation;
-  /**
-   * Interpolation state for display rotation.
-   */
-  rotationInterpolationState: NumericInterpolationState | null;
-  /**
-   * Default interpolation options for display rotation.
-   */
-  rotationInterpolationOptions: SpriteNumericInterpolationOptions | null;
-  /**
-   * Interpolation state used for offset.offsetDeg.
-   */
-  offsetInterpolationState: NumericInterpolationState | null;
-  /**
-   * Reusable buffer storing screen-space quad corners for hit testing.
-   */
-  hitTestCorners?: [
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-  ];
-}
-
-/**
- * Sprite position interpolation state.
- */
-type InternalSpriteInterpolationState = SpriteInterpolationState;
-
-/**
- * Current sprite state.
- * @param TTag Tag type.
- */
-interface InternalSpriteCurrentState<TTag> {
-  /**
-   * Sprite identifier.
-   */
-  spriteId: string;
-  /**
-   * Whether the sprite is enabled.
-   */
-  isEnabled: boolean;
-  /**
-   * Current location (interpolated position when moving).
-   */
-  currentLocation: SpriteLocation;
-  /**
-   * Source location used for movement interpolation.
-   * Feedback mode: previous command location.
-   * Feed-forward mode: current command location.
-   */
-  fromLocation?: SpriteLocation;
-  /**
-   * Destination location used for movement interpolation.
-   * Feedback mode: current command location.
-   * Feed-forward mode: predicted location.
-   */
-  toLocation?: SpriteLocation;
-  /**
-   * Map of image states currently associated with the sprite.
-   */
-  images: Map<number, Map<number, InternalSpriteImageState>>;
-  /**
-   * Optional tag (null when not set).
-   */
-  tag: TTag | null;
-  /**
-   * Active interpolation state, or null when idle.
-   */
-  interpolationState: InternalSpriteInterpolationState | null;
-  /**
-   * Most recently requested interpolation options, or null if none pending.
-   */
-  pendingInterpolationOptions: SpriteInterpolationOptions | null;
-  /**
-   * Most recently commanded location, regardless of interpolation.
-   */
-  lastCommandLocation: SpriteLocation;
-  /**
-   * Latest location used as the basis for auto-rotation calculation.
-   */
-  lastAutoRotationLocation: SpriteLocation;
-  /**
-   * Last resolved base angle from auto-rotation in degrees, reused as the next initial value.
-   */
-  lastAutoRotationAngleDeg: number;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////
-
 /**
  * Clones an optional origin location descriptor to avoid mutating caller state.
  * @param {SpriteImageOriginLocation} [origin] - Source origin definition.
@@ -1463,42 +1242,7 @@ export const cloneOffset = (offset?: SpriteImageOffset): SpriteImageOffset => {
 };
 
 /**
- * Updates the displayed rotation for an image, optionally using override interpolation options.
- * @param {InternalSpriteImageState} image - Image state to mutate.
- * @param {SpriteNumericInterpolationOptions | null} [optionsOverride] - Temporary interpolation override.
- */
-const updateImageDisplayedRotation = (
-  image: InternalSpriteImageState,
-  optionsOverride?: SpriteNumericInterpolationOptions | null
-): void => {
-  const targetAngle = normaliseAngleDeg(
-    image.resolvedBaseRotateDeg + image.rotateDeg
-  );
-  const currentAngle = Number.isFinite(image.displayedRotateDeg)
-    ? image.displayedRotateDeg
-    : targetAngle;
-
-  const options =
-    optionsOverride === undefined
-      ? image.rotationInterpolationOptions
-      : optionsOverride;
-
-  const { nextAngleDeg, interpolationState } = resolveRotationTarget({
-    currentAngleDeg: currentAngle,
-    targetAngleDeg: targetAngle,
-    options: options ?? undefined,
-  });
-
-  image.displayedRotateDeg = nextAngleDeg;
-  image.rotationInterpolationState = interpolationState;
-
-  if (!interpolationState) {
-    image.displayedRotateDeg = targetAngle;
-  }
-};
-
-/**
- * Deep-clones movement interpolation options to prevent shared references between sprites.
+ * Deep-clones interpolation options to prevent shared references between sprites.
  * @param {SpriteInterpolationOptions} options - Options provided by the user.
  * @returns {SpriteInterpolationOptions} Cloned options object.
  */
@@ -1507,20 +1251,6 @@ export const cloneInterpolationOptions = (
 ): SpriteInterpolationOptions => {
   return {
     mode: options.mode,
-    durationMs: options.durationMs,
-    easing: options.easing,
-  };
-};
-
-/**
- * Deep-clones numeric interpolation options to avoid shared mutable state.
- * @param {SpriteNumericInterpolationOptions} options - Options provided by the user.
- * @returns {SpriteNumericInterpolationOptions} Cloned options object.
- */
-const cloneNumericInterpolationOptions = (
-  options: SpriteNumericInterpolationOptions
-): SpriteNumericInterpolationOptions => {
-  return {
     durationMs: options.durationMs,
     easing: options.easing,
   };
@@ -1540,6 +1270,8 @@ export const createImageStateFromInit = (
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
+  const initialOffset = cloneOffset(imageInit.offset);
+  const initialRotateDeg = normalizeAngleDeg(imageInit.rotateDeg ?? 0);
   const state: InternalSpriteImageState = {
     subLayer,
     order,
@@ -1548,9 +1280,9 @@ export const createImageStateFromInit = (
     opacity: imageInit.opacity ?? 1.0,
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
-    offset: cloneOffset(imageInit.offset),
+    offset: initialOffset,
     rotateDeg: imageInit.rotateDeg ?? 0,
-    displayedRotateDeg: normaliseAngleDeg(imageInit.rotateDeg ?? 0),
+    displayedRotateDeg: initialRotateDeg,
     autoRotation: imageInit.autoRotation ?? autoRotationDefault,
     autoRotationMinDistanceMeters:
       imageInit.autoRotationMinDistanceMeters ??
@@ -1559,16 +1291,20 @@ export const createImageStateFromInit = (
     originLocation: cloneOriginLocation(imageInit.originLocation),
     rotationInterpolationState: null,
     rotationInterpolationOptions: null,
-    offsetInterpolationState: null,
+    offsetDegInterpolationState: null,
+    offsetMetersInterpolationState: null,
+    lastCommandRotateDeg: initialRotateDeg,
+    lastCommandOffsetDeg: initialOffset.offsetDeg,
+    lastCommandOffsetMeters: initialOffset.offsetMeters,
   };
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
-  const rotateInitOption = imageInit.rotationInterpolation?.rotateDeg ?? null;
+  const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
   if (rotateInitOption) {
     state.rotationInterpolationOptions =
-      cloneNumericInterpolationOptions(rotateInitOption);
+      cloneInterpolationOptions(rotateInitOption);
   }
 
-  updateImageDisplayedRotation(state);
+  syncImageRotationChannel(state);
 
   return state;
 };
@@ -1970,7 +1706,7 @@ export const createSpriteLayer = <T = any>(
 
     const totalRotDeg = Number.isFinite(img.displayedRotateDeg)
       ? img.displayedRotateDeg
-      : normaliseAngleDeg(
+      : normalizeAngleDeg(
           (img.resolvedBaseRotateDeg ?? 0) + (img.rotateDeg ?? 0)
         );
     const imageScaleLocal = img.scale ?? 1;
@@ -2233,12 +1969,27 @@ export const createSpriteLayer = <T = any>(
   const inputListenerDisposers: Array<() => void> = [];
 
   /**
+   * Determines if any listeners are registered for the specified event.
+   * @param {SpriteEventKey} type - Event type identifier.
+   * @returns {boolean} `true` when at least one listener exists.
+   */
+  const hasSpriteListeners = (type: SpriteEventKey): boolean =>
+    // Treat missing listener sets as zero, otherwise check the registered count.
+    (eventListeners.get(type)?.size ?? 0) > 0;
+
+  /**
    * Indicates whether any `spriteclick` listeners are registered.
    * @returns {boolean} `true` when at least one click listener exists.
    */
   const hasSpriteClickListeners = (): boolean =>
-    // Treat missing listener sets as zero, otherwise check the registered count.
-    (eventListeners.get('spriteclick')?.size ?? 0) > 0;
+    hasSpriteListeners('spriteclick');
+
+  /**
+   * Indicates whether any `spritehover` listeners are registered.
+   * @returns {boolean} `true` when at least one hover listener exists.
+   */
+  const hasSpriteHoverListeners = (): boolean =>
+    hasSpriteListeners('spritehover');
 
   /**
    * Converts native pointer/touch events into screen-space coordinates relative to the canvas.
@@ -2278,6 +2029,35 @@ export const createSpriteLayer = <T = any>(
   };
 
   /**
+   * Resolves sprite and image state for a hit-test entry.
+   * @param {HitTestEntry} hitEntry - Hit-test entry returned from the lookup.
+   * @returns {{ sprite: SpriteCurrentState<T> | undefined; image: SpriteImageState | undefined }} Sprite/image state pair.
+   */
+  const resolveSpriteEventPayload = (
+    hitEntry: HitTestEntry | null
+  ): {
+    sprite: SpriteCurrentState<T> | undefined;
+    image: SpriteImageState | undefined;
+  } => {
+    if (!hitEntry) {
+      return {
+        sprite: undefined,
+        image: undefined,
+      };
+    }
+    const spriteState = getSpriteState(hitEntry.sprite.spriteId);
+    const imageState =
+      spriteState?.images
+        .get(hitEntry.image.subLayer)
+        ?.get(hitEntry.image.order) ?? undefined;
+
+    return {
+      sprite: spriteState,
+      image: imageState,
+    };
+  };
+
+  /**
    * Dispatches a `spriteclick` event to registered listeners.
    * @param {HitTestEntry} hitEntry - Entry that was hit.
    * @param {SpriteScreenPoint} screenPoint - Screen-space location of the click.
@@ -2294,18 +2074,12 @@ export const createSpriteLayer = <T = any>(
       return;
     }
 
-    const spriteState = getSpriteState(hitEntry.sprite.spriteId);
-    // Skip dispatch if the sprite was removed between hit-test collection and event handling.
-    if (!spriteState) {
-      return;
-    }
-
-    const imageState = hitEntry.image as unknown as SpriteImageState;
+    const payload = resolveSpriteEventPayload(hitEntry);
 
     const clickEvent: SpriteLayerClickEvent<T> = {
       type: 'spriteclick',
-      sprite: spriteState,
-      image: imageState,
+      sprite: payload.sprite,
+      image: payload.image,
       screenPoint,
       originalEvent,
     };
@@ -2316,34 +2090,95 @@ export const createSpriteLayer = <T = any>(
   };
 
   /**
+   * Dispatches a `spritehover` event to registered listeners.
+   * @param {HitTestEntry} hitEntry - Entry that was hit.
+   * @param {SpriteScreenPoint} screenPoint - Screen-space location of the hover.
+   * @param {MouseEvent | PointerEvent} originalEvent - Native input event.
+   */
+  const dispatchSpriteHover = (
+    hitEntry: HitTestEntry | null,
+    screenPoint: SpriteScreenPoint,
+    originalEvent: MouseEvent | PointerEvent
+  ): void => {
+    const listeners = eventListeners.get('spritehover');
+    // When no listeners are registered, short-circuit without doing extra work.
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+
+    const payload = resolveSpriteEventPayload(hitEntry);
+
+    const hoverEvent: SpriteLayerHoverEvent<T> = {
+      type: 'spritehover',
+      sprite: payload.sprite,
+      image: payload.image,
+      screenPoint,
+      originalEvent,
+    };
+
+    listeners.forEach((listener) => {
+      (listener as SpriteLayerEventListener<T, 'spritehover'>)(hoverEvent);
+    });
+  };
+
+  /**
+   * Resolves hit-test information for a native event.
+   * @param {MouseEvent | PointerEvent | TouchEvent} nativeEvent - Original browser event.
+   * @returns {{ hitEntry: HitTestEntry; screenPoint: SpriteScreenPoint } | null} Hit-test result or `null`.
+   */
+  const resolveHitTestResult = (
+    nativeEvent: MouseEvent | PointerEvent | TouchEvent
+  ): {
+    hitEntry: HitTestEntry | null;
+    screenPoint: SpriteScreenPoint;
+  } | null => {
+    const screenPoint = resolveScreenPointFromEvent(nativeEvent);
+    // Input may lack coordinates (e.g., touchend without touches); abort hit-testing in that case.
+    if (!screenPoint) {
+      return null;
+    }
+
+    const hitEntry = findTopmostHitEntry(screenPoint);
+    // No sprites intersected the event point; nothing to dispatch.
+    return { hitEntry: hitEntry ?? null, screenPoint };
+  };
+
+  /**
    * Handles pointer/touch events to trigger sprite click callbacks when matches are found.
    * @param {MouseEvent | PointerEvent | TouchEvent} nativeEvent - Original browser event.
    */
-  const processInteractionEvent = (
+  const processClickEvent = (
     nativeEvent: MouseEvent | PointerEvent | TouchEvent
   ): void => {
     // Skip work entirely when no listeners are interested in click events.
     if (!hasSpriteClickListeners()) {
       return;
     }
-    // No hit-test entries means nothing is interactable during this frame.
-    if (hitTestEntries.length === 0) {
+
+    const hitResult = resolveHitTestResult(nativeEvent);
+    if (!hitResult || !hitResult.hitEntry) {
       return;
     }
 
-    const screenPoint = resolveScreenPointFromEvent(nativeEvent);
-    // Input may lack coordinates (e.g., touchend without touches); abort hit-testing in that case.
-    if (!screenPoint) {
+    dispatchSpriteClick(hitResult.hitEntry, hitResult.screenPoint, nativeEvent);
+  };
+
+  /**
+   * Handles pointer/mouse move events to trigger sprite hover callbacks.
+   * @param {MouseEvent | PointerEvent} nativeEvent - Original browser hover event.
+   */
+  const processHoverEvent = (nativeEvent: MouseEvent | PointerEvent): void => {
+    // Skip work entirely when no listeners are interested in hover events.
+    if (!hasSpriteHoverListeners()) {
       return;
     }
 
-    const hitEntry = findTopmostHitEntry(screenPoint);
-    // No sprites intersected the event point; nothing to dispatch.
-    if (!hitEntry) {
+    const hitResult = resolveHitTestResult(nativeEvent);
+    if (!hitResult) {
       return;
     }
 
-    dispatchSpriteClick(hitEntry, screenPoint, nativeEvent);
+    dispatchSpriteHover(hitResult.hitEntry, hitResult.screenPoint, nativeEvent);
   };
 
   //////////////////////////////////////////////////////////////////////////
@@ -2579,18 +2414,39 @@ export const createSpriteLayer = <T = any>(
     // Only attach DOM listeners when a canvas is present.
     if (canvasElement) {
       if (supportsPointerEvents) {
-        const pointerListener = (event: PointerEvent) => {
+        const pointerUpListener = (event: PointerEvent) => {
           if (event.pointerType === 'mouse' && event.button !== 0) {
             // Ignore non-primary mouse buttons to match click semantics.
             return;
           }
-          processInteractionEvent(event);
+          processClickEvent(event);
         };
-        canvasElement.addEventListener('pointerup', pointerListener, {
+        canvasElement.addEventListener('pointerup', pointerUpListener, {
           passive: true,
         });
         registerDisposer(() => {
-          canvasElement?.removeEventListener('pointerup', pointerListener);
+          canvasElement?.removeEventListener('pointerup', pointerUpListener);
+        });
+
+        const pointerMoveListener = (event: PointerEvent) => {
+          if (!event.isPrimary) {
+            // Secondary pointers are ignored to reduce duplicate hover dispatch.
+            return;
+          }
+          if (event.pointerType === 'touch') {
+            // Touch pointers do not support hover semantics.
+            return;
+          }
+          processHoverEvent(event);
+        };
+        canvasElement.addEventListener('pointermove', pointerMoveListener, {
+          passive: true,
+        });
+        registerDisposer(() => {
+          canvasElement?.removeEventListener(
+            'pointermove',
+            pointerMoveListener
+          );
         });
       } else {
         const clickListener = (event: MouseEvent) => {
@@ -2598,7 +2454,7 @@ export const createSpriteLayer = <T = any>(
             // Only respond to primary button clicks when pointer events are unavailable.
             return;
           }
-          processInteractionEvent(event);
+          processClickEvent(event);
         };
         canvasElement.addEventListener('click', clickListener, {
           passive: true,
@@ -2608,13 +2464,23 @@ export const createSpriteLayer = <T = any>(
         });
 
         const touchListener = (event: TouchEvent) => {
-          processInteractionEvent(event);
+          processClickEvent(event);
         };
         canvasElement.addEventListener('touchend', touchListener, {
           passive: true,
         });
         registerDisposer(() => {
           canvasElement?.removeEventListener('touchend', touchListener);
+        });
+
+        const mouseMoveListener = (event: MouseEvent) => {
+          processHoverEvent(event);
+        };
+        canvasElement.addEventListener('mousemove', mouseMoveListener, {
+          passive: true,
+        });
+        registerDisposer(() => {
+          canvasElement?.removeEventListener('mousemove', mouseMoveListener);
         });
       }
     }
@@ -2804,48 +2670,8 @@ export const createSpriteLayer = <T = any>(
 
       sprite.images.forEach((orderMap) => {
         orderMap.forEach((image) => {
-          const rotationState = image.rotationInterpolationState;
-          // Re-sample rotation interpolation when configured.
-          if (rotationState) {
-            const evaluation = evaluateNumericInterpolation({
-              state: rotationState,
-              timestamp,
-            });
-            // Align rotation interpolation start time on the first frame.
-            if (rotationState.startTimestamp < 0) {
-              rotationState.startTimestamp = evaluation.effectiveStartTimestamp;
-            }
-            image.displayedRotateDeg = normaliseAngleDeg(evaluation.value);
-            if (evaluation.completed) {
-              // Store final rotation and tear down interpolation state once complete.
-              image.displayedRotateDeg = normaliseAngleDeg(
-                rotationState.finalValue
-              );
-              image.rotationInterpolationState = null;
-            } else {
-              hasActiveInterpolation = true;
-            }
-          }
-
-          const offsetState = image.offsetInterpolationState;
-          // Apply offset angular interpolation if declared.
-          if (offsetState) {
-            const evaluation = evaluateNumericInterpolation({
-              state: offsetState,
-              timestamp,
-            });
-            // Same initialization step for offset interpolation timestamps.
-            if (offsetState.startTimestamp < 0) {
-              offsetState.startTimestamp = evaluation.effectiveStartTimestamp;
-            }
-            image.offset.offsetDeg = evaluation.value;
-            if (evaluation.completed) {
-              // When finished, lock in the final offset and clear state.
-              image.offset.offsetDeg = offsetState.finalValue;
-              image.offsetInterpolationState = null;
-            } else {
-              hasActiveInterpolation = true;
-            }
+          if (stepSpriteImageInterpolations(image, timestamp)) {
+            hasActiveInterpolation = true;
           }
         });
       });
@@ -2933,7 +2759,7 @@ export const createSpriteLayer = <T = any>(
       // Prefer the dynamically interpolated rotation when available; otherwise synthesize it from base + manual rotations.
       const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
         ? imageEntry.displayedRotateDeg
-        : normaliseAngleDeg(
+        : normalizeAngleDeg(
             (imageEntry.resolvedBaseRotateDeg ?? 0) +
               (imageEntry.rotateDeg ?? 0)
           );
@@ -3362,7 +3188,7 @@ export const createSpriteLayer = <T = any>(
           );
           const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
             ? imageEntry.displayedRotateDeg
-            : normaliseAngleDeg(
+            : normalizeAngleDeg(
                 (imageEntry.resolvedBaseRotateDeg ?? 0) +
                   (imageEntry.rotateDeg ?? 0)
               );
@@ -3511,18 +3337,32 @@ export const createSpriteLayer = <T = any>(
    * Registers an image URL or existing ImageBitmap with the image registry.
    * @param {string} imageId - Image identifier used by sprites.
    * @param {string | ImageBitmap} imageSource - Image URL or existing ImageBitmap to load.
+   * @param {SpriteImageRegisterOptions | undefined} [options] - Optional controls for SVG rasterization.
    * @returns {Promise<boolean>} Resolves to `true` when registered; `false` if the ID already exists.
    * @remarks Sprites must register images before referencing them.
    */
   const registerImage = async (
     imageId: string,
-    imageSource: string | ImageBitmap
+    imageSource: string | ImageBitmap,
+    options?: SpriteImageRegisterOptions
   ): Promise<boolean> => {
     // Load from URL when given a string; otherwise reuse the provided bitmap directly.
-    const bitmap =
-      typeof imageSource === 'string'
-        ? await loadImageBitmap(imageSource)
-        : imageSource;
+    let bitmap: ImageBitmap;
+    try {
+      bitmap =
+        typeof imageSource === 'string'
+          ? await loadImageBitmap(imageSource, options)
+          : imageSource;
+    } catch (error) {
+      if (error instanceof SvgSizeResolutionError) {
+        console.warn(
+          `[SpriteLayer] Unable to register image "${imageId}": ${error.message}`,
+          error
+        );
+        return false;
+      }
+      throw error;
+    }
     // Reject duplicate registrations to keep texture management consistent.
     if (images.has(imageId)) {
       // Avoid overwriting an existing texture registration using the same identifier.
@@ -3961,7 +3801,7 @@ export const createSpriteLayer = <T = any>(
   /**
    * Expands a batch sprite payload into iterable entries.
    * @param {SpriteInitCollection<T>} collection - Batch payload.
-   * @returns {Array<[string, SpriteInit<T>]>} Normalised entries.
+   * @returns {Array<[string, SpriteInit<T>]>} Normalized entries.
    */
   const resolveSpriteInitCollection = (
     collection: SpriteInitCollection<T>
@@ -4190,7 +4030,7 @@ export const createSpriteLayer = <T = any>(
       state.resolvedBaseRotateDeg = sprite.lastAutoRotationAngleDeg;
     }
 
-    updateImageDisplayedRotation(state);
+    syncImageRotationChannel(state);
 
     setImageState(sprite, state);
     resultOut.isUpdated = true;
@@ -4278,40 +4118,29 @@ export const createSpriteLayer = <T = any>(
     if (imageUpdate.anchor !== undefined) {
       state.anchor = cloneAnchor(imageUpdate.anchor);
     }
-    const rotationInterpolation = imageUpdate.rotationInterpolation;
+    const interpolationOptions = imageUpdate.interpolation;
     // Optional interpolation payloads allow independent control over offset and rotation animations.
-    const offsetInterpolationOption = rotationInterpolation?.offsetDeg;
+    const offsetDegInterpolationOption = interpolationOptions?.offsetDeg;
+    const offsetMetersInterpolationOption = interpolationOptions?.offsetMeters;
     // Pull out rotateDeg interpolation hints when the payload includes them.
-    const rotateInterpolationOption = rotationInterpolation?.rotateDeg;
-    let rotationOverride: SpriteNumericInterpolationOptions | null | undefined;
+    const rotateInterpolationOption = interpolationOptions?.rotateDeg;
+    let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
     if (imageUpdate.offset !== undefined) {
-      const newOffset = cloneOffset(imageUpdate.offset);
-      if (
-        offsetInterpolationOption &&
-        offsetInterpolationOption.durationMs > 0
-      ) {
-        const { state: interpolationState, requiresInterpolation } =
-          createNumericInterpolationState({
-            currentValue: state.offset.offsetDeg,
-            targetValue: newOffset.offsetDeg,
-            options: offsetInterpolationOption,
-          });
-        if (requiresInterpolation) {
-          state.offset.offsetMeters = newOffset.offsetMeters;
-          state.offsetInterpolationState = interpolationState;
-        } else {
-          state.offset = newOffset;
-          state.offsetInterpolationState = null;
-        }
-      } else {
-        // No animation requested: adopt the new offset immediately.
-        state.offset = newOffset;
-        state.offsetInterpolationState = null;
+      const clonedOffset = cloneOffset(imageUpdate.offset);
+      applyOffsetUpdate(state, clonedOffset, {
+        deg: offsetDegInterpolationOption,
+        meters: offsetMetersInterpolationOption,
+      });
+    } else {
+      if (offsetDegInterpolationOption === null) {
+        // Explicit null clears any running angular interpolation.
+        clearOffsetDegInterpolation(state);
       }
-    } else if (offsetInterpolationOption === null) {
-      // Explicit null clears any running offset interpolation.
-      state.offsetInterpolationState = null;
+      if (offsetMetersInterpolationOption === null) {
+        // Explicit null clears any running distance interpolation.
+        clearOffsetMetersInterpolation(state);
+      }
     }
     if (rotateInterpolationOption !== undefined) {
       // Caller supplied new rotation interpolation preferences.
@@ -4319,9 +4148,7 @@ export const createSpriteLayer = <T = any>(
         state.rotationInterpolationOptions = null;
         rotationOverride = null;
       } else {
-        const cloned = cloneNumericInterpolationOptions(
-          rotateInterpolationOption
-        );
+        const cloned = cloneInterpolationOptions(rotateInterpolationOption);
         state.rotationInterpolationOptions = cloned;
         rotationOverride = cloned;
       }
@@ -4371,7 +4198,7 @@ export const createSpriteLayer = <T = any>(
 
     if (requireRotationSync) {
       // Ensure displayed angle reflects the latest base rotation and overrides.
-      updateImageDisplayedRotation(
+      syncImageRotationChannel(
         state,
         // When a rotation override has been computed, pass it along (null clears interpolation); otherwise leave undefined.
         hasRotationOverride ? (rotationOverride ?? null) : undefined
@@ -4668,51 +4495,6 @@ export const createSpriteLayer = <T = any>(
         return true;
     }
   };
-
-  /**
-   * Applies multiple sprite updates in bulk.
-   * @param {SpriteUpdateBulkEntry<T>[]} updateBulkList - Array of updates to apply sequentially.
-   * @returns {number} Number of sprites that changed.
-   * @deprecated Use {@link SpriteLayerInterface.mutateSprites} for clearer mutation flows.
-   */
-  const updateBulk = (updateBulkList: SpriteUpdateBulkEntry<T>[]): number => {
-    let updatedCount = 0;
-    let isRequiredRender = false;
-
-    // Apply updates in sequence.
-    updateBulkList.forEach((update) => {
-      const result = updateSpriteInternal(update.spriteId, update);
-
-      switch (result) {
-        case 'notfound':
-        // Sprite missing; nothing to do for this entry.
-        case 'ignored':
-          break;
-        case 'updated':
-          // State changed without requiring an immediate redraw.
-          updatedCount++;
-          break;
-        // When rendering must occur because of this update
-        case 'isRequiredRender':
-          // Refresh render targets.
-          ensureRenderTargetEntries();
-          // Request a redraw so changes appear immediately.
-          scheduleRender();
-          updatedCount++;
-          isRequiredRender = true;
-          break;
-      }
-    });
-
-    // If any update required rendering,
-    if (isRequiredRender) {
-      // At least one update demanded a redraw; refresh buffers once more after the batch.
-      ensureRenderTargetEntries();
-      scheduleRender();
-    }
-
-    return updatedCount;
-  };
   /**
    * Adds, updates, or removes sprites based on arbitrary source items.
    * @template TSourceItem Source item type that exposes a sprite identifier.
@@ -4738,6 +4520,10 @@ export const createSpriteLayer = <T = any>(
       isUpdated: false,
     };
     const updateObject: SpriteUpdaterEntry<T> = {
+      isEnabled: undefined,
+      location: undefined,
+      interpolation: undefined,
+      tag: undefined,
       getImageIndexMap: () => {
         const map = new Map<number, Set<number>>();
         currentSprite.images.forEach((inner, subLayer) => {
@@ -4980,7 +4766,6 @@ export const createSpriteLayer = <T = any>(
     updateSpriteImage,
     removeSpriteImage,
     updateSprite,
-    updateBulk,
     mutateSprites,
     updateForEach,
     on: addEventListener,

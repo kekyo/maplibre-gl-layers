@@ -9,12 +9,14 @@ import {
 import type {
   SpriteMode,
   SpriteLayerClickEvent,
+  SpriteLayerHoverEvent,
   SpriteInterpolationMode,
   SpriteAnchor,
-  SpriteImageRotationInterpolationOptions,
+  SpriteImageInterpolationOptions,
   SpriteImageDefinitionUpdate,
   SpriteInitEntry,
   SpriteTextGlyphOptions,
+  SpriteImageRegisterOptions,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -168,6 +170,8 @@ const SECONDARY_IMAGE_SCALE = 0.5;
 const SECONDARY_ORBIT_RADIUS_METERS = 180;
 /** Angular increment in degrees applied to the orbiting image during each step. */
 const SECONDARY_ORBIT_STEP_DEG = 20;
+/** Fixed angle (deg) used when the orbit mode is set to Shift. */
+const SECONDARY_SHIFT_ANGLE_DEG = 120;
 
 /** Threshold used to ignore tiny values near zero introduced by floating point error. */
 const EPSILON_DELTA = 1e-12;
@@ -178,13 +182,35 @@ const ASSUMED_FRAME_TIME_MS = 1000 / 60;
 /** Factor that converts timer steps into frame-equivalent movement. */
 const MOVEMENT_STEP_FACTOR = MOVEMENT_INTERVAL_MS / ASSUMED_FRAME_TIME_MS;
 
+/** Minimum multiplier applied to sprite movement speed. */
+const MOVEMENT_SPEED_SCALE_MIN = 0;
+/** Maximum multiplier applied to sprite movement speed. */
+const MOVEMENT_SPEED_SCALE_MAX = 3;
+/** Slider increment for the movement speed control. */
+const MOVEMENT_SPEED_SCALE_STEP = 0.05;
+/** Default movement speed multiplier. */
+const DEFAULT_MOVEMENT_SPEED_SCALE = 1;
+
 /** Fraction of the icon height occupied by the arrow head near the top edge. */
 const ARROW_HEAD_TOP_FRACTION = 0.085;
 /** Anchor y-position that aligns the arrow tip with the ground in billboard mode. */
 const BILLBOARD_PRIMARY_ANCHOR_Y = 1 - 2 * ARROW_HEAD_TOP_FRACTION;
 
 /** Interaction states that control if and how the secondary image orbits the primary marker. */
-type SecondaryOrbitMode = 'hidden' | 'center' | 'orbit';
+type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+/** Formats the movement speed multiplier for HUD display. */
+const formatMovementSpeedScale = (scale: number): string => {
+  if (scale <= 0) {
+    return '0×';
+  }
+  if (scale >= 1) {
+    return `${scale.toFixed(1)}×`;
+  }
+  return `${scale.toFixed(2)}×`;
+};
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -416,22 +442,32 @@ let currentSpriteMode: SpriteMode = 'surface';
 let isAutoRotationEnabled = true;
 /** Enables movement interpolation; when false, updates happen per step only. */
 let isMovementInterpolationEnabled = true;
-/** Current interpolation mode. */
-let currentInterpolationMode: SpriteInterpolationMode = 'feedback';
+/** Interpolation mode applied to sprite location updates. */
+let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
 let isRotateInterpolationEnabled = true;
+/** Interpolation mode applied to primary image rotation. */
+let rotateInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Height mode used for arrow icons. */
 let currentArrowShapeMode: IconHeightMode = 'elongated';
-/** Flag indicating whether the movement timer is active. */
-let isMovementLoopEnabled = true;
+/** Global multiplier applied to sprite movement speed. */
+let movementSpeedScale = DEFAULT_MOVEMENT_SPEED_SCALE;
 /** Mode for the secondary image (e.g., orbiting satellite indicator). */
 let currentSecondaryImageOrbitMode: SecondaryOrbitMode = 'hidden';
 /** Currently selected secondary image type. */
 let currentSecondaryImageType: SecondaryImageType = 'box';
-/** Whether we interpolate the offset angle of the secondary image. */
-let isOrbitInterpolationEnabled = true;
+/** Whether we interpolate the orbital angle of the secondary image. */
+let isOrbitDegInterpolationEnabled = true;
+/** Whether we interpolate the orbital distance of the secondary image. */
+let isOrbitMetersInterpolationEnabled = true;
+/** Interpolation mode applied to orbital angle changes. */
+let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
+/** Interpolation mode applied to orbital distance changes. */
+let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
+/** UI updater for the movement speed slider. */
+let updateMovementSpeedUI: ((scale: number) => void) | undefined;
 /** Indicates whether supplemental images have been registered. */
 let isSecondaryImageReady = false;
 /** UI updater for the secondary-image toggle buttons. */
@@ -440,19 +476,27 @@ let updateSecondaryImageButtons: (() => void) | undefined;
 let updateSecondaryImageTypeButtons: (() => void) | undefined;
 /** UI updater for the rotate-interpolation toggle. */
 let updateRotateInterpolationButton: (() => void) | undefined;
-/** UI updater for the orbit-interpolation toggle. */
-let updateOrbitInterpolationButton: (() => void) | undefined;
+/** UI updater for the orbit degree interpolation toggle. */
+let updateOrbitDegInterpolationButton: (() => void) | undefined;
+/** UI updater for the orbit meters interpolation toggle. */
+let updateOrbitMetersInterpolationButton: (() => void) | undefined;
 /** Rotation angle in degrees for secondary images. */
 let secondaryImageOrbitDegrees = 0;
-/** UI updater for the movement toggle. */
-let updateMovementToggleButton: (() => void) | undefined;
+/** UI updater for the location interpolation toggle. */
+let updateLocationInterpolationButton: (() => void) | undefined;
 
 /**
  * Template that builds the application HUD.
  * @returns {string} HTML string inserted into the root element.
  */
 const createHud = () => {
-  const feedforwardEnabled = currentInterpolationMode === 'feedforward';
+  const locationFeedforwardEnabled =
+    locationInterpolationMode === 'feedforward';
+  const rotateFeedforwardEnabled = rotateInterpolationMode === 'feedforward';
+  const orbitDegFeedforwardEnabled =
+    orbitOffsetDegInterpolationMode === 'feedforward';
+  const orbitMetersFeedforwardEnabled =
+    orbitOffsetMetersInterpolationMode === 'feedforward';
   return `
     <div id="map" data-testid="map-canvas"></div>
     <aside id="panel" data-testid="panel-info">
@@ -511,7 +555,7 @@ const createHud = () => {
           data-selected-placeholder
           data-testid="selected-placeholder"
         >
-          Click a sprite to view its details here.
+          Hover a sprite to view its details here.
         </p>
         <div data-selected-details hidden data-testid="selected-details">
           <div class="status-row" data-testid="selected-row-id">
@@ -614,21 +658,29 @@ const createHud = () => {
       </div>
       <div class="control-group" data-testid="group-movement-loop">
         <h1>Move Location</h1>
-        <button
-          type="button"
-          class="toggle-button${isMovementLoopEnabled ? ' active' : ''}"
-          data-control="movement-toggle"
-          data-label="Movement"
-          data-active-text="On"
-          data-inactive-text="Off"
-          aria-pressed="${isMovementLoopEnabled}"
-          data-testid="toggle-movement"
-        >
-          Movement: ${isMovementLoopEnabled ? 'On' : 'Off'}
-        </button>
-      </div>
-      <div class="control-group" data-testid="group-animation">
-        <h1>Animation</h1>
+        <label class="range-label" for="movement-speed-slider">
+          Speed
+          <span
+            class="range-value"
+            data-status="movement-speed"
+            data-testid="status-movement-speed"
+          >${formatMovementSpeedScale(DEFAULT_MOVEMENT_SPEED_SCALE)}</span>
+        </label>
+        <input
+          type="range"
+          id="movement-speed-slider"
+          class="range-input"
+          min="${MOVEMENT_SPEED_SCALE_MIN}"
+          max="${MOVEMENT_SPEED_SCALE_MAX}"
+          step="${MOVEMENT_SPEED_SCALE_STEP}"
+          value="${DEFAULT_MOVEMENT_SPEED_SCALE}"
+          data-control="movement-speed"
+          data-testid="slider-movement-speed"
+          aria-valuemin="${MOVEMENT_SPEED_SCALE_MIN}"
+          aria-valuemax="${MOVEMENT_SPEED_SCALE_MAX}"
+          aria-valuenow="${DEFAULT_MOVEMENT_SPEED_SCALE}"
+          aria-label="Sprite movement speed"
+        />
         <button type="button" class="toggle-button${currentAnimationMode === 'random' ? ' active' : ''}" data-control="animation-mode" data-option="random" data-label="Random Walk" aria-pressed="${currentAnimationMode === 'random'}" data-testid="toggle-animation-random">
           Random Walk
         </button>
@@ -637,7 +689,7 @@ const createHud = () => {
         </button>
       </div>
       <div class="control-group" data-testid="group-sprite-count">
-        <h1>Sprite Count</h1>
+        <h1>Sprite</h1>
         <label class="range-label" for="sprite-count-slider">
           Active
           <span
@@ -667,12 +719,6 @@ const createHud = () => {
           aria-valuenow="${INITIAL_NUMBER_OF_SPRITES}"
           aria-label="Active sprite count limit"
         />
-        <p class="control-hint" data-testid="hint-sprite-count">
-          Preloads ${INITIAL_NUMBER_OF_SPRITES} sprites; the slider tops out at ${MAX_NUMBER_OF_SPRITES}.
-        </p>
-      </div>
-      <div class="control-group" data-testid="group-sprite-mode">
-        <h1>Sprite Mode</h1>
         <button
           type="button"
           class="toggle-button${currentSpriteMode === 'billboard' ? ' active' : ''}"
@@ -688,36 +734,64 @@ const createHud = () => {
           }
         </button>
       </div>
-      <div class="control-group" data-testid="group-auto-rotation">
-        <h1>Auto rotation</h1>
-        <button
-          type="button"
-          class="toggle-button${isAutoRotationEnabled ? ' active' : ''}"
-          data-control="auto-rotation-toggle"
-          data-label="Auto rotation"
-          data-active-text="ON"
-          data-inactive-text="OFF"
-          aria-pressed="${isAutoRotationEnabled}"
-          data-testid="toggle-auto-rotation"
-        >
-          Auto rotation: ${isAutoRotationEnabled ? 'ON' : 'OFF'}
-        </button>
-      </div>
-      <div class="control-group" data-testid="group-interpolation">
-        <h1>Interpolation</h1>
+      <div class="control-group" data-testid="group-location-interpolation">
+        <h1>Location interpolation</h1>
         <div>
           <button
             type="button"
             class="toggle-button${isMovementInterpolationEnabled ? ' active' : ''}"
-            data-control="interpolation-toggle"
+            data-control="location-interpolation-toggle"
             data-label="Move Interpolation"
             data-active-text="On"
             data-inactive-text="Off"
             aria-pressed="${isMovementInterpolationEnabled}"
-            data-testid="toggle-interpolation"
+            data-testid="toggle-location-interpolation"
           >
             Move Interpolation: ${isMovementInterpolationEnabled ? 'On' : 'Off'}
           </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${locationFeedforwardEnabled ? '' : ' active'}"
+            data-control="location-interpolation-mode"
+            data-option="feedback"
+            data-label="Feedback"
+            aria-pressed="${locationFeedforwardEnabled ? 'false' : 'true'}"
+            data-testid="toggle-location-feedback"
+          >
+            Feedback
+          </button>
+          <button
+            type="button"
+            class="toggle-button${locationFeedforwardEnabled ? ' active' : ''}"
+            data-control="location-interpolation-mode"
+            data-option="feedforward"
+            data-label="Feedforward"
+            aria-pressed="${locationFeedforwardEnabled ? 'true' : 'false'}"
+            data-testid="toggle-location-feedforward"
+          >
+            Feedforward
+          </button>
+        </div>
+      </div>
+      <div class="control-group" data-testid="group-rotation-interpolation">
+        <h1>Rotation</h1>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${isAutoRotationEnabled ? ' active' : ''}"
+            data-control="auto-rotation-toggle"
+            data-label="Auto rotation"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${isAutoRotationEnabled}"
+            data-testid="toggle-auto-rotation"
+          >
+            Auto rotation: ${isAutoRotationEnabled ? 'ON' : 'OFF'}
+          </button>
+        </div>
+        <div>
           <button
             type="button"
             class="toggle-button${isRotateInterpolationEnabled ? ' active' : ''}"
@@ -734,23 +808,23 @@ const createHud = () => {
         <div>
           <button
             type="button"
-            class="toggle-button${feedforwardEnabled ? '' : ' active'}"
-            data-control="interpolation-mode"
+            class="toggle-button${rotateFeedforwardEnabled ? '' : ' active'}"
+            data-control="rotate-interpolation-mode"
             data-option="feedback"
             data-label="Feedback"
-            aria-pressed="${feedforwardEnabled ? 'false' : 'true'}"
-            data-testid="toggle-interpolation-feedback"
+            aria-pressed="${rotateFeedforwardEnabled ? 'false' : 'true'}"
+            data-testid="toggle-rotate-feedback"
           >
             Feedback
           </button>
           <button
             type="button"
-            class="toggle-button${feedforwardEnabled ? ' active' : ''}"
-            data-control="interpolation-mode"
+            class="toggle-button${rotateFeedforwardEnabled ? ' active' : ''}"
+            data-control="rotate-interpolation-mode"
             data-option="feedforward"
             data-label="Feedforward"
-            aria-pressed="${feedforwardEnabled ? 'true' : 'false'}"
-            data-testid="toggle-interpolation-feedforward"
+            aria-pressed="${rotateFeedforwardEnabled ? 'true' : 'false'}"
+            data-testid="toggle-rotate-feedforward"
           >
             Feedforward
           </button>
@@ -801,10 +875,20 @@ const createHud = () => {
             data-option="center"
             data-label="Center"
             aria-pressed="${currentSecondaryImageOrbitMode === 'center'}"
-            disabled
             data-testid="toggle-secondary-center"
           >
             Center
+          </button>
+          <button
+            type="button"
+            class="toggle-button${currentSecondaryImageOrbitMode === 'shift' ? ' active' : ''}"
+            data-control="secondary-image-mode"
+            data-option="shift"
+            data-label="Shift"
+            aria-pressed="${currentSecondaryImageOrbitMode === 'shift'}"
+            data-testid="toggle-secondary-shift"
+          >
+            Shift
           </button>
           <button
             type="button"
@@ -813,24 +897,89 @@ const createHud = () => {
             data-option="orbit"
             data-label="Orbit"
             aria-pressed="${currentSecondaryImageOrbitMode === 'orbit'}"
-            disabled
             data-testid="toggle-secondary-orbit"
           >
             Orbit
           </button>
         </div>
+        <div class="secondary-interpolation-group">
+          <button
+            type="button"
+            class="toggle-button${isOrbitDegInterpolationEnabled ? ' active' : ''}"
+            data-control="orbit-deg-interpolation-toggle"
+            data-label="Orbit Degree Interpolation"
+            data-active-text="On"
+            data-inactive-text="Off"
+            aria-pressed="${isOrbitDegInterpolationEnabled}"
+            data-testid="toggle-orbit-deg-interpolation"
+          >
+            Orbit Degree Interpolation: ${
+              isOrbitDegInterpolationEnabled ? 'On' : 'Off'
+            }
+          </button>
+        </div>
         <div>
           <button
             type="button"
-            class="toggle-button${isOrbitInterpolationEnabled ? ' active' : ''}"
-            data-control="orbit-interpolation-toggle"
-            data-label="Orbit Interpolation"
+            class="toggle-button${orbitDegFeedforwardEnabled ? '' : ' active'}"
+            data-control="orbit-deg-interpolation-mode"
+            data-option="feedback"
+            data-label="Feedback"
+            aria-pressed="${orbitDegFeedforwardEnabled ? 'false' : 'true'}"
+            data-testid="toggle-orbit-deg-feedback"
+          >
+            Feedback
+          </button>
+          <button
+            type="button"
+            class="toggle-button${orbitDegFeedforwardEnabled ? ' active' : ''}"
+            data-control="orbit-deg-interpolation-mode"
+            data-option="feedforward"
+            data-label="Feedforward"
+            aria-pressed="${orbitDegFeedforwardEnabled ? 'true' : 'false'}"
+            data-testid="toggle-orbit-deg-feedforward"
+          >
+            Feedforward
+          </button>
+        </div>
+        <div class="secondary-interpolation-group">
+          <button
+            type="button"
+            class="toggle-button${isOrbitMetersInterpolationEnabled ? ' active' : ''}"
+            data-control="orbit-meters-interpolation-toggle"
+            data-label="Orbit Meters Interpolation"
             data-active-text="On"
             data-inactive-text="Off"
-            aria-pressed="${isOrbitInterpolationEnabled}"
-            data-testid="toggle-orbit-interpolation"
+            aria-pressed="${isOrbitMetersInterpolationEnabled}"
+            data-testid="toggle-orbit-meters-interpolation"
           >
-            Orbit Interpolation: ${isOrbitInterpolationEnabled ? 'On' : 'Off'}
+            Orbit Meters Interpolation: ${
+              isOrbitMetersInterpolationEnabled ? 'On' : 'Off'
+            }
+          </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${orbitMetersFeedforwardEnabled ? '' : ' active'}"
+            data-control="orbit-meters-interpolation-mode"
+            data-option="feedback"
+            data-label="Feedback"
+            aria-pressed="${orbitMetersFeedforwardEnabled ? 'false' : 'true'}"
+            data-testid="toggle-orbit-meters-feedback"
+          >
+            Feedback
+          </button>
+          <button
+            type="button"
+            class="toggle-button${orbitMetersFeedforwardEnabled ? ' active' : ''}"
+            data-control="orbit-meters-interpolation-mode"
+            data-option="feedforward"
+            data-label="Feedforward"
+            aria-pressed="${orbitMetersFeedforwardEnabled ? 'true' : 'false'}"
+            data-testid="toggle-orbit-meters-feedforward"
+          >
+            Feedforward
           </button>
         </div>
       </div>
@@ -849,6 +998,21 @@ const createHud = () => {
           Arrow Shape: ${
             currentArrowShapeMode === 'elongated' ? 'Elongated' : 'Square'
           }
+        </button>
+        <input
+          type="file"
+          accept="image/*"
+          data-control="arrow-image-file-input"
+          data-testid="input-arrow-image"
+          hidden
+        />
+        <button
+          type="button"
+          class="toggle-button"
+          data-control="arrow-image-file-button"
+          data-testid="btn-arrow-image"
+        >
+          Replace Primary Arrow Image
         </button>
       </div>
       <div class="control-group" data-testid="group-camera">
@@ -1123,13 +1287,35 @@ const main = async () => {
   };
 
   /**
-   * Populates the detail panel with information about the sprite that was clicked.
+   * Populates the detail panel with information about the sprite under the pointer.
    *
-   * @param {SpriteLayerClickEvent<DemoSpriteTag>} event - Click payload emitted by the sprite layer.
+   * @param {SpriteLayerHoverEvent<DemoSpriteTag> | SpriteLayerClickEvent<DemoSpriteTag>} event - Interaction payload emitted by the sprite layer.
    */
-  const renderSelectedSprite = (
-    event: SpriteLayerClickEvent<DemoSpriteTag>
+  const renderSpriteDetails = (
+    event:
+      | SpriteLayerHoverEvent<DemoSpriteTag>
+      | SpriteLayerClickEvent<DemoSpriteTag>
   ) => {
+    const spriteState = event.sprite;
+    const imageState = event.image;
+
+    if (!spriteState || !imageState) {
+      if (selectedPlaceholderEl) {
+        selectedPlaceholderEl.hidden = false;
+      }
+      if (selectedDetailsEl) {
+        selectedDetailsEl.hidden = true;
+      }
+      (
+        Object.values(selectedFieldEls) as Array<HTMLSpanElement | undefined>
+      ).forEach((field) => {
+        if (field) {
+          field.textContent = '--';
+        }
+      });
+      return;
+    }
+
     if (selectedPlaceholderEl) {
       // Hide the placeholder summary whenever a real sprite has been chosen.
       selectedPlaceholderEl.hidden = true;
@@ -1140,26 +1326,26 @@ const main = async () => {
     }
     if (selectedFieldEls.id) {
       // Update the sprite ID readout if the corresponding DOM node exists.
-      selectedFieldEls.id.textContent = event.sprite.spriteId;
+      selectedFieldEls.id.textContent = spriteState.spriteId;
     }
     if (selectedFieldEls.mode) {
       // Display the rendering mode (surface or billboard) for the selected image entry.
-      selectedFieldEls.mode.textContent = event.image.mode;
+      selectedFieldEls.mode.textContent = imageState.mode;
     }
     if (selectedFieldEls.image) {
       // Provide the exact image identifier that rendered the clicked sprite.
-      selectedFieldEls.image.textContent = event.image.imageId;
+      selectedFieldEls.image.textContent = imageState.imageId;
     }
     if (selectedFieldEls.visible) {
       // Reflect whether the sprite image was visible (non-zero opacity) at the time of the click.
       selectedFieldEls.visible.textContent =
-        event.image.opacity !== 0.0 ? 'Visible' : 'Hidden';
+        imageState.opacity !== 0.0 ? 'Visible' : 'Hidden';
     }
     if (selectedFieldEls.lnglat) {
       // Show the geographic coordinates for the sprite's current location.
       selectedFieldEls.lnglat.textContent = formatLngLat(
-        event.sprite.currentLocation.lng,
-        event.sprite.currentLocation.lat
+        spriteState.currentLocation.lng,
+        spriteState.currentLocation.lat
       );
     }
     if (selectedFieldEls.screen) {
@@ -1168,7 +1354,7 @@ const main = async () => {
     }
     if (selectedFieldEls.tag) {
       // Render the metadata summary extracted from the sprite tag for debugging.
-      selectedFieldEls.tag.textContent = describeTag(event.sprite.tag ?? null);
+      selectedFieldEls.tag.textContent = describeTag(spriteState.tag ?? null);
     }
   };
 
@@ -1202,6 +1388,95 @@ const main = async () => {
     },
   });
 
+  /**
+   * Reverses sprite movement on click so users can steer individual sprites.
+   *
+   * @param {SpriteLayerClickEvent<DemoSpriteTag>} event - Click payload emitted by the sprite layer.
+   */
+  const handleSpriteClick = (
+    event: SpriteLayerClickEvent<DemoSpriteTag>
+  ): void => {
+    const spriteState = event.sprite;
+    if (!spriteState) {
+      renderSpriteDetails(event);
+      return;
+    }
+
+    const currentTag = spriteState.tag;
+    if (!currentTag) {
+      return;
+    }
+
+    const normalizeProgress = (progress: number): number => {
+      if (!Number.isFinite(progress)) {
+        return 0;
+      }
+      let value = progress % 1;
+      if (value < 0) {
+        value += 1;
+      }
+      return value;
+    };
+
+    const invertedTag: DemoSpriteTag = {
+      ...currentTag,
+      dx: -currentTag.dx,
+      dy: -currentTag.dy,
+      lastStepLng: -currentTag.lastStepLng,
+      lastStepLat: -currentTag.lastStepLat,
+      worldLng: spriteState.currentLocation.lng,
+      worldLat: spriteState.currentLocation.lat,
+    };
+
+    if (currentTag.path) {
+      const path = currentTag.path;
+      const invertedSpeed = path.speed === 0 ? path.speed : -path.speed;
+      let progress = path.progress;
+      const pathVectorLng = path.endLng - path.startLng;
+      const pathVectorLat = path.endLat - path.startLat;
+      const pathLengthSq =
+        pathVectorLng * pathVectorLng + pathVectorLat * pathVectorLat;
+      if (pathLengthSq > 0) {
+        const originToCurrentLng =
+          spriteState.currentLocation.lng - path.startLng;
+        const originToCurrentLat =
+          spriteState.currentLocation.lat - path.startLat;
+        progress =
+          (originToCurrentLng * pathVectorLng +
+            originToCurrentLat * pathVectorLat) /
+          pathLengthSq;
+      }
+      invertedTag.path = {
+        ...path,
+        speed: invertedSpeed,
+        progress: normalizeProgress(progress),
+      };
+      // Keep linear-mode step vectors aligned with the updated direction.
+      invertedTag.dx = -currentTag.dx;
+      invertedTag.dy = -currentTag.dy;
+    }
+
+    // Ensure the sprite keeps moving even when the vector collapses due to floating point error.
+    if (
+      Math.abs(invertedTag.dx) < EPSILON_DELTA &&
+      Math.abs(invertedTag.dy) < EPSILON_DELTA
+    ) {
+      const baseMagnitude = Math.max(
+        Math.hypot(currentTag.dx, currentTag.dy),
+        0.0001
+      );
+      const angle = Math.random() * Math.PI * 2;
+      invertedTag.dx = Math.cos(angle) * baseMagnitude;
+      invertedTag.dy = Math.sin(angle) * baseMagnitude;
+      invertedTag.lastStepLng = invertedTag.dx * MOVEMENT_STEP_FACTOR;
+      invertedTag.lastStepLat = invertedTag.dy * MOVEMENT_STEP_FACTOR;
+    }
+
+    spriteLayer.updateSprite(spriteState.spriteId, {
+      tag: invertedTag,
+    });
+  };
+
   if (typeof window !== 'undefined') {
     // Register sprite layer references on the window for integration tests and debugging tools.
     const debugState: SpriteDemoDebugState = window.__spriteDemo ?? {
@@ -1222,7 +1497,8 @@ const main = async () => {
   // Run the remaining setup once all map resources finish loading.
   map.on('load', async () => {
     map.addLayer(spriteLayer);
-    spriteLayer.on('spriteclick', renderSelectedSprite);
+    spriteLayer.on('spritehover', renderSpriteDetails);
+    spriteLayer.on('spriteclick', handleSpriteClick);
 
     let updateBasemapButtons: (() => void) | undefined;
 
@@ -1427,9 +1703,10 @@ const main = async () => {
                 },
               };
               const orbitInterpolation = createOrbitInterpolationOptions();
-              if (orbitInterpolation) {
-                imageUpdate.rotationInterpolation = orbitInterpolation;
-              }
+              imageUpdate.interpolation = orbitInterpolation ?? {
+                offsetDeg: null,
+                offsetMeters: null,
+              };
               update.updateImage(image.subLayer, image.order, imageUpdate);
             }
           });
@@ -1473,7 +1750,7 @@ const main = async () => {
               const rotationInterpolation = createRotateInterpolationOptions();
               if (rotationInterpolation) {
                 // Respect the rotate interpolation toggle before mutating the image definition.
-                imageUpdate.rotationInterpolation = rotationInterpolation;
+                imageUpdate.interpolation = rotationInterpolation;
               }
               update.updateImage(image.subLayer, image.order, imageUpdate);
             }
@@ -1511,7 +1788,7 @@ const main = async () => {
               const rotationInterpolation = createRotateInterpolationOptions();
               if (rotationInterpolation) {
                 // Only set rotation interpolation when the user has enabled the smoothing toggle.
-                imageUpdate.rotationInterpolation = rotationInterpolation;
+                imageUpdate.interpolation = rotationInterpolation;
               }
               update.updateImage(image.subLayer, image.order, imageUpdate);
             } else {
@@ -1551,6 +1828,21 @@ const main = async () => {
     };
 
     /**
+     * Applies location interpolation settings across all sprites.
+     */
+    const applyLocationInterpolationToAll = () => {
+      spriteLayer.updateForEach((_sprite, update) => {
+        update.interpolation = isMovementInterpolationEnabled
+          ? {
+              mode: locationInterpolationMode,
+              durationMs: MOVEMENT_INTERVAL_MS,
+            }
+          : null;
+        return true;
+      });
+    };
+
+    /**
      * Toggles rotation interpolation on every primary sprite so the animation speed stays consistent.
      *
      * @param {boolean} enabled - Whether interpolation should remain active.
@@ -1564,9 +1856,12 @@ const main = async () => {
               return;
             }
             const imageUpdate: SpriteImageDefinitionUpdate = {
-              rotationInterpolation: enabled
+              interpolation: enabled
                 ? {
-                    rotateDeg: { durationMs: MOVEMENT_INTERVAL_MS },
+                    rotateDeg: {
+                      mode: rotateInterpolationMode,
+                      durationMs: MOVEMENT_INTERVAL_MS,
+                    },
                   }
                 : { rotateDeg: null },
             };
@@ -1578,11 +1873,9 @@ const main = async () => {
     };
 
     /**
-     * Enables or disables interpolation on the orbit offset so secondary images animate smoothly.
-     *
-     * @param {boolean} enabled - Whether interpolation should be applied.
+     * Enables or disables interpolation on the orbit offsets so secondary images animate smoothly.
      */
-    const applyOrbitInterpolationToAll = (enabled: boolean) => {
+    const applyOrbitInterpolationToAll = () => {
       spriteLayer.updateForEach((sprite, spriteUpdate) => {
         sprite.images.forEach((orderMap) => {
           orderMap.forEach((image) => {
@@ -1591,11 +1884,20 @@ const main = async () => {
               return;
             }
             const imageUpdate: SpriteImageDefinitionUpdate = {
-              rotationInterpolation: enabled
-                ? {
-                    offsetDeg: { durationMs: MOVEMENT_INTERVAL_MS },
-                  }
-                : { offsetDeg: null },
+              interpolation: {
+                offsetDeg: isOrbitDegInterpolationEnabled
+                  ? {
+                      mode: orbitOffsetDegInterpolationMode,
+                      durationMs: MOVEMENT_INTERVAL_MS,
+                    }
+                  : null,
+                offsetMeters: isOrbitMetersInterpolationEnabled
+                  ? {
+                      mode: orbitOffsetMetersInterpolationMode,
+                      durationMs: MOVEMENT_INTERVAL_MS,
+                    }
+                  : null,
+              },
             };
             spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -1610,6 +1912,10 @@ const main = async () => {
     const startMovementInterval = () => {
       if (movementUpdateIntervalId !== undefined) {
         // Avoid registering multiple intervals if the loop is already running.
+        return;
+      }
+      if (movementSpeedScale <= 0) {
+        // Do not start the interval when movement is paused.
         return;
       }
       movementUpdateIntervalId = window.setInterval(() => {
@@ -1629,27 +1935,33 @@ const main = async () => {
       movementUpdateIntervalId = undefined;
     };
 
+    const clampMovementSpeedScale = (scale: number): number =>
+      Math.min(
+        MOVEMENT_SPEED_SCALE_MAX,
+        Math.max(MOVEMENT_SPEED_SCALE_MIN, scale)
+      );
+
     /**
-     * Toggles the global movement loop and updates associated UI state.
+     * Updates the movement speed multiplier and manages the background interval.
      *
-     * @param {boolean} enabled - Desired movement state.
+     * @param {number} nextScale - Desired movement speed multiplier.
      */
-    const setMovementLoopEnabled = (enabled: boolean) => {
-      if (isMovementLoopEnabled === enabled) {
-        // State unchanged; refresh the toggle label to prevent stale text.
-        updateMovementToggleButton?.();
-        return;
-      }
-      isMovementLoopEnabled = enabled;
-      if (isMovementLoopEnabled) {
-        // When turning the loop back on, execute one step immediately for responsiveness.
+    const setMovementSpeedScaleValue = (nextScale: number): void => {
+      const clamped = clampMovementSpeedScale(nextScale);
+      const wasActive = movementSpeedScale > 0;
+      movementSpeedScale = clamped;
+      const isActive = movementSpeedScale > 0;
+
+      if (isActive && !wasActive) {
+        // Resume motion immediately so sprites continue from their current positions.
         performMovementStep();
         startMovementInterval();
-      } else {
-        // Pausing the simulation requires cancelling the interval to stop CPU usage.
+      } else if (!isActive && wasActive) {
+        // Stop the timer when the slider reaches zero to conserve CPU time.
         stopMovementInterval();
       }
-      updateMovementToggleButton?.();
+
+      updateMovementSpeedUI?.(movementSpeedScale);
     };
 
     /**
@@ -1754,18 +2066,22 @@ const main = async () => {
       if (!isSecondaryImageReady) {
         // When assets have not loaded yet, just remember the requested mode for later.
         currentSecondaryImageOrbitMode = mode;
-        if (mode !== 'orbit') {
-          // Reset the rotation so the eventual orbit starts from a neutral angle.
-          secondaryImageOrbitDegrees = 0;
-        }
+        secondaryImageOrbitDegrees =
+          mode === 'orbit'
+            ? secondaryImageOrbitDegrees
+            : mode === 'shift'
+              ? SECONDARY_SHIFT_ANGLE_DEG
+              : 0;
         updateSecondaryImageButtons?.();
         return;
       }
       currentSecondaryImageOrbitMode = mode;
-      if (mode !== 'orbit') {
-        // Snap the angle to zero when orbiting stops to keep the UI deterministic.
-        secondaryImageOrbitDegrees = 0;
-      }
+      secondaryImageOrbitDegrees =
+        mode === 'orbit'
+          ? secondaryImageOrbitDegrees
+          : mode === 'shift'
+            ? SECONDARY_SHIFT_ANGLE_DEG
+            : 0;
 
       spriteLayer.updateForEach((sprite, update) => {
         sprite.images.forEach((orderMap) => {
@@ -1790,6 +2106,16 @@ const main = async () => {
                   offsetDeg: 0.0,
                 },
               };
+            } else if (mode === 'shift') {
+              // Shift mode keeps a fixed radius and angle without continuous orbiting.
+              imageUpdate = {
+                opacity: 1.0,
+                autoRotation: false,
+                offset: {
+                  offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+                  offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
+                },
+              };
             } else {
               // Orbit mode offsets the sprite by the configured radius and maintains the current angle.
               imageUpdate = {
@@ -1804,7 +2130,12 @@ const main = async () => {
             const orbitInterpolation = createOrbitInterpolationOptions();
             if (orbitInterpolation) {
               // Only attach interpolation data when the global toggle allows it.
-              imageUpdate.rotationInterpolation = orbitInterpolation;
+              imageUpdate.interpolation = orbitInterpolation;
+            } else {
+              imageUpdate.interpolation = {
+                offsetDeg: null,
+                offsetMeters: null,
+              };
             }
             update.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -1880,10 +2211,10 @@ const main = async () => {
     /**
      * Builds rotation interpolation settings when the global toggle is enabled.
      *
-     * @returns {SpriteImageRotationInterpolationOptions|undefined} Interpolation config or undefined when disabled.
+     * @returns {SpriteImageInterpolationOptions|undefined} Interpolation config or undefined when disabled.
      */
     const createRotateInterpolationOptions = ():
-      | SpriteImageRotationInterpolationOptions
+      | SpriteImageInterpolationOptions
       | undefined => {
       if (!isRotateInterpolationEnabled) {
         // Returning undefined signals callers to omit interpolation data entirely.
@@ -1891,6 +2222,7 @@ const main = async () => {
       }
       return {
         rotateDeg: {
+          mode: rotateInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
         },
       };
@@ -1899,20 +2231,32 @@ const main = async () => {
     /**
      * Constructs interpolation options for orbital offsets when allowed by the toggle state.
      *
-     * @returns {SpriteImageRotationInterpolationOptions|undefined} Offset interpolation details.
+     * @returns {SpriteImageInterpolationOptions|undefined} Offset interpolation details.
      */
     const createOrbitInterpolationOptions = ():
-      | SpriteImageRotationInterpolationOptions
+      | SpriteImageInterpolationOptions
       | undefined => {
-      if (!isOrbitInterpolationEnabled) {
+      if (
+        !isOrbitDegInterpolationEnabled &&
+        !isOrbitMetersInterpolationEnabled
+      ) {
         // Skip interpolation when the user has disabled smoothing for orbit motion.
         return undefined;
       }
-      return {
-        offsetDeg: {
+      const options: SpriteImageInterpolationOptions = {};
+      if (isOrbitDegInterpolationEnabled) {
+        options.offsetDeg = {
+          mode: orbitOffsetDegInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
-        },
-      };
+        };
+      }
+      if (isOrbitMetersInterpolationEnabled) {
+        options.offsetMeters = {
+          mode: orbitOffsetMetersInterpolationMode,
+          durationMs: MOVEMENT_INTERVAL_MS,
+        };
+      }
+      return options;
     };
 
     /**
@@ -2049,6 +2393,47 @@ const main = async () => {
           }
         }
         return null;
+      };
+
+      const registerInterpolationModeButtons = (
+        selector: string,
+        getMode: () => SpriteInterpolationMode,
+        onChange: (mode: SpriteInterpolationMode) => void
+      ) => {
+        const buttons = Array.from<HTMLButtonElement>(
+          queryAll<HTMLButtonElement>(selector)
+        );
+        if (buttons.length === 0) {
+          return;
+        }
+        const updateButtons = () => {
+          const current = getMode();
+          buttons.forEach((button) => {
+            const option = button.dataset.option as
+              | SpriteInterpolationMode
+              | undefined;
+            if (!option) {
+              return;
+            }
+            setToggleButtonState(button, current === option, 'select');
+          });
+        };
+        updateButtons();
+        buttons.forEach((button) => {
+          const option = button.dataset.option as
+            | SpriteInterpolationMode
+            | undefined;
+          if (!option) {
+            return;
+          }
+          button.addEventListener('click', () => {
+            if (getMode() === option) {
+              return;
+            }
+            onChange(option);
+            updateButtons();
+          });
+        });
       };
 
       const spriteCountActiveEl = queryFirst<HTMLElement>(
@@ -2328,6 +2713,67 @@ const main = async () => {
         });
       }
 
+      const arrowImageInput = queryFirst<HTMLInputElement>(
+        '[data-control="arrow-image-file-input"]'
+      );
+      const arrowImageButton = queryFirst<HTMLButtonElement>(
+        '[data-control="arrow-image-file-button"]'
+      );
+      if (arrowImageInput && arrowImageButton && ICON_SPECS.length > 0) {
+        const baseIconId = ICON_SPECS[0]!.id;
+        const replacePrimaryArrowImage = async (file: File) => {
+          const objectUrl = URL.createObjectURL(file);
+          const lowerName = file.name.toLowerCase();
+          const isSvg =
+            file.type === 'image/svg+xml' || lowerName.endsWith('.svg');
+          let registerOptions: SpriteImageRegisterOptions | undefined;
+          if (isSvg) {
+            registerOptions = {
+              svg: {
+                assumeSvg: true,
+                useViewBoxDimensions: true,
+              },
+            };
+          }
+
+          try {
+            for (const mode of ICON_HEIGHT_MODES) {
+              const imageId = getIconImageId(baseIconId, mode);
+              spriteLayer.unregisterImage(imageId);
+              const registered = await spriteLayer.registerImage(
+                imageId,
+                objectUrl,
+                registerOptions
+              );
+              if (!registered) {
+                console.warn(
+                  `Failed to register replacement image for ${imageId}`
+                );
+              }
+            }
+            // Re-apply the current height mode so sprites refresh immediately.
+            applyIconHeightMode(currentArrowShapeMode);
+          } catch (error) {
+            console.error('Failed to replace arrow image', error);
+          } finally {
+            URL.revokeObjectURL(objectUrl);
+            arrowImageInput.value = '';
+          }
+        };
+
+        arrowImageButton.addEventListener('click', () => {
+          arrowImageInput.click();
+        });
+
+        arrowImageInput.addEventListener('change', async () => {
+          const file = arrowImageInput.files?.[0];
+          if (!file) {
+            return;
+          }
+          await replacePrimaryArrowImage(file);
+        });
+      }
+
       const animationButtons = Array.from(
         queryAll<HTMLButtonElement>('[data-control="animation-mode"]')
       );
@@ -2364,60 +2810,85 @@ const main = async () => {
         });
       });
 
-      const interpolationButtons = Array.from(
-        queryAll<HTMLButtonElement>('[data-control="interpolation-mode"]')
-      );
-      const updateInterpolationModeButtons = () => {
-        interpolationButtons.forEach((button) => {
-          const option = button.dataset.option;
-          if (!option) {
-            // Buttons without a mode option are ignored as malformed.
-            return;
-          }
-          const feedforwardButton = option as SpriteInterpolationMode;
-          setToggleButtonState(
-            button,
-            currentInterpolationMode === feedforwardButton,
-            'select'
-          );
-        });
-      };
-
-      updateInterpolationModeButtons();
-      interpolationButtons.forEach((button) => {
-        const option = button.dataset.option;
-        if (!option) {
-          // Skip click binding for buttons lacking a mode identifier.
-          return;
-        }
-        button.addEventListener('click', () => {
-          const wantsFeedforward = option as SpriteInterpolationMode;
-          if (currentInterpolationMode === wantsFeedforward) {
-            // User selected the already-active interpolation mode; no work required.
-            return;
-          }
-          currentInterpolationMode = wantsFeedforward;
-          updateInterpolationModeButtons();
+      registerInterpolationModeButtons(
+        '[data-control="location-interpolation-mode"]',
+        () => locationInterpolationMode,
+        (mode) => {
+          locationInterpolationMode = mode;
+          applyLocationInterpolationToAll();
           reinitializeMovement();
-        });
-      });
-
-      const movementToggleButton = queryFirst<HTMLButtonElement>(
-        '[data-control="movement-toggle"]'
+        }
       );
-      if (movementToggleButton) {
-        // Guard against layers where the movement toggle is hidden.
-        updateMovementToggleButton = () => {
-          setToggleButtonState(
-            movementToggleButton,
-            isMovementLoopEnabled,
-            'binary'
+
+      registerInterpolationModeButtons(
+        '[data-control="rotate-interpolation-mode"]',
+        () => rotateInterpolationMode,
+        (mode) => {
+          rotateInterpolationMode = mode;
+          applyRotateInterpolationToAll(isRotateInterpolationEnabled);
+        }
+      );
+
+      registerInterpolationModeButtons(
+        '[data-control="orbit-deg-interpolation-mode"]',
+        () => orbitOffsetDegInterpolationMode,
+        (mode) => {
+          orbitOffsetDegInterpolationMode = mode;
+          applyOrbitInterpolationToAll();
+        }
+      );
+
+      registerInterpolationModeButtons(
+        '[data-control="orbit-meters-interpolation-mode"]',
+        () => orbitOffsetMetersInterpolationMode,
+        (mode) => {
+          orbitOffsetMetersInterpolationMode = mode;
+          applyOrbitInterpolationToAll();
+        }
+      );
+
+      const movementSpeedStatusEl = queryFirst<HTMLElement>(
+        '[data-status="movement-speed"]'
+      );
+      const movementSpeedSlider = queryFirst<HTMLInputElement>(
+        '[data-control="movement-speed"]'
+      );
+      if (movementSpeedSlider) {
+        const syncSliderState = (scale: number) => {
+          const clamped = Math.min(
+            MOVEMENT_SPEED_SCALE_MAX,
+            Math.max(MOVEMENT_SPEED_SCALE_MIN, scale)
           );
+          movementSpeedSlider.value = String(clamped);
+          movementSpeedSlider.valueAsNumber = clamped;
+          movementSpeedSlider.setAttribute('aria-valuenow', String(clamped));
         };
-        updateMovementToggleButton();
-        movementToggleButton.addEventListener('click', () => {
-          setMovementLoopEnabled(!isMovementLoopEnabled);
+        updateMovementSpeedUI = (scale: number) => {
+          syncSliderState(scale);
+          if (movementSpeedStatusEl) {
+            movementSpeedStatusEl.textContent = formatMovementSpeedScale(scale);
+          }
+        };
+        updateMovementSpeedUI(movementSpeedScale);
+
+        const readSliderValue = (): number => {
+          const parsed = Number(movementSpeedSlider.value);
+          return Number.isFinite(parsed) ? parsed : movementSpeedScale;
+        };
+
+        movementSpeedSlider.addEventListener('input', () => {
+          setMovementSpeedScaleValue(readSliderValue());
         });
+        movementSpeedSlider.addEventListener('change', () => {
+          setMovementSpeedScaleValue(readSliderValue());
+        });
+      } else {
+        updateMovementSpeedUI = (scale: number) => {
+          if (movementSpeedStatusEl) {
+            movementSpeedStatusEl.textContent = formatMovementSpeedScale(scale);
+          }
+        };
+        updateMovementSpeedUI(movementSpeedScale);
       }
 
       // Secondary image buttons.
@@ -2499,56 +2970,61 @@ const main = async () => {
         });
       }
 
-      const orbitInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="orbit-interpolation-toggle"]'
+      const locationInterpolationToggleButton = queryFirst<HTMLButtonElement>(
+        '[data-control="location-interpolation-toggle"]'
       );
-      if (orbitInterpolationButton) {
-        // Orbit interpolation toggle is optional; guard to avoid null dereferences.
-        updateOrbitInterpolationButton = () => {
+      if (locationInterpolationToggleButton) {
+        updateLocationInterpolationButton = () => {
           setToggleButtonState(
-            orbitInterpolationButton,
-            isOrbitInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateOrbitInterpolationButton();
-        orbitInterpolationButton.addEventListener('click', () => {
-          isOrbitInterpolationEnabled = !isOrbitInterpolationEnabled;
-          updateOrbitInterpolationButton?.();
-          applyOrbitInterpolationToAll(isOrbitInterpolationEnabled);
-        });
-      }
-
-      const interpolationToggleButton = queryFirst<HTMLButtonElement>(
-        '[data-control="interpolation-toggle"]'
-      );
-      if (interpolationToggleButton) {
-        // Movement interpolation toggle might be absent in simplified control panels.
-        const updateInterpolationToggleButton = () => {
-          setToggleButtonState(
-            interpolationToggleButton,
+            locationInterpolationToggleButton,
             isMovementInterpolationEnabled,
             'binary'
           );
         };
-        updateInterpolationToggleButton();
-        interpolationToggleButton.addEventListener('click', () => {
-          // Toggle movement interpolation each time the button is pressed.
+        updateLocationInterpolationButton();
+        locationInterpolationToggleButton.addEventListener('click', () => {
           isMovementInterpolationEnabled = !isMovementInterpolationEnabled;
-          updateInterpolationToggleButton();
+          updateLocationInterpolationButton?.();
+          applyLocationInterpolationToAll();
+        });
+      }
 
-          // Apply the new setting to every sprite.
-          spriteLayer.updateForEach((_, update) => {
-            // When enabled, set interpolation mode and duration; otherwise disable interpolation.
-            update.interpolation = isMovementInterpolationEnabled
-              ? {
-                  mode: currentInterpolationMode,
-                  durationMs: MOVEMENT_INTERVAL_MS,
-                }
-              : null;
-            return true;
-          });
-          updateInterpolationModeButtons();
+      const orbitDegInterpolationButton = queryFirst<HTMLButtonElement>(
+        '[data-control="orbit-deg-interpolation-toggle"]'
+      );
+      if (orbitDegInterpolationButton) {
+        updateOrbitDegInterpolationButton = () => {
+          setToggleButtonState(
+            orbitDegInterpolationButton,
+            isOrbitDegInterpolationEnabled,
+            'binary'
+          );
+        };
+        updateOrbitDegInterpolationButton();
+        orbitDegInterpolationButton.addEventListener('click', () => {
+          isOrbitDegInterpolationEnabled = !isOrbitDegInterpolationEnabled;
+          updateOrbitDegInterpolationButton?.();
+          applyOrbitInterpolationToAll();
+        });
+      }
+
+      const orbitMetersInterpolationButton = queryFirst<HTMLButtonElement>(
+        '[data-control="orbit-meters-interpolation-toggle"]'
+      );
+      if (orbitMetersInterpolationButton) {
+        updateOrbitMetersInterpolationButton = () => {
+          setToggleButtonState(
+            orbitMetersInterpolationButton,
+            isOrbitMetersInterpolationEnabled,
+            'binary'
+          );
+        };
+        updateOrbitMetersInterpolationButton();
+        orbitMetersInterpolationButton.addEventListener('click', () => {
+          isOrbitMetersInterpolationEnabled =
+            !isOrbitMetersInterpolationEnabled;
+          updateOrbitMetersInterpolationButton?.();
+          applyOrbitInterpolationToAll();
         });
       }
 
@@ -2623,8 +3099,13 @@ const main = async () => {
             autoRotation: isAutoRotationEnabled,
             rotateDeg: primaryPlacement.rotateDeg,
             anchor: primaryPlacement.anchor,
-            rotationInterpolation: isRotateInterpolationEnabled
-              ? { rotateDeg: { durationMs: MOVEMENT_INTERVAL_MS } }
+            interpolation: isRotateInterpolationEnabled
+              ? {
+                  rotateDeg: {
+                    mode: rotateInterpolationMode,
+                    durationMs: MOVEMENT_INTERVAL_MS,
+                  },
+                }
               : undefined,
           },
           // Orbiting satellite indicator.
@@ -2637,9 +3118,28 @@ const main = async () => {
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
             scale: SECONDARY_IMAGE_SCALE,
             opacity: currentSecondaryImageOrbitMode === 'hidden' ? 0.0 : 1.0,
-            rotationInterpolation: isOrbitInterpolationEnabled
-              ? { offsetDeg: { durationMs: MOVEMENT_INTERVAL_MS } }
-              : undefined,
+            interpolation:
+              isOrbitDegInterpolationEnabled ||
+              isOrbitMetersInterpolationEnabled
+                ? {
+                    ...(isOrbitDegInterpolationEnabled
+                      ? {
+                          offsetDeg: {
+                            mode: orbitOffsetDegInterpolationMode,
+                            durationMs: MOVEMENT_INTERVAL_MS,
+                          },
+                        }
+                      : {}),
+                    ...(isOrbitMetersInterpolationEnabled
+                      ? {
+                          offsetMeters: {
+                            mode: orbitOffsetMetersInterpolationMode,
+                            durationMs: MOVEMENT_INTERVAL_MS,
+                          },
+                        }
+                      : {}),
+                  }
+                : undefined,
           },
         ],
       };
@@ -2678,13 +3178,15 @@ const main = async () => {
       spriteLayer.addSprites(initialSpriteEntries);
     }
 
+    applyLocationInterpolationToAll();
+
     if (isRotateInterpolationEnabled) {
       // Apply rotation interpolation immediately so the initial state matches the toggle.
       applyRotateInterpolationToAll(true);
     }
-    if (isOrbitInterpolationEnabled) {
+    if (isOrbitDegInterpolationEnabled || isOrbitMetersInterpolationEnabled) {
       // Ensure orbit interpolation is set when the feature starts enabled.
-      applyOrbitInterpolationToAll(true);
+      applyOrbitInterpolationToAll();
     }
     // Apply the layer visibility flag so initial state matches the toggle.
     applyLayerVisibility(isActive);
@@ -2712,10 +3214,12 @@ const main = async () => {
      * Handles movement, boundary reflection, and rotation calculation.
      */
     const performMovementStep = (): void => {
-      if (!isMovementLoopEnabled) {
-        // Skip processing when the movement loop toggle is OFF to conserve CPU time.
+      if (movementSpeedScale <= 0) {
+        // Skip processing when the speed slider is set to zero to conserve CPU time.
         return;
       }
+
+      const scaledStepFactor = MOVEMENT_STEP_FACTOR * movementSpeedScale;
 
       // Update every sprite.
       spriteLayer.updateForEach((sprite, update) => {
@@ -2736,10 +3240,13 @@ const main = async () => {
         // Follow the precomputed path when linear mode is active.
         if (currentAnimationMode === 'linear' && tag.path) {
           const path = tag.path;
-          path.progress += path.speed * MOVEMENT_STEP_FACTOR;
-          // Wrap progress to 0 when it exceeds 1 to maintain looping motion.
+          path.progress += path.speed * scaledStepFactor;
+          // Wrap progress to stay within the expected 0–1 range.
           while (path.progress > 1) {
             path.progress -= 1;
+          }
+          while (path.progress < 0) {
+            path.progress += 1;
           }
           nextWorldLng =
             path.startLng + (path.endLng - path.startLng) * path.progress;
@@ -2747,8 +3254,8 @@ const main = async () => {
             path.startLat + (path.endLat - path.startLat) * path.progress;
         } else {
           // In random mode, apply the velocity vector directly.
-          nextWorldLng += tag.dx * MOVEMENT_STEP_FACTOR;
-          nextWorldLat += tag.dy * MOVEMENT_STEP_FACTOR;
+          nextWorldLng += tag.dx * scaledStepFactor;
+          nextWorldLat += tag.dy * scaledStepFactor;
 
           if (
             nextWorldLng > boundaryLng + lngRadius ||
@@ -2799,7 +3306,7 @@ const main = async () => {
         if (hasMovement) {
           update.interpolation = isMovementInterpolationEnabled
             ? {
-                mode: currentInterpolationMode,
+                mode: locationInterpolationMode,
                 durationMs: MOVEMENT_INTERVAL_MS,
               }
             : null;

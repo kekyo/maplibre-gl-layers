@@ -79,6 +79,32 @@ export interface SpriteImageOriginLocation {
   useResolvedAnchor?: boolean;
 }
 
+/** Defines movement interpolation modes. */
+export type SpriteInterpolationMode = 'feedback' | 'feedforward';
+
+/** Easing function signature used to map interpolation progress. */
+export type EasingFunction = (progress: number) => number;
+
+/** Options for interpolating values. */
+export interface SpriteInterpolationOptions {
+  /** Interpolation mode; defaults to feedback. */
+  mode?: SpriteInterpolationMode;
+  /** Duration in milliseconds. */
+  durationMs: number;
+  /** Easing function mapping interpolation progress. Defaults to linear. */
+  easing?: EasingFunction;
+}
+
+/** Interpolation configuration for rotateDeg and offsetDeg. */
+export interface SpriteImageInterpolationOptions {
+  /** Interpolation settings for rotateDeg; null disables interpolation. */
+  rotateDeg?: SpriteInterpolationOptions | null;
+  /** Interpolation settings for offset.offsetDeg; null disables interpolation. */
+  offsetDeg?: SpriteInterpolationOptions | null;
+  /** Interpolation settings for offset.offsetMeters; null disables interpolation. */
+  offsetMeters?: SpriteInterpolationOptions | null;
+}
+
 /**
  * Initial attributes that define a sprite image.
  */
@@ -116,9 +142,9 @@ export interface SpriteImageDefinitionInit {
    */
   autoRotationMinDistanceMeters?: number;
   /**
-   * Optional interpolation settings for rotateDeg and offsetDeg.
+   * Optional interpolation settings.
    */
-  rotationInterpolation?: SpriteImageRotationInterpolationOptions;
+  interpolation?: SpriteImageInterpolationOptions;
 }
 
 /**
@@ -143,8 +169,8 @@ export interface SpriteImageDefinitionUpdate {
   autoRotation?: boolean;
   /** Minimum distance in meters before auto-rotation updates. */
   autoRotationMinDistanceMeters?: number;
-  /** Optional interpolation settings applied to rotateDeg and offsetDeg. */
-  rotationInterpolation?: SpriteImageRotationInterpolationOptions;
+  /** Optional interpolation settings. */
+  interpolation?: SpriteImageInterpolationOptions;
 }
 
 /**
@@ -274,45 +300,13 @@ export interface SpriteCurrentState<TTag> {
   readonly tag: TTag | null;
 }
 
-/** Defines movement interpolation modes. */
-export type SpriteInterpolationMode = 'feedback' | 'feedforward';
-
-/** Easing function signature used to map interpolation progress. */
-export type EasingFunction = (progress: number) => number;
-
-/** Options controlling position interpolation. */
-export interface SpriteInterpolationOptions {
-  /** Interpolation mode; defaults to feedback. */
-  mode?: SpriteInterpolationMode;
-  /** Duration in milliseconds. */
-  durationMs: number;
-  /** Easing function mapping interpolation progress. Defaults to linear. */
-  easing?: EasingFunction;
-}
-
-/** Options for interpolating numeric values such as angles. */
-export interface SpriteNumericInterpolationOptions {
-  /** Duration in milliseconds. */
-  durationMs: number;
-  /** Easing function mapping interpolation progress. Defaults to linear. */
-  easing?: EasingFunction;
-}
-
-/** Interpolation configuration for rotateDeg and offsetDeg. */
-export interface SpriteImageRotationInterpolationOptions {
-  /** Interpolation settings for rotateDeg; null disables interpolation. */
-  rotateDeg?: SpriteNumericInterpolationOptions | null;
-  /** Interpolation settings for offset.offsetDeg; null disables interpolation. */
-  offsetDeg?: SpriteNumericInterpolationOptions | null;
-}
-
 /**
  * Base structure for sprite updates.
  *
  * @template TTag Tag type stored on the sprite.
  * @property {boolean | undefined} isEnabled - Optional toggle to enable or disable the sprite.
  * @property {SpriteLocation | undefined} location - Optional target location for the sprite.
- * @property {SpriteInterpolationOptions | null | undefined} interpolation - Optional interpolation settings; `null` disables interpolation.
+ * @property {SpriteLocationInterpolationOptions | null | undefined} interpolation - Optional location interpolation settings; `null` disables interpolation.
  * @property {TTag | null | undefined} tag - Optional tag value to replace the current one; `null` clears the tag.
  */
 export interface SpriteUpdateEntryBase<TTag> {
@@ -351,12 +345,6 @@ export interface SpriteImageDefinitionUpdateEntry {
 export interface SpriteUpdateEntry<TTag> extends SpriteUpdateEntryBase<TTag> {
   /** Optional set of image updates. */
   images?: SpriteImageDefinitionUpdateEntry[];
-}
-
-/** @deprecated Scheduled for removal in a future release. Use {@link SpriteLayerInterface.mutateSprites} instead. */
-export interface SpriteUpdateBulkEntry<T> extends SpriteUpdateEntry<T> {
-  /** @deprecated Scheduled for removal in a future release. Use {@link SpriteLayerInterface.mutateSprites} instead. */
-  spriteId: string;
 }
 
 /**
@@ -416,7 +404,7 @@ export interface SpriteMutateCallbacks<
    * (or `null`) to skip creation.
    *
    * @param sourceItem Source item that produced the sprite ID.
-   * @returns Sprite initialiser to insert, or `undefined`/`null` to skip.
+   * @returns Sprite initializer to insert, or `undefined`/`null` to skip.
    */
   add: (sourceItem: TSourceItem) => SpriteInit<TTag> | null | undefined;
   /**
@@ -463,10 +451,10 @@ export interface SpriteScreenPoint {
 export interface SpriteLayerClickEvent<T> {
   /** Discriminated event type. */
   readonly type: 'spriteclick';
-  /** Snapshot of the sprite that was hit. */
-  readonly sprite: SpriteCurrentState<T>;
-  /** Sprite image that received the interaction. */
-  readonly image: SpriteImageState;
+  /** Snapshot of the sprite that was hit, or `undefined` when it no longer exists. */
+  readonly sprite: SpriteCurrentState<T> | undefined;
+  /** Sprite image that received the interaction, or `undefined` when missing. */
+  readonly image: SpriteImageState | undefined;
   /** Screen position of the interaction. */
   readonly screenPoint: SpriteScreenPoint;
   /** Original DOM event. */
@@ -474,14 +462,40 @@ export interface SpriteLayerClickEvent<T> {
 }
 
 /**
+ * Event dispatched when a sprite is hovered by a pointing device.
+ *
+ * @template T Tag type stored on sprites.
+ * @property {'spritehover'} type - Discriminated event type.
+ * @property {SpriteCurrentState<T>} sprite - Snapshot of the sprite that was hit.
+ * @property {SpriteImageState} image - Sprite image that received the interaction.
+ * @property {SpriteScreenPoint} screenPoint - Screen position of the interaction.
+ * @property {MouseEvent | PointerEvent} originalEvent - Original hover-capable DOM event.
+ */
+export interface SpriteLayerHoverEvent<T> {
+  /** Discriminated event type. */
+  readonly type: 'spritehover';
+  /** Snapshot of the sprite that was hit, or `undefined` when it no longer exists. */
+  readonly sprite: SpriteCurrentState<T> | undefined;
+  /** Sprite image that received the interaction, or `undefined` when missing. */
+  readonly image: SpriteImageState | undefined;
+  /** Screen position of the interaction. */
+  readonly screenPoint: SpriteScreenPoint;
+  /** Original hover-capable DOM event. */
+  readonly originalEvent: MouseEvent | PointerEvent;
+}
+
+/**
  * Map of events emitted by SpriteLayer.
  *
  * @template T Tag type stored on sprites.
  * @property {SpriteLayerClickEvent<T>} spriteclick - Event fired when a sprite image is clicked.
+ * @property {SpriteLayerHoverEvent<T>} spritehover - Event fired when a sprite image is hovered.
  */
 export interface SpriteLayerEventMap<T> {
   /** Event fired when a sprite image is clicked. */
   readonly spriteclick: SpriteLayerClickEvent<T>;
+  /** Event fired when a sprite image is hovered. */
+  readonly spritehover: SpriteLayerHoverEvent<T>;
 }
 
 /**
@@ -531,34 +545,6 @@ export interface SpriteScalingOptions {
 }
 
 /**
- * Unlimited (default) values that fill in missing {@link SpriteScalingOptions} fields supplied by callers.
- * metersPerPixel is 1.
- */
-export const UNLIMITED_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
-  metersPerPixel: 1.0,
-  zoomMin: 0,
-  zoomMax: 30,
-  scaleMin: 1,
-  scaleMax: 1,
-  spriteMinPixel: 0,
-  spriteMaxPixel: 100000,
-} as const;
-
-/**
- * Standard values that fill in missing {@link SpriteScalingOptions} fields supplied by callers.
- * metersPerPixel is 1.
- */
-export const STANDARD_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
-  metersPerPixel: 1.0,
-  zoomMin: 8.0,
-  zoomMax: 20.0,
-  scaleMin: 0.1,
-  scaleMax: 1.0,
-  spriteMinPixel: 24,
-  spriteMaxPixel: 100,
-} as const;
-
-/**
  * Allowed minification filters for sprite textures.
  */
 export type SpriteTextureMinFilter =
@@ -590,27 +576,6 @@ export interface SpriteTextureFilteringOptions {
 }
 
 /**
- * Defaulted text filtering options.
- */
-export const DEFAULT_TEXTURE_FILTERING_OPTIONS: SpriteTextureFilteringOptions =
-  {
-    minFilter: 'linear',
-    magFilter: 'linear',
-    generateMipmaps: false,
-    maxAnisotropy: 1,
-  } as const;
-
-/**
- * Better text filtering options than default options.
- */
-export const BETTER_TEXTURE_FILTERING_OPTIONS: SpriteTextureFilteringOptions = {
-  minFilter: 'linear-mipmap-linear',
-  magFilter: 'linear',
-  generateMipmaps: true,
-  maxAnisotropy: 8,
-} as const;
-
-/**
  * Options accepted when creating a SpriteLayer.
  *
  * @property {string | undefined} id - Optional layer identifier supplied to MapLibre.
@@ -624,6 +589,37 @@ export interface SpriteLayerOptions {
   spriteScaling?: SpriteScalingOptions;
   /** Optional texture filtering configuration. */
   textureFiltering?: SpriteTextureFilteringOptions;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Options used when registering SVG images.
+ */
+export interface SpriteImageSvgOptions {
+  /** Treat the resource as SVG even when the MIME type is missing or incorrect. */
+  readonly assumeSvg?: boolean;
+  /** Enables parsing of the SVG markup to detect intrinsic sizing. Defaults to true for SVG images. */
+  readonly inspectSize?: boolean;
+  /**
+   * Uses the SVG viewBox dimensions as the raster size when width/height attributes are missing.
+   * When disabled (default), such SVGs fail to load instead of inferring a size.
+   */
+  readonly useViewBoxDimensions?: boolean;
+}
+
+/**
+ * Options accepted by {@link SpriteLayerInterface.registerImage}.
+ */
+export interface SpriteImageRegisterOptions {
+  /** Target width in CSS pixels. When only one dimension is supplied, the aspect ratio is preserved if known. */
+  readonly width?: number;
+  /** Target height in CSS pixels. When only one dimension is supplied, the aspect ratio is preserved if known. */
+  readonly height?: number;
+  /** Resampling quality used during rasterization. */
+  readonly resizeQuality?: ResizeQuality;
+  /** SVG-specific configuration. */
+  readonly svg?: SpriteImageSvgOptions;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -712,11 +708,13 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    *
    * @param {string} imageId - Unique image identifier.
    * @param {string | ImageBitmap} image - Image source (URL or ImageBitmap) to upload.
+   * @param {SpriteImageRegisterOptions | undefined} options - Optional SVG handling controls.
    * @returns {Promise<boolean>} Resolves to `true` when the image was registered; `false` if the ID already existed.
    */
   readonly registerImage: (
     imageId: string,
-    image: string | ImageBitmap
+    image: string | ImageBitmap,
+    options?: SpriteImageRegisterOptions
   ) => Promise<boolean>;
   /**
    * Registers a text glyph texture for later use.
@@ -867,19 +865,12 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
     update: SpriteUpdateEntry<TTag>
   ) => boolean;
   /**
-   * @deprecated Use {@link SpriteLayerInterface.mutateSprites} instead for clearer mutation flows.
-   */
-  readonly updateBulk: (
-    // @prettier-max-ignore-deprecated
-    updateBulkList: SpriteUpdateBulkEntry<TTag>[]
-  ) => number;
-  /**
    * Adds, updates, or removes sprites based on an arbitrary collection of source items.
    *
    * @param {readonly TSourceItem[]} sourceItems - Source items that describe desired sprite state.
    * @param {SpriteMutateCallbacks<TTag, TSourceItem>} mutator - Callbacks responsible for creation and modification.
    * @returns {number} Number of sprites that changed. Counts each `add` that returns a non-null
-   * initialiser and each `modify` that either invoked the updater helper or returned `'remove'`.
+   * initializer and each `modify` that either invoked the updater helper or returned `'remove'`.
    */
   readonly mutateSprites: <TSourceItem extends SpriteMutateSourceItem>(
     sourceItems: readonly TSourceItem[],

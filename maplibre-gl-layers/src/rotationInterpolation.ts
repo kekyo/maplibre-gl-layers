@@ -4,18 +4,18 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { SpriteNumericInterpolationOptions } from './types';
-import {
-  createNumericInterpolationState,
-  type NumericInterpolationState,
-} from './numericInterpolation';
+import type { SpriteInterpolationOptions } from './types';
+import type { DegreeInterpolationState } from './internalTypes';
+import { createDegreeInterpolationState } from './degreeInterpolation';
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Normalizes an absolute angle in degrees to the range [0, 360).
  * @param {number} angle - Angle provided by the caller which may fall outside a single revolution.
  * @returns {number} Angle wrapped to [0, 360) with negative zero converted to zero.
  */
-export const normaliseAngleDeg = (angle: number): number => {
+export const normalizeAngleDeg = (angle: number): number => {
   if (!Number.isFinite(angle)) {
     return 0;
   }
@@ -24,26 +24,30 @@ export const normaliseAngleDeg = (angle: number): number => {
   return Object.is(normalized, -0) ? 0 : normalized;
 };
 
+//////////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Parameters describing the rotation update request.
  * @property {number} currentAngleDeg - Current angle already applied to the sprite in degrees.
  * @property {number} targetAngleDeg - Desired angle in degrees that should be reached.
- * @property {SpriteNumericInterpolationOptions | null} [options] - Optional interpolation configuration.
+ * @property {number | undefined} previousCommandAngleDeg - Previous commanded angle for feed-forward prediction.
+ * @property {SpriteInterpolationOptions | null} [options] - Optional interpolation configuration.
  */
 export interface ResolveRotationTargetParams {
   currentAngleDeg: number;
   targetAngleDeg: number;
-  options?: SpriteNumericInterpolationOptions | null;
+  previousCommandAngleDeg?: number;
+  options?: SpriteInterpolationOptions | null;
 }
 
 /**
  * Result produced by {@link resolveRotationTarget} when determining the next rotation step.
  * @property {number} nextAngleDeg - Angle that should be applied immediately.
- * @property {NumericInterpolationState | null} interpolationState - Optional state for animating toward the target.
+ * @property {DegreeInterpolationState | null} interpolationState - Optional state for animating toward the target.
  */
 export interface ResolveRotationTargetResult {
   readonly nextAngleDeg: number;
-  readonly interpolationState: NumericInterpolationState | null;
+  readonly interpolationState: DegreeInterpolationState | null;
 }
 
 /**
@@ -55,8 +59,12 @@ export const resolveRotationTarget = (
   params: ResolveRotationTargetParams
 ): ResolveRotationTargetResult => {
   const options = params.options;
-  const targetAngle = normaliseAngleDeg(params.targetAngleDeg);
-  const currentAngle = normaliseAngleDeg(params.currentAngleDeg);
+  const targetAngle = normalizeAngleDeg(params.targetAngleDeg);
+  const currentAngle = normalizeAngleDeg(params.currentAngleDeg);
+  const previousCommandAngleDeg =
+    params.previousCommandAngleDeg !== undefined
+      ? normalizeAngleDeg(params.previousCommandAngleDeg)
+      : undefined;
 
   // Without options or with a zero/negative duration we snap to the target directly.
   if (!options || options.durationMs <= 0) {
@@ -66,9 +74,10 @@ export const resolveRotationTarget = (
     };
   }
 
-  const { state, requiresInterpolation } = createNumericInterpolationState({
+  const { state, requiresInterpolation } = createDegreeInterpolationState({
     currentValue: currentAngle,
     targetValue: targetAngle,
+    previousCommandValue: previousCommandAngleDeg,
     options,
   });
 
