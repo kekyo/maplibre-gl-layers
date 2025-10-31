@@ -658,7 +658,7 @@ const createHud = () => {
         </button>
       </div>
       <div class="control-group" data-testid="group-sprite-count">
-        <h1>Sprite Count</h1>
+        <h1>Sprite</h1>
         <label class="range-label" for="sprite-count-slider">
           Active
           <span
@@ -688,12 +688,6 @@ const createHud = () => {
           aria-valuenow="${INITIAL_NUMBER_OF_SPRITES}"
           aria-label="Active sprite count limit"
         />
-        <p class="control-hint" data-testid="hint-sprite-count">
-          Preloads ${INITIAL_NUMBER_OF_SPRITES} sprites; the slider tops out at ${MAX_NUMBER_OF_SPRITES}.
-        </p>
-      </div>
-      <div class="control-group" data-testid="group-sprite-mode">
-        <h1>Sprite Mode</h1>
         <button
           type="button"
           class="toggle-button${currentSpriteMode === 'billboard' ? ' active' : ''}"
@@ -707,21 +701,6 @@ const createHud = () => {
           Sprite Mode: ${
             currentSpriteMode === 'billboard' ? 'Billboard' : 'Surface'
           }
-        </button>
-      </div>
-      <div class="control-group" data-testid="group-auto-rotation">
-        <h1>Auto rotation</h1>
-        <button
-          type="button"
-          class="toggle-button${isAutoRotationEnabled ? ' active' : ''}"
-          data-control="auto-rotation-toggle"
-          data-label="Auto rotation"
-          data-active-text="ON"
-          data-inactive-text="OFF"
-          aria-pressed="${isAutoRotationEnabled}"
-          data-testid="toggle-auto-rotation"
-        >
-          Auto rotation: ${isAutoRotationEnabled ? 'ON' : 'OFF'}
         </button>
       </div>
       <div class="control-group" data-testid="group-location-interpolation">
@@ -766,7 +745,21 @@ const createHud = () => {
         </div>
       </div>
       <div class="control-group" data-testid="group-rotation-interpolation">
-        <h1>Rotation interpolation</h1>
+        <h1>Rotation</h1>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${isAutoRotationEnabled ? ' active' : ''}"
+            data-control="auto-rotation-toggle"
+            data-label="Auto rotation"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${isAutoRotationEnabled}"
+            data-testid="toggle-auto-rotation"
+          >
+            Auto rotation: ${isAutoRotationEnabled ? 'ON' : 'OFF'}
+          </button>
+        </div>
         <div>
           <button
             type="button"
