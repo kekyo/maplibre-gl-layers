@@ -28,26 +28,34 @@ export interface LooseQuadTreeOptions {
 
 export interface LooseQuadTree<TState> {
   readonly size: number;
-  readonly add: (item: Item<TState>) => void;
-  readonly remove: (
+  add(item: Item<TState>): void;
+  remove(
     x0: number,
     y0: number,
     x1: number,
     y1: number,
     item: Item<TState>
-  ) => boolean;
-  readonly lookup: (
-    x0: number,
-    y0: number,
-    x1: number,
-    y1: number
-  ) => Item<TState>[];
-  readonly clear: () => void;
+  ): boolean;
+  update(
+    oldX0: number,
+    oldY0: number,
+    oldX1: number,
+    oldY1: number,
+    newX0: number,
+    newY0: number,
+    newX1: number,
+    newY1: number,
+    item: Item<TState>
+  ): boolean;
+  lookup(x0: number, y0: number, x1: number, y1: number): Item<TState>[];
+  clear(): void;
 }
 
 interface QuadItem<TState> {
   readonly item: Item<TState>;
-  readonly rect: Rect;
+  rect: Rect;
+  node: QuadNode<TState>;
+  index: number;
 }
 
 interface QuadNode<TState> {
@@ -62,15 +70,13 @@ const createNode = <TState>(
   bounds: Rect,
   looseness: number,
   depth: number
-): QuadNode<TState> => {
-  return {
-    bounds,
-    looseBounds: expandRect(bounds, looseness),
-    items: [],
-    children: null,
-    depth,
-  };
-};
+): QuadNode<TState> => ({
+  bounds,
+  looseBounds: expandRect(bounds, looseness),
+  items: [],
+  children: null,
+  depth,
+});
 
 const normalizeRect = (rect: Rect): Rect => {
   const x0 = Math.min(rect.x0, rect.x1);
@@ -80,27 +86,22 @@ const normalizeRect = (rect: Rect): Rect => {
   return { x0, y0, x1, y1 };
 };
 
-const isFiniteRect = (rect: Rect): boolean => {
-  return (
-    Number.isFinite(rect.x0) &&
-    Number.isFinite(rect.y0) &&
-    Number.isFinite(rect.x1) &&
-    Number.isFinite(rect.y1)
-  );
-};
+const isFiniteRect = (rect: Rect): boolean =>
+  Number.isFinite(rect.x0) &&
+  Number.isFinite(rect.y0) &&
+  Number.isFinite(rect.x1) &&
+  Number.isFinite(rect.y1);
 
 const expandRect = (rect: Rect, looseness: number): Rect => {
   if (looseness === 1) {
     return rect;
   }
-
   const width = rect.x1 - rect.x0;
   const height = rect.y1 - rect.y0;
   const halfWidth = (width * looseness) / 2;
   const halfHeight = (height * looseness) / 2;
   const centerX = rect.x0 + width / 2;
   const centerY = rect.y0 + height / 2;
-
   return {
     x0: centerX - halfWidth,
     y0: centerY - halfHeight,
@@ -109,22 +110,17 @@ const expandRect = (rect: Rect, looseness: number): Rect => {
   };
 };
 
-const rectContainsRectInclusive = (container: Rect, target: Rect): boolean => {
-  return (
-    container.x0 <= target.x0 &&
-    container.y0 <= target.y0 &&
-    container.x1 >= target.x1 &&
-    container.y1 >= target.y1
-  );
-};
+const rectContainsRectInclusive = (container: Rect, target: Rect): boolean =>
+  container.x0 <= target.x0 &&
+  container.y0 <= target.y0 &&
+  container.x1 >= target.x1 &&
+  container.y1 >= target.y1;
 
-const rectsOverlapInclusive = (a: Rect, b: Rect): boolean => {
-  return !(a.x1 < b.x0 || a.x0 > b.x1 || a.y1 < b.y0 || a.y0 > b.y1);
-};
+const rectsOverlapInclusive = (a: Rect, b: Rect): boolean =>
+  !(a.x1 < b.x0 || a.x0 > b.x1 || a.y1 < b.y0 || a.y0 > b.y1);
 
-const rectEquals = (a: Rect, b: Rect): boolean => {
-  return a.x0 === b.x0 && a.y0 === b.y0 && a.x1 === b.x1 && a.y1 === b.y1;
-};
+const rectEquals = (a: Rect, b: Rect): boolean =>
+  a.x0 === b.x0 && a.y0 === b.y0 && a.x1 === b.x1 && a.y1 === b.y1;
 
 export const createLooseQuadTree = <TState>(
   options: LooseQuadTreeOptions
@@ -136,11 +132,9 @@ export const createLooseQuadTree = <TState>(
   if (maxItemsPerNode <= 0) {
     throw new Error('maxItemsPerNode must be greater than 0.');
   }
-
   if (maxDepth < 0) {
     throw new Error('maxDepth must be 0 or greater.');
   }
-
   if (!(looseness >= 1)) {
     throw new Error('looseness must be greater than or equal to 1.');
   }
@@ -152,6 +146,7 @@ export const createLooseQuadTree = <TState>(
 
   let root: QuadNode<TState> = createNode(normalizedBounds, looseness, 0);
   let count = 0;
+  let registry = new WeakMap<Item<TState>, QuadItem<TState>>();
 
   const insertIntoNode = (
     node: QuadNode<TState>,
@@ -160,165 +155,86 @@ export const createLooseQuadTree = <TState>(
     if (node.children) {
       const childIndex = findChildIndex(node.children, quadItem.rect);
       if (childIndex !== -1) {
-        const child = node.children[childIndex];
-        if (child) {
-          insertIntoNode(child, quadItem);
-          return;
-        }
+        insertIntoNode(node.children[childIndex]!, quadItem);
+        return;
       }
     }
 
+    quadItem.node = node;
+    quadItem.index = node.items.length;
     node.items.push(quadItem);
 
     if (node.items.length > maxItemsPerNode && node.depth < maxDepth) {
       if (!node.children) {
         subdivide(node);
       }
-
-      if (!node.children) {
+      const children = node.children;
+      if (!children) {
         return;
       }
 
       let i = 0;
       while (i < node.items.length) {
-        const itemToReassign = node.items[i];
-        if (!itemToReassign) {
-          i += 1;
-          continue;
-        }
-        const childIndex = findChildIndex(node.children, itemToReassign.rect);
+        const candidate = node.items[i]!;
+        const childIndex = findChildIndex(children, candidate.rect);
         if (childIndex !== -1) {
-          const child = node.children[childIndex];
-          if (child) {
-            node.items.splice(i, 1);
-            insertIntoNode(child, itemToReassign);
-            continue;
-          }
+          detachFromNode(candidate);
+          insertIntoNode(children[childIndex]!, candidate);
+        } else {
+          i += 1;
         }
-        i += 1;
       }
     }
   };
 
-  const removeFromNode = (
-    node: QuadNode<TState>,
-    rect: Rect,
-    target: Item<TState>
-  ): boolean => {
-    if (node.children) {
-      const childIndex = findChildIndex(node.children, rect);
-      if (childIndex !== -1) {
-        const child = node.children[childIndex];
-        if (child && removeFromNode(child, rect, target)) {
-          tryMerge(node);
-          return true;
-        }
-      }
-    }
-
-    const index = node.items.findIndex(
-      (candidate) =>
-        candidate.item === target && rectEquals(candidate.rect, rect)
-    );
-
-    if (index !== -1) {
-      node.items.splice(index, 1);
-      return true;
-    }
-
-    return false;
+  const removeQuadItem = (quadItem: QuadItem<TState>): void => {
+    detachFromNode(quadItem);
+    registry.delete(quadItem.item);
   };
 
-  const collectFromNode = (
-    node: QuadNode<TState>,
-    rect: Rect,
-    results: Item<TState>[]
-  ): void => {
-    if (!rectsOverlapInclusive(node.looseBounds, rect)) {
+  const detachFromNode = (quadItem: QuadItem<TState>): void => {
+    const node = quadItem.node;
+    const index = quadItem.index;
+    if (index < 0 || index >= node.items.length) {
       return;
     }
-
-    for (const item of node.items) {
-      if (rectsOverlapInclusive(item.rect, rect)) {
-        results.push(item.item);
-      }
+    const lastIndex = node.items.length - 1;
+    if (index !== lastIndex) {
+      const moved = node.items[lastIndex]!;
+      node.items[index] = moved;
+      moved.index = index;
     }
+    node.items.pop();
+    quadItem.index = -1;
+    quadItem.node = node;
+  };
 
+  const reassignIfPossible = (quadItem: QuadItem<TState>): void => {
+    const node = quadItem.node;
     if (!node.children) {
       return;
     }
-
-    for (const child of node.children) {
-      if (child) {
-        collectFromNode(child, rect, results);
-      }
-    }
-  };
-
-  const tryMerge = (node: QuadNode<TState>): void => {
-    const children = node.children;
-    if (!children) {
+    const childIndex = findChildIndex(node.children, quadItem.rect);
+    if (childIndex === -1) {
       return;
     }
-
-    let total = node.items.length;
-    for (const child of children) {
-      if (child.children) {
-        return;
-      }
-      total += child.items.length;
-      if (total > maxItemsPerNode) {
-        return;
-      }
-    }
-
-    for (const child of children) {
-      node.items.push(...child.items);
-      child.items = [];
-    }
-    node.children = null;
-  };
-
-  const subdivide = (node: QuadNode<TState>): void => {
-    if (node.children) {
-      return;
-    }
-
-    const { bounds } = node;
-    const splitX = bounds.x0 + (bounds.x1 - bounds.x0) / 2;
-    const splitY = bounds.y0 + (bounds.y1 - bounds.y0) / 2;
-
-    const childrenBounds: Rect[] = [
-      normalizeRect({ x0: bounds.x0, y0: bounds.y0, x1: splitX, y1: splitY }),
-      normalizeRect({ x0: splitX, y0: bounds.y0, x1: bounds.x1, y1: splitY }),
-      normalizeRect({ x0: bounds.x0, y0: splitY, x1: splitX, y1: bounds.y1 }),
-      normalizeRect({ x0: splitX, y0: splitY, x1: bounds.x1, y1: bounds.y1 }),
-    ];
-
-    node.children = childrenBounds.map((childBounds) =>
-      createNode(childBounds, looseness, node.depth + 1)
-    );
-  };
-
-  const findChildIndex = <T>(children: QuadNode<T>[], rect: Rect): number => {
-    for (let index = 0; index < children.length; index += 1) {
-      const child = children[index];
-      if (child && rectContainsRectInclusive(child.looseBounds, rect)) {
-        return index;
-      }
-    }
-    return -1;
+    detachFromNode(quadItem);
+    insertIntoNode(node.children[childIndex]!, quadItem);
   };
 
   const add = (item: Item<TState>): void => {
     const rect = normalizeRect(item);
-    const quadItem: QuadItem<TState> = { item, rect };
-
     if (!rectContainsRectInclusive(root.bounds, rect)) {
       throw new Error('Item rectangle is outside of quadtree bounds.');
     }
-
+    const quadItem: QuadItem<TState> = {
+      item,
+      rect,
+      node: root,
+      index: -1,
+    };
     insertIntoNode(root, quadItem);
+    registry.set(item, quadItem);
     count += 1;
   };
 
@@ -329,16 +245,65 @@ export const createLooseQuadTree = <TState>(
     y1: number,
     item: Item<TState>
   ): boolean => {
+    const quadItem = registry.get(item);
+    if (!quadItem) {
+      return false;
+    }
     const rect = normalizeRect({ x0, y0, x1, y1 });
-    if (!rectContainsRectInclusive(root.bounds, rect)) {
+    if (!rectEquals(rect, quadItem.rect)) {
+      return false;
+    }
+    removeQuadItem(quadItem);
+    count -= 1;
+    return true;
+  };
+
+  const update = (
+    oldX0: number,
+    oldY0: number,
+    oldX1: number,
+    oldY1: number,
+    newX0: number,
+    newY0: number,
+    newX1: number,
+    newY1: number,
+    item: Item<TState>
+  ): boolean => {
+    const quadItem = registry.get(item);
+    if (!quadItem) {
+      return false;
+    }
+    const currentRect = quadItem.rect;
+    const expectedOldRect = normalizeRect({
+      x0: oldX0,
+      y0: oldY0,
+      x1: oldX1,
+      y1: oldY1,
+    });
+    if (!rectEquals(currentRect, expectedOldRect)) {
       return false;
     }
 
-    const removed = removeFromNode(root, rect, item);
-    if (removed) {
-      count -= 1;
+    const newRect = normalizeRect({
+      x0: newX0,
+      y0: newY0,
+      x1: newX1,
+      y1: newY1,
+    });
+    if (!rectContainsRectInclusive(root.bounds, newRect)) {
+      throw new Error('Updated rectangle is outside of quadtree bounds.');
     }
-    return removed;
+
+    if (rectContainsRectInclusive(quadItem.node.looseBounds, newRect)) {
+      quadItem.rect = newRect;
+      reassignIfPossible(quadItem);
+      return true;
+    }
+
+    detachFromNode(quadItem);
+    quadItem.rect = newRect;
+    insertIntoNode(root, quadItem);
+    return true;
   };
 
   const lookup = (
@@ -355,7 +320,57 @@ export const createLooseQuadTree = <TState>(
 
   const clear = (): void => {
     root = createNode(normalizedBounds, looseness, 0);
+    registry = new WeakMap<Item<TState>, QuadItem<TState>>();
     count = 0;
+  };
+
+  const collectFromNode = (
+    node: QuadNode<TState>,
+    rect: Rect,
+    results: Item<TState>[]
+  ): void => {
+    if (!rectsOverlapInclusive(node.looseBounds, rect)) {
+      return;
+    }
+    for (const quadItem of node.items) {
+      if (rectsOverlapInclusive(quadItem.rect, rect)) {
+        results.push(quadItem.item);
+      }
+    }
+    if (!node.children) {
+      return;
+    }
+    for (const child of node.children!) {
+      collectFromNode(child, rect, results);
+    }
+  };
+
+  const findChildIndex = <T>(children: QuadNode<T>[], rect: Rect): number => {
+    for (let i = 0; i < children.length; i += 1) {
+      const child = children[i]!;
+      if (rectContainsRectInclusive(child.looseBounds, rect)) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  const subdivide = (node: QuadNode<TState>): void => {
+    if (node.children) {
+      return;
+    }
+    const { bounds } = node;
+    const splitX = bounds.x0 + (bounds.x1 - bounds.x0) / 2;
+    const splitY = bounds.y0 + (bounds.y1 - bounds.y0) / 2;
+    const childrenBounds: Rect[] = [
+      normalizeRect({ x0: bounds.x0, y0: bounds.y0, x1: splitX, y1: splitY }),
+      normalizeRect({ x0: splitX, y0: bounds.y0, x1: bounds.x1, y1: splitY }),
+      normalizeRect({ x0: bounds.x0, y0: splitY, x1: splitX, y1: bounds.y1 }),
+      normalizeRect({ x0: splitX, y0: splitY, x1: bounds.x1, y1: bounds.y1 }),
+    ];
+    node.children = childrenBounds.map((childBounds) =>
+      createNode(childBounds, looseness, node.depth + 1)
+    );
   };
 
   return {
@@ -364,6 +379,7 @@ export const createLooseQuadTree = <TState>(
     },
     add,
     remove,
+    update,
     lookup,
     clear,
   };

@@ -464,6 +464,8 @@ let isOrbitMetersInterpolationEnabled = true;
 let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Interpolation mode applied to orbital distance changes. */
 let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
+/** Whether sprite-layer mouse events are monitored for hover/click feedback. */
+let isMouseEventsMonitoringEnabled = false;
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
 /** UI updater for the movement speed slider. */
@@ -484,6 +486,8 @@ let updateOrbitMetersInterpolationButton: (() => void) | undefined;
 let secondaryImageOrbitDegrees = 0;
 /** UI updater for the location interpolation toggle. */
 let updateLocationInterpolationButton: (() => void) | undefined;
+/** UI updater for the mouse-events monitoring toggle. */
+let updateMouseEventsButton: (() => void) | undefined;
 
 /**
  * Template that builds the application HUD.
@@ -549,7 +553,16 @@ const createHud = () => {
         </div>
       </section>
       <section id="selected-sprite" data-testid="section-selected-sprite">
-        <h2>Selected Sprite</h2>
+        <button
+          type="button"
+          class="toggle-button${isMouseEventsMonitoringEnabled ? ' active' : ''}"
+          data-control="mouse-events-toggle"
+          data-label="Mouse Events"
+          data-active-text="ON"
+          data-inactive-text="OFF"
+          aria-pressed="${isMouseEventsMonitoringEnabled}"
+          data-testid="toggle-mouse-events"
+        >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
         <p
           class="status-placeholder"
           data-selected-placeholder
@@ -1388,6 +1401,44 @@ const main = async () => {
     },
   });
 
+  const clearSpriteDetails = () => {
+    renderSpriteDetails({
+      type: 'spritehover',
+      sprite: undefined,
+      image: undefined,
+      screenPoint: { x: 0, y: 0 },
+      originalEvent: new MouseEvent('mousemove'),
+    });
+  };
+
+  const attachSpriteMouseEvents = () => {
+    spriteLayer.off('spritehover', renderSpriteDetails);
+    spriteLayer.off('spriteclick', handleSpriteClick);
+    spriteLayer.on('spritehover', renderSpriteDetails);
+    spriteLayer.on('spriteclick', handleSpriteClick);
+  };
+
+  const detachSpriteMouseEvents = () => {
+    spriteLayer.off('spritehover', renderSpriteDetails);
+    spriteLayer.off('spriteclick', handleSpriteClick);
+  };
+
+  const setMouseEventsEnabled = (enabled: boolean) => {
+    if (isMouseEventsMonitoringEnabled === enabled) {
+      updateMouseEventsButton?.();
+      return;
+    }
+    isMouseEventsMonitoringEnabled = enabled;
+    spriteLayer.setHitTestEnabled(enabled);
+    if (enabled) {
+      attachSpriteMouseEvents();
+    } else {
+      detachSpriteMouseEvents();
+      clearSpriteDetails();
+    }
+    updateMouseEventsButton?.();
+  };
+
   /**
    * Reverses sprite movement on click so users can steer individual sprites.
    *
@@ -1497,8 +1548,12 @@ const main = async () => {
   // Run the remaining setup once all map resources finish loading.
   map.on('load', async () => {
     map.addLayer(spriteLayer);
-    spriteLayer.on('spritehover', renderSpriteDetails);
-    spriteLayer.on('spriteclick', handleSpriteClick);
+    spriteLayer.setHitTestEnabled(isMouseEventsMonitoringEnabled);
+    if (isMouseEventsMonitoringEnabled) {
+      attachSpriteMouseEvents();
+    } else {
+      detachSpriteMouseEvents();
+    }
 
     let updateBasemapButtons: (() => void) | undefined;
 
@@ -2618,6 +2673,23 @@ const main = async () => {
         applyLayerVisibility(!isActive);
         updateSpriteLayerToggle();
       });
+
+      const mouseEventsButton = queryFirst<HTMLButtonElement>(
+        '[data-control="mouse-events-toggle"]'
+      );
+      if (mouseEventsButton) {
+        updateMouseEventsButton = () => {
+          setToggleButtonState(
+            mouseEventsButton,
+            isMouseEventsMonitoringEnabled,
+            'binary'
+          );
+        };
+        updateMouseEventsButton();
+        mouseEventsButton.addEventListener('click', () => {
+          setMouseEventsEnabled(!isMouseEventsMonitoringEnabled);
+        });
+      }
 
       const basemapButtons = Array.from(
         queryAll<HTMLButtonElement>('[data-control="basemap"]')

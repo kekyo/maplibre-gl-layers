@@ -797,6 +797,12 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   readonly getSpriteState: (
     spriteId: string
   ) => SpriteCurrentState<TTag> | undefined;
+  /**
+   * Enables or disables hit-test maintenance (quad-tree updates).
+   *
+   * @param {boolean} enabled - When false, hit testing is skipped and the internal data structure is cleared.
+   */
+  readonly setHitTestEnabled: (enabled: boolean) => void;
 
   ////////////////////////////////////////////////////////////////////////////////
 

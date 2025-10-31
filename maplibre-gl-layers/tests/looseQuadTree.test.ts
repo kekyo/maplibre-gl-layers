@@ -182,7 +182,7 @@ describe('LooseQuadTree basic operations', () => {
     expect(tree.lookup(30, 30, 70, 70)).not.toContain(spanning);
   });
 
-  it('merges child nodes after removals and continues operating', () => {
+  it('continues operating after removing multiple items', () => {
     const tree = createTreeWith({
       maxItemsPerNode: 2,
       maxDepth: 6,
@@ -237,5 +237,79 @@ describe('LooseQuadTree basic operations', () => {
 
     expect(tree.remove(0, 0, 10, 10, item)).toBe(false);
     expect(tree.lookup(0, 0, 100, 100)).toEqual([item]);
+  });
+});
+
+describe('LooseQuadTree update operations', () => {
+  it('updates items in place when staying within the same node', () => {
+    const tree = createTree();
+    const item: Item<string> = { x0: 10, y0: 10, x1: 20, y1: 20, state: 'a' };
+    tree.add(item);
+
+    const updated = tree.update(10, 10, 20, 20, 12, 12, 22, 22, item);
+    expect(updated).toBe(true);
+    expect(tree.lookup(0, 0, 11, 11)).toHaveLength(0);
+    expect(tree.lookup(12, 12, 22, 22)).toEqual([item]);
+    expect(tree.size).toBe(1);
+  });
+
+  it('moves items into child nodes when they now fit deeper', () => {
+    const tree = createTreeWith({ maxItemsPerNode: 1, maxDepth: 5 });
+    const item: Item<string> = { x0: 5, y0: 5, x1: 45, y1: 45, state: 'wide' };
+    tree.add(item);
+
+    const updated = tree.update(5, 5, 45, 45, 5, 5, 15, 15, item);
+    expect(updated).toBe(true);
+    expect(tree.lookup(4, 4, 16, 16)).toEqual([item]);
+  });
+
+  it('reassigns items across quadrants when crossing node boundaries', () => {
+    const tree = createTreeWith({ maxItemsPerNode: 1, maxDepth: 5 });
+    const item: Item<string> = {
+      x0: 10,
+      y0: 10,
+      x1: 20,
+      y1: 20,
+      state: 'move',
+    };
+    tree.add(item);
+
+    const updated = tree.update(10, 10, 20, 20, 70, 70, 80, 80, item);
+    expect(updated).toBe(true);
+    expect(tree.lookup(0, 0, 30, 30)).toHaveLength(0);
+    expect(tree.lookup(60, 60, 90, 90)).toEqual([item]);
+  });
+
+  it('expands items to span multiple quadrants and keeps them queryable', () => {
+    const tree = createTreeWith({ maxItemsPerNode: 1, looseness: 1.5 });
+    const item: Item<string> = {
+      x0: 10,
+      y0: 10,
+      x1: 15,
+      y1: 15,
+      state: 'grow',
+    };
+    tree.add(item);
+
+    const updated = tree.update(10, 10, 15, 15, 10, 10, 90, 90, item);
+    expect(updated).toBe(true);
+    expect(tree.lookup(0, 0, 20, 20)).toContain(item);
+    expect(tree.lookup(80, 80, 95, 95)).toContain(item);
+  });
+
+  it('throws when updated rectangle leaves tree bounds', () => {
+    const tree = createTree();
+    const item: Item<string> = { x0: 1, y0: 1, x1: 2, y1: 2, state: 'b' };
+    tree.add(item);
+
+    expect(() => tree.update(1, 1, 2, 2, -5, -5, -1, -1, item)).toThrowError(
+      /outside of quadtree bounds/i
+    );
+  });
+
+  it('returns false when updating an unknown item', () => {
+    const tree = createTree();
+    const ghost: Item<string> = { x0: 0, y0: 0, x1: 1, y1: 1, state: 'ghost' };
+    expect(tree.update(0, 0, 1, 1, 2, 2, 3, 3, ghost)).toBe(false);
   });
 });
