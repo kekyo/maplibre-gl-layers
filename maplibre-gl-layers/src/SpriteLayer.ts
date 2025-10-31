@@ -19,7 +19,6 @@ import { vec4, type mat4 } from 'gl-matrix';
 import {
   type SpriteInit,
   type SpriteInitCollection,
-  type SpriteMode,
   type SpriteLayerInterface,
   type SpriteLayerOptions,
   type SpriteTextureFilteringOptions,
@@ -49,22 +48,27 @@ import {
   type SpriteTextGlyphBorderSide,
   DEFAULT_TEXTURE_FILTERING_OPTIONS,
 } from './types';
+import type {
+  ResolvedTextureFilteringOptions,
+  RegisteredImage,
+  ResolvedTextGlyphPadding,
+  ResolvedBorderSides,
+  ResolvedTextGlyphOptions,
+  MutableSpriteScreenPoint,
+  MatrixInput,
+  ClipContext,
+  Canvas2DContext,
+  Canvas2DSource,
+  InternalSpriteImageState,
+  InternalSpriteCurrentState,
+} from './internalTypes';
 import { loadImageBitmap } from './utils';
 import { cloneSpriteLocation, spriteLocationsEqual } from './location';
 import {
   createInterpolationState,
   evaluateInterpolation,
-  type SpriteInterpolationState,
 } from './interpolation';
-import {
-  createNumericInterpolationState,
-  evaluateNumericInterpolation,
-  type NumericInterpolationState,
-} from './numericInterpolation';
-import {
-  normaliseAngleDeg,
-  resolveRotationTarget,
-} from './rotationInterpolation';
+import { normaliseAngleDeg } from './rotationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
   calculateMetersPerPixelAtLatitude,
@@ -88,6 +92,12 @@ import {
   TRIANGLE_INDICES,
   UV_CORNERS,
 } from './math';
+import {
+  applyOffsetDegUpdate,
+  clearOffsetDegInterpolation,
+  stepSpriteImageInterpolations,
+  syncImageRotationChannel,
+} from './interpolationChannels';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -178,13 +188,6 @@ const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> = new Set([
   'linear-mipmap-nearest',
   'linear-mipmap-linear',
 ]);
-
-interface ResolvedTextureFilteringOptions {
-  readonly minFilter: SpriteTextureMinFilter;
-  readonly magFilter: SpriteTextureMagFilter;
-  readonly generateMipmaps: boolean;
-  readonly maxAnisotropy: number;
-}
 
 const filterRequiresMipmaps = (filter: SpriteTextureMinFilter): boolean =>
   MIPMAP_MIN_FILTERS.has(filter);
@@ -283,20 +286,6 @@ const resolveGlMagFilter = (
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
-
-/**
- * Compact representation of an Array-like 4x4 matrix.
- * Accepts typed arrays sourced from MapLibre internals.
- */
-type MatrixInput = ArrayLike<number>;
-
-/**
- * Cached clip-space context containing the mercator matrix required to project coordinates.
- * @property {MatrixInput} mercatorMatrix - Matrix mapping Mercator coordinates to clip space.
- */
-type ClipContext = {
-  readonly mercatorMatrix: MatrixInput;
-};
 
 /**
  * Computes the perspective ratio from MapLibre's internal transform.
@@ -503,7 +492,7 @@ export const applyAutoRotation = <T>(
         return;
       }
       image.resolvedBaseRotateDeg = resolvedAngle;
-      updateImageDisplayedRotation(image);
+      syncImageRotationChannel(image);
     });
   });
 
@@ -634,24 +623,6 @@ export const createShaderProgram = (
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * Image metadata ready for use as a WebGL texture.
- * @property {string} id - Unique identifier registered with the MapLibre layer.
- * @property {number} width - Image width in source pixels.
- * @property {number} height - Image height in source pixels.
- * @property {ImageBitmap} bitmap - Backing bitmap used for uploads.
- * @property {WebGLTexture} [texture] - GPU texture bound to the bitmap.
- */
-interface RegisteredImage {
-  id: string;
-  width: number;
-  height: number;
-  bitmap: ImageBitmap;
-  texture: WebGLTexture | undefined;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////
-
 const DEFAULT_TEXT_GLYPH_FONT_FAMILY = 'sans-serif';
 const DEFAULT_TEXT_GLYPH_FONT_STYLE: 'normal' | 'italic' = 'normal';
 const DEFAULT_TEXT_GLYPH_FONT_WEIGHT = 'normal';
@@ -661,37 +632,6 @@ const DEFAULT_TEXT_GLYPH_FONT_SIZE = 32;
 const DEFAULT_TEXT_GLYPH_RENDER_PIXEL_RATIO = 1;
 const MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO = 4;
 const MIN_TEXT_GLYPH_FONT_SIZE = 4;
-
-interface ResolvedTextGlyphPadding {
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
-  readonly left: number;
-}
-
-interface ResolvedBorderSides {
-  readonly top: boolean;
-  readonly right: boolean;
-  readonly bottom: boolean;
-  readonly left: boolean;
-}
-
-interface ResolvedTextGlyphOptions {
-  readonly fontFamily: string;
-  readonly fontStyle: 'normal' | 'italic';
-  readonly fontWeight: string;
-  readonly fontSizePixel: number;
-  readonly color: string;
-  readonly letterSpacingPixel: number;
-  readonly backgroundColor?: string;
-  readonly paddingPixel: ResolvedTextGlyphPadding;
-  readonly borderColor?: string;
-  readonly borderWidthPixel: number;
-  readonly borderRadiusPixel: number;
-  readonly borderSides: ResolvedBorderSides;
-  readonly textAlign: SpriteTextGlyphHorizontalAlign;
-  readonly renderPixelRatio: number;
-}
 
 /**
  * Resolves text padding into a fully populated structure with non-negative values.
@@ -902,12 +842,6 @@ const clampGlyphDimension = (value: number): number => {
   const rounded = Math.round(value);
   return rounded > 0 ? rounded : 1;
 };
-
-type Canvas2DContext =
-  | CanvasRenderingContext2D
-  | OffscreenCanvasRenderingContext2D;
-
-type Canvas2DSource = HTMLCanvasElement | OffscreenCanvas;
 
 /**
  * Creates a 2D canvas context using either `OffscreenCanvas` or a DOM canvas as fallback.
@@ -1256,169 +1190,6 @@ const drawTextWithLetterSpacing = (
   }
 };
 
-interface MutableSpriteScreenPoint { x: number; y: number };
-
-/**
- * Base attributes for an image that composes a sprite.
- */
-interface InternalSpriteImageState {
-  /**
-   * Sub-layer identifier.
-   */
-  subLayer: number;
-  /**
-   * Ordering value within the sub-layer.
-   */
-  order: number;
-  /**
-   * Image ID referenced for rendering.
-   */
-  imageId: string;
-  /**
-   * Rendering mode. Defaults to surface.
-   */
-  mode: SpriteMode;
-  /**
-   * Opacity applied to the image alpha. Defaults to 1.0.
-   */
-  opacity: number;
-  /**
-   * Multiplier for real-world meters corresponding to one image pixel. 1.0 = 1 meter. Defaults to 1.0.
-   */
-  scale: number;
-  /**
-   * Anchor position within the sprite. Defaults to [0.0, 0.0].
-   */
-  anchor: SpriteAnchor;
-  /**
-   * Offset from the sprite coordinate. Defaults to no offset.
-   */
-  offset: SpriteImageOffset;
-  /**
-   * Requested rotation angle in degrees. Defaults to 0.
-   * Billboard mode: Clockwise rotation relative to the viewport.
-   * Surface mode: Clockwise azimuth from geographic north.
-   */
-  rotateDeg: number;
-  /**
-   * Rotation currently applied during rendering.
-   */
-  displayedRotateDeg: number;
-  /**
-   * Whether auto-rotation is enabled. Defaults to true in surface mode and false in billboard mode.
-   * The sprite orientation is derived from its movement vector when enabled.
-   */
-  autoRotation: boolean;
-  /**
-   * Minimum distance in meters required before auto-rotation updates. Defaults to 20 m.
-   * Values <= 0 trigger immediate updates.
-   */
-  autoRotationMinDistanceMeters: number;
-  /**
-   * Base rotation determined by auto-rotation. Initially 0.
-   */
-  resolvedBaseRotateDeg: number;
-  /**
-   * Reference sub-layer used as the origin for offsets. Defaults to sprite coordinates.
-   */
-  originLocation?: SpriteImageOriginLocation;
-  /**
-   * Interpolation state for display rotation.
-   */
-  rotationInterpolationState: NumericInterpolationState | null;
-  /**
-   * Default interpolation options for display rotation.
-   */
-  rotationInterpolationOptions: SpriteInterpolationOptions | null;
-  /**
-   * Interpolation state used for offset.offsetDeg.
-   */
-  offsetDegInterpolationState: NumericInterpolationState | null;
-  /**
-   * Last commanded displayed rotation angle, used for feed-forward prediction.
-   */
-  lastCommandRotateDeg: number;
-  /**
-   * Last commanded offset angle in degrees, used for feed-forward prediction.
-   */
-  lastCommandOffsetDeg: number;
-  /**
-   * Reusable buffer storing screen-space quad corners for hit testing.
-   */
-  hitTestCorners?: [
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-  ];
-}
-
-/**
- * Sprite position interpolation state.
- */
-type InternalSpriteInterpolationState = SpriteInterpolationState;
-
-/**
- * Current sprite state.
- * @param TTag Tag type.
- */
-interface InternalSpriteCurrentState<TTag> {
-  /**
-   * Sprite identifier.
-   */
-  spriteId: string;
-  /**
-   * Whether the sprite is enabled.
-   */
-  isEnabled: boolean;
-  /**
-   * Current location (interpolated position when moving).
-   */
-  currentLocation: SpriteLocation;
-  /**
-   * Source location used for movement interpolation.
-   * Feedback mode: previous command location.
-   * Feed-forward mode: current command location.
-   */
-  fromLocation?: SpriteLocation;
-  /**
-   * Destination location used for movement interpolation.
-   * Feedback mode: current command location.
-   * Feed-forward mode: predicted location.
-   */
-  toLocation?: SpriteLocation;
-  /**
-   * Map of image states currently associated with the sprite.
-   */
-  images: Map<number, Map<number, InternalSpriteImageState>>;
-  /**
-   * Optional tag (null when not set).
-   */
-  tag: TTag | null;
-  /**
-   * Active interpolation state, or null when idle.
-   */
-  interpolationState: InternalSpriteInterpolationState | null;
-  /**
-   * Most recently requested interpolation options, or null if none pending.
-   */
-  pendingInterpolationOptions: SpriteInterpolationOptions | null;
-  /**
-   * Most recently commanded location, regardless of interpolation.
-   */
-  lastCommandLocation: SpriteLocation;
-  /**
-   * Latest location used as the basis for auto-rotation calculation.
-   */
-  lastAutoRotationLocation: SpriteLocation;
-  /**
-   * Last resolved base angle from auto-rotation in degrees, reused as the next initial value.
-   */
-  lastAutoRotationAngleDeg: number;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////
-
 /**
  * Clones an optional origin location descriptor to avoid mutating caller state.
  * @param {SpriteImageOriginLocation} [origin] - Source origin definition.
@@ -1465,44 +1236,6 @@ export const cloneOffset = (offset?: SpriteImageOffset): SpriteImageOffset => {
     offsetMeters: offset.offsetMeters,
     offsetDeg: offset.offsetDeg,
   };
-};
-
-/**
- * Updates the displayed rotation for an image, optionally using override interpolation options.
- * @param {InternalSpriteImageState} image - Image state to mutate.
- * @param {SpriteInterpolationOptions | null} [optionsOverride] - Temporary interpolation override.
- */
-const updateImageDisplayedRotation = (
-  image: InternalSpriteImageState,
-  optionsOverride?: SpriteInterpolationOptions | null
-): void => {
-  const targetAngle = normaliseAngleDeg(
-    image.resolvedBaseRotateDeg + image.rotateDeg
-  );
-  const currentAngle = Number.isFinite(image.displayedRotateDeg)
-    ? image.displayedRotateDeg
-    : targetAngle;
-  const previousCommandAngle = image.lastCommandRotateDeg;
-
-  const options =
-    optionsOverride === undefined
-      ? image.rotationInterpolationOptions
-      : optionsOverride;
-
-  const { nextAngleDeg, interpolationState } = resolveRotationTarget({
-    currentAngleDeg: currentAngle,
-    targetAngleDeg: targetAngle,
-    previousCommandAngleDeg: previousCommandAngle,
-    options: options ?? undefined,
-  });
-
-  image.displayedRotateDeg = nextAngleDeg;
-  image.rotationInterpolationState = interpolationState;
-
-  if (!interpolationState) {
-    image.displayedRotateDeg = targetAngle;
-  }
-  image.lastCommandRotateDeg = targetAngle;
 };
 
 /**
@@ -1566,7 +1299,7 @@ export const createImageStateFromInit = (
       cloneInterpolationOptions(rotateInitOption);
   }
 
-  updateImageDisplayedRotation(state);
+  syncImageRotationChannel(state);
 
   return state;
 };
@@ -2802,48 +2535,8 @@ export const createSpriteLayer = <T = any>(
 
       sprite.images.forEach((orderMap) => {
         orderMap.forEach((image) => {
-          const rotationState = image.rotationInterpolationState;
-          // Re-sample rotation interpolation when configured.
-          if (rotationState) {
-            const evaluation = evaluateNumericInterpolation({
-              state: rotationState,
-              timestamp,
-            });
-            // Align rotation interpolation start time on the first frame.
-            if (rotationState.startTimestamp < 0) {
-              rotationState.startTimestamp = evaluation.effectiveStartTimestamp;
-            }
-            image.displayedRotateDeg = normaliseAngleDeg(evaluation.value);
-            if (evaluation.completed) {
-              // Store final rotation and tear down interpolation state once complete.
-              image.displayedRotateDeg = normaliseAngleDeg(
-                rotationState.finalValue
-              );
-              image.rotationInterpolationState = null;
-            } else {
-              hasActiveInterpolation = true;
-            }
-          }
-
-          const offsetState = image.offsetDegInterpolationState;
-          // Apply offset angular interpolation if declared.
-          if (offsetState) {
-            const evaluation = evaluateNumericInterpolation({
-              state: offsetState,
-              timestamp,
-            });
-            // Same initialization step for offset interpolation timestamps.
-            if (offsetState.startTimestamp < 0) {
-              offsetState.startTimestamp = evaluation.effectiveStartTimestamp;
-            }
-            image.offset.offsetDeg = evaluation.value;
-            if (evaluation.completed) {
-              // When finished, lock in the final offset and clear state.
-              image.offset.offsetDeg = offsetState.finalValue;
-              image.offsetDegInterpolationState = null;
-            } else {
-              hasActiveInterpolation = true;
-            }
+          if (stepSpriteImageInterpolations(image, timestamp)) {
+            hasActiveInterpolation = true;
           }
         });
       });
@@ -4188,7 +3881,7 @@ export const createSpriteLayer = <T = any>(
       state.resolvedBaseRotateDeg = sprite.lastAutoRotationAngleDeg;
     }
 
-    updateImageDisplayedRotation(state);
+    syncImageRotationChannel(state);
 
     setImageState(sprite, state);
     resultOut.isUpdated = true;
@@ -4284,34 +3977,11 @@ export const createSpriteLayer = <T = any>(
     let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
     if (imageUpdate.offset !== undefined) {
-      const newOffset = cloneOffset(imageUpdate.offset);
-      if (
-        offsetInterpolationOption &&
-        offsetInterpolationOption.durationMs > 0
-      ) {
-        const { state: interpolationState, requiresInterpolation } =
-          createNumericInterpolationState({
-            currentValue: state.offset.offsetDeg,
-            targetValue: newOffset.offsetDeg,
-            previousCommandValue: state.lastCommandOffsetDeg,
-            options: offsetInterpolationOption,
-          });
-        if (requiresInterpolation) {
-          state.offset.offsetMeters = newOffset.offsetMeters;
-          state.offsetDegInterpolationState = interpolationState;
-        } else {
-          state.offset = newOffset;
-          state.offsetDegInterpolationState = null;
-        }
-      } else {
-        // No animation requested: adopt the new offset immediately.
-        state.offset = newOffset;
-        state.offsetDegInterpolationState = null;
-      }
-      state.lastCommandOffsetDeg = newOffset.offsetDeg;
+      const clonedOffset = cloneOffset(imageUpdate.offset);
+      applyOffsetDegUpdate(state, clonedOffset, offsetInterpolationOption);
     } else if (offsetInterpolationOption === null) {
       // Explicit null clears any running offset interpolation.
-      state.offsetDegInterpolationState = null;
+      clearOffsetDegInterpolation(state);
     }
     if (rotateInterpolationOption !== undefined) {
       // Caller supplied new rotation interpolation preferences.
@@ -4319,9 +3989,7 @@ export const createSpriteLayer = <T = any>(
         state.rotationInterpolationOptions = null;
         rotationOverride = null;
       } else {
-        const cloned = cloneInterpolationOptions(
-          rotateInterpolationOption
-        );
+        const cloned = cloneInterpolationOptions(rotateInterpolationOption);
         state.rotationInterpolationOptions = cloned;
         rotationOverride = cloned;
       }
@@ -4371,7 +4039,7 @@ export const createSpriteLayer = <T = any>(
 
     if (requireRotationSync) {
       // Ensure displayed angle reflects the latest base rotation and overrides.
-      updateImageDisplayedRotation(
+      syncImageRotationChannel(
         state,
         // When a rotation override has been computed, pass it along (null clears interpolation); otherwise leave undefined.
         hasRotationOverride ? (rotationOverride ?? null) : undefined

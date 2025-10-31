@@ -4,11 +4,11 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type {
-  EasingFunction,
-  SpriteNumericInterpolationOptions,
-} from './types';
+import type { EasingFunction, SpriteInterpolationOptions } from './types';
 import { resolveEasing } from './easing';
+import type { NumericInterpolationState } from './internalTypes';
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Small tolerance used to decide when numeric differences are effectively zero.
@@ -47,11 +47,11 @@ const normaliseDelta = (delta: number): number => {
 
 /**
  * Resolves interpolation options by applying defaults to duration and easing configuration.
- * @param {SpriteNumericInterpolationOptions} options - Caller-supplied interpolation configuration.
+ * @param {SpriteInterpolationOptions} options - Caller-supplied interpolation configuration.
  * @returns {{ durationMs: number; easing: EasingFunction }} Sanitized options ready for state creation.
  */
 const normaliseOptions = (
-  options: SpriteNumericInterpolationOptions
+  options: SpriteInterpolationOptions
 ): {
   durationMs: number;
   easing: EasingFunction;
@@ -64,36 +64,20 @@ const normaliseOptions = (
   };
 };
 
-/**
- * Runtime state tracked for numeric interpolations.
- * @property {number} durationMs - Total duration of the interpolation in milliseconds.
- * @property {EasingFunction} easing - Easing function applied to progress samples.
- * @property {number} from - Start value used for interpolation.
- * @property {number} to - Adjusted target along the shortest rotation path.
- * @property {number} finalValue - Caller-requested final value (used once interpolation completes).
- * @property {number} startTimestamp - Timestamp when interpolation began, `-1` until evaluation starts.
- */
-export interface NumericInterpolationState {
-  readonly durationMs: number;
-  readonly easing: EasingFunction;
-  readonly from: number;
-  readonly to: number;
-  readonly finalValue: number;
-  startTimestamp: number;
-}
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Parameters required to construct a {@link NumericInterpolationState}.
  * @property {number} currentValue - Current numeric value rendered on screen.
  * @property {number} targetValue - Desired value after interpolation completes.
  * @property {number | undefined} previousCommandValue - Prior commanded value used for feed-forward prediction.
- * @property {SpriteNumericInterpolationOptions} options - Timing and easing configuration.
+ * @property {SpriteInterpolationOptions} options - Timing and easing configuration.
  */
 export interface CreateNumericInterpolationStateParams {
   currentValue: number;
   targetValue: number;
   previousCommandValue?: number;
-  options: SpriteNumericInterpolationOptions;
+  options: SpriteInterpolationOptions;
 }
 
 /**
@@ -149,6 +133,8 @@ export const createNumericInterpolationState = (
     requiresInterpolation,
   };
 };
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Parameters describing interpolation evaluation state.

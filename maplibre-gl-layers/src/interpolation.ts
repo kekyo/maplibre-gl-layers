@@ -10,55 +10,13 @@ import type {
   SpriteInterpolationOptions,
   SpriteLocation,
 } from './types';
+import type { SpriteInterpolationState } from './internalTypes';
+
 import { cloneSpriteLocation, lerpSpriteLocation } from './location';
 import { resolveEasing } from './easing';
 import { spriteLocationsEqual } from './location';
 
-/**
- * Runtime state describing the active interpolation between two sprite locations.
- * Consumers reuse the same state across ticks to avoid re-allocations while animation is running.
- *
- * @property mode - Strategy used to resolve the target location (feedback or feedforward).
- * @property durationMs - Total time allocated for the interpolation in milliseconds.
- * @property easing - Resolved easing function applied to raw progress values.
- * @property startTimestamp - Epoch millisecond when the interpolation started, or -1 when uninitialised.
- * @property from - Origin sprite location cloned from the current render state.
- * @property to - Destination sprite location being interpolated towards.
- */
-export interface SpriteInterpolationState {
-  readonly mode: SpriteInterpolationMode;
-  readonly durationMs: number;
-  readonly easing: EasingFunction;
-  startTimestamp: number;
-  readonly from: SpriteLocation;
-  readonly to: SpriteLocation;
-}
-
-/**
- * Parameters required to create a fresh interpolation state for the next animation segment.
- *
- * @property currentLocation - Sprite location currently rendered on screen.
- * @property lastCommandLocation - Previously commanded target, used for feedforward extrapolation.
- * @property nextCommandLocation - Upcoming commanded target that the sprite should reach.
- * @property options - Raw interpolation options supplied by the caller.
- */
-export interface CreateInterpolationStateParams {
-  currentLocation: SpriteLocation;
-  lastCommandLocation?: SpriteLocation;
-  nextCommandLocation: SpriteLocation;
-  options: SpriteInterpolationOptions;
-}
-
-/**
- * Result of preparing interpolation state, including a flag denoting whether any lerp is needed.
- *
- * @property state - Prepared interpolation state ready for evaluation.
- * @property requiresInterpolation - Indicates whether lerping is needed or an immediate snap is sufficient.
- */
-export interface CreateInterpolationStateResult {
-  readonly state: SpriteInterpolationState;
-  readonly requiresInterpolation: boolean;
-}
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Computes a feed-forward target by extrapolating the delta between the two most recent locations.
@@ -121,6 +79,34 @@ const normaliseOptions = (
   };
 };
 
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Parameters required to create a fresh interpolation state for the next animation segment.
+ *
+ * @property currentLocation - Sprite location currently rendered on screen.
+ * @property lastCommandLocation - Previously commanded target, used for feedforward extrapolation.
+ * @property nextCommandLocation - Upcoming commanded target that the sprite should reach.
+ * @property options - Raw interpolation options supplied by the caller.
+ */
+export interface CreateInterpolationStateParams {
+  currentLocation: SpriteLocation;
+  lastCommandLocation?: SpriteLocation;
+  nextCommandLocation: SpriteLocation;
+  options: SpriteInterpolationOptions;
+}
+
+/**
+ * Result of preparing interpolation state, including a flag denoting whether any lerp is needed.
+ *
+ * @property state - Prepared interpolation state ready for evaluation.
+ * @property requiresInterpolation - Indicates whether lerping is needed or an immediate snap is sufficient.
+ */
+export interface CreateInterpolationStateResult {
+  readonly state: SpriteInterpolationState;
+  readonly requiresInterpolation: boolean;
+}
+
 /**
  * Creates interpolation state for the next sprite movement and signals if interpolation is necessary.
  *
@@ -158,6 +144,8 @@ export const createInterpolationState = (
 
   return { state, requiresInterpolation };
 };
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Parameters required to evaluate an interpolation tick at a given moment.

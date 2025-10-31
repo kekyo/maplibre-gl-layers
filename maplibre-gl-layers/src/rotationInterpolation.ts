@@ -4,11 +4,11 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { SpriteNumericInterpolationOptions } from './types';
-import {
-  createNumericInterpolationState,
-  type NumericInterpolationState,
-} from './numericInterpolation';
+import type { SpriteInterpolationOptions } from './types';
+import type { NumericInterpolationState } from './internalTypes';
+import { createNumericInterpolationState } from './numericInterpolation';
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Normalizes an absolute angle in degrees to the range [0, 360).
@@ -24,18 +24,20 @@ export const normaliseAngleDeg = (angle: number): number => {
   return Object.is(normalized, -0) ? 0 : normalized;
 };
 
+//////////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Parameters describing the rotation update request.
  * @property {number} currentAngleDeg - Current angle already applied to the sprite in degrees.
  * @property {number} targetAngleDeg - Desired angle in degrees that should be reached.
  * @property {number | undefined} previousCommandAngleDeg - Previous commanded angle for feed-forward prediction.
- * @property {SpriteNumericInterpolationOptions | null} [options] - Optional interpolation configuration.
+ * @property {SpriteInterpolationOptions | null} [options] - Optional interpolation configuration.
  */
 export interface ResolveRotationTargetParams {
   currentAngleDeg: number;
   targetAngleDeg: number;
   previousCommandAngleDeg?: number;
-  options?: SpriteNumericInterpolationOptions | null;
+  options?: SpriteInterpolationOptions | null;
 }
 
 /**
