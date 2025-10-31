@@ -9,6 +9,7 @@ import {
 import type {
   SpriteMode,
   SpriteLayerClickEvent,
+  SpriteLayerHoverEvent,
   SpriteInterpolationMode,
   SpriteAnchor,
   SpriteImageInterpolationOptions,
@@ -532,7 +533,7 @@ const createHud = () => {
           data-selected-placeholder
           data-testid="selected-placeholder"
         >
-          Click a sprite to view its details here.
+          Hover a sprite to view its details here.
         </p>
         <div data-selected-details hidden data-testid="selected-details">
           <div class="status-row" data-testid="selected-row-id">
@@ -1256,12 +1257,14 @@ const main = async () => {
   };
 
   /**
-   * Populates the detail panel with information about the sprite that was clicked.
+   * Populates the detail panel with information about the sprite under the pointer.
    *
-   * @param {SpriteLayerClickEvent<DemoSpriteTag>} event - Click payload emitted by the sprite layer.
+   * @param {SpriteLayerHoverEvent<DemoSpriteTag> | SpriteLayerClickEvent<DemoSpriteTag>} event - Interaction payload emitted by the sprite layer.
    */
-  const renderSelectedSprite = (
-    event: SpriteLayerClickEvent<DemoSpriteTag>
+  const renderSpriteDetails = (
+    event:
+      | SpriteLayerHoverEvent<DemoSpriteTag>
+      | SpriteLayerClickEvent<DemoSpriteTag>
   ) => {
     if (selectedPlaceholderEl) {
       // Hide the placeholder summary whenever a real sprite has been chosen.
@@ -1335,6 +1338,89 @@ const main = async () => {
     },
   });
 
+  /**
+   * Reverses sprite movement on click so users can steer individual sprites.
+   *
+   * @param {SpriteLayerClickEvent<DemoSpriteTag>} event - Click payload emitted by the sprite layer.
+   */
+  const handleSpriteClick = (
+    event: SpriteLayerClickEvent<DemoSpriteTag>
+  ): void => {
+    const currentTag = event.sprite.tag;
+    if (!currentTag) {
+      return;
+    }
+
+    const normalizeProgress = (progress: number): number => {
+      if (!Number.isFinite(progress)) {
+        return 0;
+      }
+      let value = progress % 1;
+      if (value < 0) {
+        value += 1;
+      }
+      return value;
+    };
+
+    const invertedTag: DemoSpriteTag = {
+      ...currentTag,
+      dx: -currentTag.dx,
+      dy: -currentTag.dy,
+      lastStepLng: -currentTag.lastStepLng,
+      lastStepLat: -currentTag.lastStepLat,
+      worldLng: event.sprite.currentLocation.lng,
+      worldLat: event.sprite.currentLocation.lat,
+    };
+
+    if (currentTag.path) {
+      const path = currentTag.path;
+      const invertedSpeed = path.speed === 0 ? path.speed : -path.speed;
+      let progress = path.progress;
+      const pathVectorLng = path.endLng - path.startLng;
+      const pathVectorLat = path.endLat - path.startLat;
+      const pathLengthSq =
+        pathVectorLng * pathVectorLng + pathVectorLat * pathVectorLat;
+      if (pathLengthSq > 0) {
+        const originToCurrentLng =
+          event.sprite.currentLocation.lng - path.startLng;
+        const originToCurrentLat =
+          event.sprite.currentLocation.lat - path.startLat;
+        progress =
+          (originToCurrentLng * pathVectorLng +
+            originToCurrentLat * pathVectorLat) /
+          pathLengthSq;
+      }
+      invertedTag.path = {
+        ...path,
+        speed: invertedSpeed,
+        progress: normalizeProgress(progress),
+      };
+      // Keep linear-mode step vectors aligned with the updated direction.
+      invertedTag.dx = -currentTag.dx;
+      invertedTag.dy = -currentTag.dy;
+    }
+
+    // Ensure the sprite keeps moving even when the vector collapses due to floating point error.
+    if (
+      Math.abs(invertedTag.dx) < EPSILON_DELTA &&
+      Math.abs(invertedTag.dy) < EPSILON_DELTA
+    ) {
+      const baseMagnitude = Math.max(
+        Math.hypot(currentTag.dx, currentTag.dy),
+        0.0001
+      );
+      const angle = Math.random() * Math.PI * 2;
+      invertedTag.dx = Math.cos(angle) * baseMagnitude;
+      invertedTag.dy = Math.sin(angle) * baseMagnitude;
+      invertedTag.lastStepLng = invertedTag.dx * MOVEMENT_STEP_FACTOR;
+      invertedTag.lastStepLat = invertedTag.dy * MOVEMENT_STEP_FACTOR;
+    }
+
+    spriteLayer.updateSprite(event.sprite.spriteId, {
+      tag: invertedTag,
+    });
+  };
+
   if (typeof window !== 'undefined') {
     // Register sprite layer references on the window for integration tests and debugging tools.
     const debugState: SpriteDemoDebugState = window.__spriteDemo ?? {
@@ -1355,7 +1441,8 @@ const main = async () => {
   // Run the remaining setup once all map resources finish loading.
   map.on('load', async () => {
     map.addLayer(spriteLayer);
-    spriteLayer.on('spriteclick', renderSelectedSprite);
+    spriteLayer.on('spritehover', renderSpriteDetails);
+    spriteLayer.on('spriteclick', handleSpriteClick);
 
     let updateBasemapButtons: (() => void) | undefined;
 
@@ -3060,9 +3147,12 @@ const main = async () => {
         if (currentAnimationMode === 'linear' && tag.path) {
           const path = tag.path;
           path.progress += path.speed * MOVEMENT_STEP_FACTOR;
-          // Wrap progress to 0 when it exceeds 1 to maintain looping motion.
+          // Wrap progress to stay within the expected 0–1 range.
           while (path.progress > 1) {
             path.progress -= 1;
+          }
+          while (path.progress < 0) {
+            path.progress += 1;
           }
           nextWorldLng =
             path.startLng + (path.endLng - path.startLng) * path.progress;
