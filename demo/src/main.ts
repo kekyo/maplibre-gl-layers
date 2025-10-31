@@ -182,6 +182,15 @@ const ASSUMED_FRAME_TIME_MS = 1000 / 60;
 /** Factor that converts timer steps into frame-equivalent movement. */
 const MOVEMENT_STEP_FACTOR = MOVEMENT_INTERVAL_MS / ASSUMED_FRAME_TIME_MS;
 
+/** Minimum multiplier applied to sprite movement speed. */
+const MOVEMENT_SPEED_SCALE_MIN = 0;
+/** Maximum multiplier applied to sprite movement speed. */
+const MOVEMENT_SPEED_SCALE_MAX = 3;
+/** Slider increment for the movement speed control. */
+const MOVEMENT_SPEED_SCALE_STEP = 0.05;
+/** Default movement speed multiplier. */
+const DEFAULT_MOVEMENT_SPEED_SCALE = 1;
+
 /** Fraction of the icon height occupied by the arrow head near the top edge. */
 const ARROW_HEAD_TOP_FRACTION = 0.085;
 /** Anchor y-position that aligns the arrow tip with the ground in billboard mode. */
@@ -189,6 +198,19 @@ const BILLBOARD_PRIMARY_ANCHOR_Y = 1 - 2 * ARROW_HEAD_TOP_FRACTION;
 
 /** Interaction states that control if and how the secondary image orbits the primary marker. */
 type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+/** Formats the movement speed multiplier for HUD display. */
+const formatMovementSpeedScale = (scale: number): string => {
+  if (scale <= 0) {
+    return '0×';
+  }
+  if (scale >= 1) {
+    return `${scale.toFixed(1)}×`;
+  }
+  return `${scale.toFixed(2)}×`;
+};
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -428,8 +450,8 @@ let isRotateInterpolationEnabled = true;
 let rotateInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Height mode used for arrow icons. */
 let currentArrowShapeMode: IconHeightMode = 'elongated';
-/** Flag indicating whether the movement timer is active. */
-let isMovementLoopEnabled = true;
+/** Global multiplier applied to sprite movement speed. */
+let movementSpeedScale = DEFAULT_MOVEMENT_SPEED_SCALE;
 /** Mode for the secondary image (e.g., orbiting satellite indicator). */
 let currentSecondaryImageOrbitMode: SecondaryOrbitMode = 'hidden';
 /** Currently selected secondary image type. */
@@ -444,6 +466,8 @@ let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
 let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
+/** UI updater for the movement speed slider. */
+let updateMovementSpeedUI: ((scale: number) => void) | undefined;
 /** Indicates whether supplemental images have been registered. */
 let isSecondaryImageReady = false;
 /** UI updater for the secondary-image toggle buttons. */
@@ -458,8 +482,6 @@ let updateOrbitDegInterpolationButton: (() => void) | undefined;
 let updateOrbitMetersInterpolationButton: (() => void) | undefined;
 /** Rotation angle in degrees for secondary images. */
 let secondaryImageOrbitDegrees = 0;
-/** UI updater for the movement toggle. */
-let updateMovementToggleButton: (() => void) | undefined;
 /** UI updater for the location interpolation toggle. */
 let updateLocationInterpolationButton: (() => void) | undefined;
 
@@ -636,21 +658,29 @@ const createHud = () => {
       </div>
       <div class="control-group" data-testid="group-movement-loop">
         <h1>Move Location</h1>
-        <button
-          type="button"
-          class="toggle-button${isMovementLoopEnabled ? ' active' : ''}"
-          data-control="movement-toggle"
-          data-label="Movement"
-          data-active-text="On"
-          data-inactive-text="Off"
-          aria-pressed="${isMovementLoopEnabled}"
-          data-testid="toggle-movement"
-        >
-          Movement: ${isMovementLoopEnabled ? 'On' : 'Off'}
-        </button>
-      </div>
-      <div class="control-group" data-testid="group-animation">
-        <h1>Animation</h1>
+        <label class="range-label" for="movement-speed-slider">
+          Speed
+          <span
+            class="range-value"
+            data-status="movement-speed"
+            data-testid="status-movement-speed"
+          >${formatMovementSpeedScale(DEFAULT_MOVEMENT_SPEED_SCALE)}</span>
+        </label>
+        <input
+          type="range"
+          id="movement-speed-slider"
+          class="range-input"
+          min="${MOVEMENT_SPEED_SCALE_MIN}"
+          max="${MOVEMENT_SPEED_SCALE_MAX}"
+          step="${MOVEMENT_SPEED_SCALE_STEP}"
+          value="${DEFAULT_MOVEMENT_SPEED_SCALE}"
+          data-control="movement-speed"
+          data-testid="slider-movement-speed"
+          aria-valuemin="${MOVEMENT_SPEED_SCALE_MIN}"
+          aria-valuemax="${MOVEMENT_SPEED_SCALE_MAX}"
+          aria-valuenow="${DEFAULT_MOVEMENT_SPEED_SCALE}"
+          aria-label="Sprite movement speed"
+        />
         <button type="button" class="toggle-button${currentAnimationMode === 'random' ? ' active' : ''}" data-control="animation-mode" data-option="random" data-label="Random Walk" aria-pressed="${currentAnimationMode === 'random'}" data-testid="toggle-animation-random">
           Random Walk
         </button>
@@ -1858,6 +1888,10 @@ const main = async () => {
         // Avoid registering multiple intervals if the loop is already running.
         return;
       }
+      if (movementSpeedScale <= 0) {
+        // Do not start the interval when movement is paused.
+        return;
+      }
       movementUpdateIntervalId = window.setInterval(() => {
         performMovementStep();
       }, MOVEMENT_INTERVAL_MS);
@@ -1875,27 +1909,33 @@ const main = async () => {
       movementUpdateIntervalId = undefined;
     };
 
+    const clampMovementSpeedScale = (scale: number): number =>
+      Math.min(
+        MOVEMENT_SPEED_SCALE_MAX,
+        Math.max(MOVEMENT_SPEED_SCALE_MIN, scale)
+      );
+
     /**
-     * Toggles the global movement loop and updates associated UI state.
+     * Updates the movement speed multiplier and manages the background interval.
      *
-     * @param {boolean} enabled - Desired movement state.
+     * @param {number} nextScale - Desired movement speed multiplier.
      */
-    const setMovementLoopEnabled = (enabled: boolean) => {
-      if (isMovementLoopEnabled === enabled) {
-        // State unchanged; refresh the toggle label to prevent stale text.
-        updateMovementToggleButton?.();
-        return;
-      }
-      isMovementLoopEnabled = enabled;
-      if (isMovementLoopEnabled) {
-        // When turning the loop back on, execute one step immediately for responsiveness.
+    const setMovementSpeedScaleValue = (nextScale: number): void => {
+      const clamped = clampMovementSpeedScale(nextScale);
+      const wasActive = movementSpeedScale > 0;
+      movementSpeedScale = clamped;
+      const isActive = movementSpeedScale > 0;
+
+      if (isActive && !wasActive) {
+        // Resume motion immediately so sprites continue from their current positions.
         performMovementStep();
         startMovementInterval();
-      } else {
-        // Pausing the simulation requires cancelling the interval to stop CPU usage.
+      } else if (!isActive && wasActive) {
+        // Stop the timer when the slider reaches zero to conserve CPU time.
         stopMovementInterval();
       }
-      updateMovementToggleButton?.();
+
+      updateMovementSpeedUI?.(movementSpeedScale);
     };
 
     /**
@@ -2781,22 +2821,48 @@ const main = async () => {
         }
       );
 
-      const movementToggleButton = queryFirst<HTMLButtonElement>(
-        '[data-control="movement-toggle"]'
+      const movementSpeedStatusEl = queryFirst<HTMLElement>(
+        '[data-status="movement-speed"]'
       );
-      if (movementToggleButton) {
-        // Guard against layers where the movement toggle is hidden.
-        updateMovementToggleButton = () => {
-          setToggleButtonState(
-            movementToggleButton,
-            isMovementLoopEnabled,
-            'binary'
+      const movementSpeedSlider = queryFirst<HTMLInputElement>(
+        '[data-control="movement-speed"]'
+      );
+      if (movementSpeedSlider) {
+        const syncSliderState = (scale: number) => {
+          const clamped = Math.min(
+            MOVEMENT_SPEED_SCALE_MAX,
+            Math.max(MOVEMENT_SPEED_SCALE_MIN, scale)
           );
+          movementSpeedSlider.value = String(clamped);
+          movementSpeedSlider.valueAsNumber = clamped;
+          movementSpeedSlider.setAttribute('aria-valuenow', String(clamped));
         };
-        updateMovementToggleButton();
-        movementToggleButton.addEventListener('click', () => {
-          setMovementLoopEnabled(!isMovementLoopEnabled);
+        updateMovementSpeedUI = (scale: number) => {
+          syncSliderState(scale);
+          if (movementSpeedStatusEl) {
+            movementSpeedStatusEl.textContent = formatMovementSpeedScale(scale);
+          }
+        };
+        updateMovementSpeedUI(movementSpeedScale);
+
+        const readSliderValue = (): number => {
+          const parsed = Number(movementSpeedSlider.value);
+          return Number.isFinite(parsed) ? parsed : movementSpeedScale;
+        };
+
+        movementSpeedSlider.addEventListener('input', () => {
+          setMovementSpeedScaleValue(readSliderValue());
         });
+        movementSpeedSlider.addEventListener('change', () => {
+          setMovementSpeedScaleValue(readSliderValue());
+        });
+      } else {
+        updateMovementSpeedUI = (scale: number) => {
+          if (movementSpeedStatusEl) {
+            movementSpeedStatusEl.textContent = formatMovementSpeedScale(scale);
+          }
+        };
+        updateMovementSpeedUI(movementSpeedScale);
       }
 
       // Secondary image buttons.
@@ -3122,10 +3188,12 @@ const main = async () => {
      * Handles movement, boundary reflection, and rotation calculation.
      */
     const performMovementStep = (): void => {
-      if (!isMovementLoopEnabled) {
-        // Skip processing when the movement loop toggle is OFF to conserve CPU time.
+      if (movementSpeedScale <= 0) {
+        // Skip processing when the speed slider is set to zero to conserve CPU time.
         return;
       }
+
+      const scaledStepFactor = MOVEMENT_STEP_FACTOR * movementSpeedScale;
 
       // Update every sprite.
       spriteLayer.updateForEach((sprite, update) => {
@@ -3146,7 +3214,7 @@ const main = async () => {
         // Follow the precomputed path when linear mode is active.
         if (currentAnimationMode === 'linear' && tag.path) {
           const path = tag.path;
-          path.progress += path.speed * MOVEMENT_STEP_FACTOR;
+          path.progress += path.speed * scaledStepFactor;
           // Wrap progress to stay within the expected 0–1 range.
           while (path.progress > 1) {
             path.progress -= 1;
@@ -3160,8 +3228,8 @@ const main = async () => {
             path.startLat + (path.endLat - path.startLat) * path.progress;
         } else {
           // In random mode, apply the velocity vector directly.
-          nextWorldLng += tag.dx * MOVEMENT_STEP_FACTOR;
-          nextWorldLat += tag.dy * MOVEMENT_STEP_FACTOR;
+          nextWorldLng += tag.dx * scaledStepFactor;
+          nextWorldLat += tag.dy * scaledStepFactor;
 
           if (
             nextWorldLng > boundaryLng + lngRadius ||
