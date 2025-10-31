@@ -11,7 +11,7 @@ import type {
   SpriteLayerClickEvent,
   SpriteInterpolationMode,
   SpriteAnchor,
-  SpriteImageRotationInterpolationOptions,
+  SpriteImageInterpolationOptions,
   SpriteImageDefinitionUpdate,
   SpriteInitEntry,
   SpriteTextGlyphOptions,
@@ -1428,7 +1428,7 @@ const main = async () => {
               };
               const orbitInterpolation = createOrbitInterpolationOptions();
               if (orbitInterpolation) {
-                imageUpdate.rotationInterpolation = orbitInterpolation;
+                imageUpdate.interpolation = orbitInterpolation;
               }
               update.updateImage(image.subLayer, image.order, imageUpdate);
             }
@@ -1473,7 +1473,7 @@ const main = async () => {
               const rotationInterpolation = createRotateInterpolationOptions();
               if (rotationInterpolation) {
                 // Respect the rotate interpolation toggle before mutating the image definition.
-                imageUpdate.rotationInterpolation = rotationInterpolation;
+                imageUpdate.interpolation = rotationInterpolation;
               }
               update.updateImage(image.subLayer, image.order, imageUpdate);
             }
@@ -1511,7 +1511,7 @@ const main = async () => {
               const rotationInterpolation = createRotateInterpolationOptions();
               if (rotationInterpolation) {
                 // Only set rotation interpolation when the user has enabled the smoothing toggle.
-                imageUpdate.rotationInterpolation = rotationInterpolation;
+                imageUpdate.interpolation = rotationInterpolation;
               }
               update.updateImage(image.subLayer, image.order, imageUpdate);
             } else {
@@ -1564,7 +1564,7 @@ const main = async () => {
               return;
             }
             const imageUpdate: SpriteImageDefinitionUpdate = {
-              rotationInterpolation: enabled
+              interpolation: enabled
                 ? {
                     rotateDeg: { durationMs: MOVEMENT_INTERVAL_MS },
                   }
@@ -1591,7 +1591,7 @@ const main = async () => {
               return;
             }
             const imageUpdate: SpriteImageDefinitionUpdate = {
-              rotationInterpolation: enabled
+              interpolation: enabled
                 ? {
                     offsetDeg: { durationMs: MOVEMENT_INTERVAL_MS },
                   }
@@ -1804,7 +1804,7 @@ const main = async () => {
             const orbitInterpolation = createOrbitInterpolationOptions();
             if (orbitInterpolation) {
               // Only attach interpolation data when the global toggle allows it.
-              imageUpdate.rotationInterpolation = orbitInterpolation;
+              imageUpdate.interpolation = orbitInterpolation;
             }
             update.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -1880,10 +1880,10 @@ const main = async () => {
     /**
      * Builds rotation interpolation settings when the global toggle is enabled.
      *
-     * @returns {SpriteImageRotationInterpolationOptions|undefined} Interpolation config or undefined when disabled.
+     * @returns {SpriteImageInterpolationOptions|undefined} Interpolation config or undefined when disabled.
      */
     const createRotateInterpolationOptions = ():
-      | SpriteImageRotationInterpolationOptions
+      | SpriteImageInterpolationOptions
       | undefined => {
       if (!isRotateInterpolationEnabled) {
         // Returning undefined signals callers to omit interpolation data entirely.
@@ -1891,6 +1891,7 @@ const main = async () => {
       }
       return {
         rotateDeg: {
+          mode: currentInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
         },
       };
@@ -1899,10 +1900,10 @@ const main = async () => {
     /**
      * Constructs interpolation options for orbital offsets when allowed by the toggle state.
      *
-     * @returns {SpriteImageRotationInterpolationOptions|undefined} Offset interpolation details.
+     * @returns {SpriteImageInterpolationOptions|undefined} Offset interpolation details.
      */
     const createOrbitInterpolationOptions = ():
-      | SpriteImageRotationInterpolationOptions
+      | SpriteImageInterpolationOptions
       | undefined => {
       if (!isOrbitInterpolationEnabled) {
         // Skip interpolation when the user has disabled smoothing for orbit motion.
@@ -1910,6 +1911,7 @@ const main = async () => {
       }
       return {
         offsetDeg: {
+          mode: currentInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
         },
       };
@@ -2623,7 +2625,7 @@ const main = async () => {
             autoRotation: isAutoRotationEnabled,
             rotateDeg: primaryPlacement.rotateDeg,
             anchor: primaryPlacement.anchor,
-            rotationInterpolation: isRotateInterpolationEnabled
+            interpolation: isRotateInterpolationEnabled
               ? { rotateDeg: { durationMs: MOVEMENT_INTERVAL_MS } }
               : undefined,
           },
@@ -2637,7 +2639,7 @@ const main = async () => {
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
             scale: SECONDARY_IMAGE_SCALE,
             opacity: currentSecondaryImageOrbitMode === 'hidden' ? 0.0 : 1.0,
-            rotationInterpolation: isOrbitInterpolationEnabled
+            interpolation: isOrbitInterpolationEnabled
               ? { offsetDeg: { durationMs: MOVEMENT_INTERVAL_MS } }
               : undefined,
           },

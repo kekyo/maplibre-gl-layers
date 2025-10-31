@@ -39,7 +39,7 @@ import {
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
   type SpriteImageOffset,
-  type SpriteInterpolationOptions,
+  type SpriteLocationInterpolationOptions,
   type SpriteNumericInterpolationOptions,
   type SpriteImageOriginLocation,
   type SpriteScreenPoint,
@@ -103,7 +103,7 @@ import {
 // * A sprite may contain zero or more images, each with its own SpriteImageDefinition attributes.
 // * When isEnabled is false, the sprite has zero images, every image has opacity 0.0, or all image IDs are invalid,
 //   the sprite can be ignored for the remainder of the pipeline.
-// * When movement interpolation (SpriteInterpolationOptions) is enabled, it operates per sprite (not per image),
+// * When movement interpolation (SpriteLocationInterpolationOptions) is enabled, it operates per sprite (not per image),
 //   producing an interpolated position B relative to the base position A. Rotation angles are not interpolated.
 //   SpriteInterpolationMode supports feedback and feed-forward:
 //   * Feedback: interpolate between the previous and current base locations over durationMs when the position changes.
@@ -1336,7 +1336,15 @@ interface InternalSpriteImageState {
   /**
    * Interpolation state used for offset.offsetDeg.
    */
-  offsetInterpolationState: NumericInterpolationState | null;
+  offsetDegInterpolationState: NumericInterpolationState | null;
+  /**
+   * Last commanded displayed rotation angle, used for feed-forward prediction.
+   */
+  lastCommandRotateDeg: number;
+  /**
+   * Last commanded offset angle in degrees, used for feed-forward prediction.
+   */
+  lastCommandOffsetDeg: number;
   /**
    * Reusable buffer storing screen-space quad corners for hit testing.
    */
@@ -1397,7 +1405,7 @@ interface InternalSpriteCurrentState<TTag> {
   /**
    * Most recently requested interpolation options, or null if none pending.
    */
-  pendingInterpolationOptions: SpriteInterpolationOptions | null;
+  pendingInterpolationOptions: SpriteLocationInterpolationOptions | null;
   /**
    * Most recently commanded location, regardless of interpolation.
    */
@@ -1477,6 +1485,7 @@ const updateImageDisplayedRotation = (
   const currentAngle = Number.isFinite(image.displayedRotateDeg)
     ? image.displayedRotateDeg
     : targetAngle;
+  const previousCommandAngle = image.lastCommandRotateDeg;
 
   const options =
     optionsOverride === undefined
@@ -1486,6 +1495,7 @@ const updateImageDisplayedRotation = (
   const { nextAngleDeg, interpolationState } = resolveRotationTarget({
     currentAngleDeg: currentAngle,
     targetAngleDeg: targetAngle,
+    previousCommandAngleDeg: previousCommandAngle,
     options: options ?? undefined,
   });
 
@@ -1495,16 +1505,17 @@ const updateImageDisplayedRotation = (
   if (!interpolationState) {
     image.displayedRotateDeg = targetAngle;
   }
+  image.lastCommandRotateDeg = targetAngle;
 };
 
 /**
  * Deep-clones movement interpolation options to prevent shared references between sprites.
- * @param {SpriteInterpolationOptions} options - Options provided by the user.
- * @returns {SpriteInterpolationOptions} Cloned options object.
+ * @param {SpriteLocationInterpolationOptions} options - Options provided by the user.
+ * @returns {SpriteLocationInterpolationOptions} Cloned options object.
  */
 export const cloneInterpolationOptions = (
-  options: SpriteInterpolationOptions
-): SpriteInterpolationOptions => {
+  options: SpriteLocationInterpolationOptions
+): SpriteLocationInterpolationOptions => {
   return {
     mode: options.mode,
     durationMs: options.durationMs,
@@ -1521,6 +1532,7 @@ const cloneNumericInterpolationOptions = (
   options: SpriteNumericInterpolationOptions
 ): SpriteNumericInterpolationOptions => {
   return {
+    mode: options.mode,
     durationMs: options.durationMs,
     easing: options.easing,
   };
@@ -1540,6 +1552,8 @@ export const createImageStateFromInit = (
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
+  const initialOffset = cloneOffset(imageInit.offset);
+  const initialRotateDeg = normaliseAngleDeg(imageInit.rotateDeg ?? 0);
   const state: InternalSpriteImageState = {
     subLayer,
     order,
@@ -1548,9 +1562,9 @@ export const createImageStateFromInit = (
     opacity: imageInit.opacity ?? 1.0,
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
-    offset: cloneOffset(imageInit.offset),
+    offset: initialOffset,
     rotateDeg: imageInit.rotateDeg ?? 0,
-    displayedRotateDeg: normaliseAngleDeg(imageInit.rotateDeg ?? 0),
+    displayedRotateDeg: initialRotateDeg,
     autoRotation: imageInit.autoRotation ?? autoRotationDefault,
     autoRotationMinDistanceMeters:
       imageInit.autoRotationMinDistanceMeters ??
@@ -1559,10 +1573,12 @@ export const createImageStateFromInit = (
     originLocation: cloneOriginLocation(imageInit.originLocation),
     rotationInterpolationState: null,
     rotationInterpolationOptions: null,
-    offsetInterpolationState: null,
+    offsetDegInterpolationState: null,
+    lastCommandRotateDeg: initialRotateDeg,
+    lastCommandOffsetDeg: initialOffset.offsetDeg,
   };
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
-  const rotateInitOption = imageInit.rotationInterpolation?.rotateDeg ?? null;
+  const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
   if (rotateInitOption) {
     state.rotationInterpolationOptions =
       cloneNumericInterpolationOptions(rotateInitOption);
@@ -2827,7 +2843,7 @@ export const createSpriteLayer = <T = any>(
             }
           }
 
-          const offsetState = image.offsetInterpolationState;
+          const offsetState = image.offsetDegInterpolationState;
           // Apply offset angular interpolation if declared.
           if (offsetState) {
             const evaluation = evaluateNumericInterpolation({
@@ -2842,7 +2858,7 @@ export const createSpriteLayer = <T = any>(
             if (evaluation.completed) {
               // When finished, lock in the final offset and clear state.
               image.offset.offsetDeg = offsetState.finalValue;
-              image.offsetInterpolationState = null;
+              image.offsetDegInterpolationState = null;
             } else {
               hasActiveInterpolation = true;
             }
@@ -4278,11 +4294,11 @@ export const createSpriteLayer = <T = any>(
     if (imageUpdate.anchor !== undefined) {
       state.anchor = cloneAnchor(imageUpdate.anchor);
     }
-    const rotationInterpolation = imageUpdate.rotationInterpolation;
+    const interpolationOptions = imageUpdate.interpolation;
     // Optional interpolation payloads allow independent control over offset and rotation animations.
-    const offsetInterpolationOption = rotationInterpolation?.offsetDeg;
+    const offsetInterpolationOption = interpolationOptions?.offsetDeg;
     // Pull out rotateDeg interpolation hints when the payload includes them.
-    const rotateInterpolationOption = rotationInterpolation?.rotateDeg;
+    const rotateInterpolationOption = interpolationOptions?.rotateDeg;
     let rotationOverride: SpriteNumericInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
     if (imageUpdate.offset !== undefined) {
@@ -4295,23 +4311,25 @@ export const createSpriteLayer = <T = any>(
           createNumericInterpolationState({
             currentValue: state.offset.offsetDeg,
             targetValue: newOffset.offsetDeg,
+            previousCommandValue: state.lastCommandOffsetDeg,
             options: offsetInterpolationOption,
           });
         if (requiresInterpolation) {
           state.offset.offsetMeters = newOffset.offsetMeters;
-          state.offsetInterpolationState = interpolationState;
+          state.offsetDegInterpolationState = interpolationState;
         } else {
           state.offset = newOffset;
-          state.offsetInterpolationState = null;
+          state.offsetDegInterpolationState = null;
         }
       } else {
         // No animation requested: adopt the new offset immediately.
         state.offset = newOffset;
-        state.offsetInterpolationState = null;
+        state.offsetDegInterpolationState = null;
       }
+      state.lastCommandOffsetDeg = newOffset.offsetDeg;
     } else if (offsetInterpolationOption === null) {
       // Explicit null clears any running offset interpolation.
-      state.offsetInterpolationState = null;
+      state.offsetDegInterpolationState = null;
     }
     if (rotateInterpolationOption !== undefined) {
       // Caller supplied new rotation interpolation preferences.
@@ -4511,7 +4529,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     let interpolationOptionsForLocation:
-      | SpriteInterpolationOptions
+      | SpriteLocationInterpolationOptions
       | null
       | undefined = undefined;
     let interpolationExplicitlySpecified = false;
@@ -4738,6 +4756,10 @@ export const createSpriteLayer = <T = any>(
       isUpdated: false,
     };
     const updateObject: SpriteUpdaterEntry<T> = {
+      isEnabled: undefined,
+      location: undefined,
+      interpolation: undefined,
+      tag: undefined,
       getImageIndexMap: () => {
         const map = new Map<number, Set<number>>();
         currentSprite.images.forEach((inner, subLayer) => {

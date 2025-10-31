@@ -79,6 +79,30 @@ export interface SpriteImageOriginLocation {
   useResolvedAnchor?: boolean;
 }
 
+/** Defines movement interpolation modes. */
+export type SpriteInterpolationMode = 'feedback' | 'feedforward';
+
+/** Easing function signature used to map interpolation progress. */
+export type EasingFunction = (progress: number) => number;
+
+/** Options for interpolating numeric values such as angles. */
+export interface SpriteNumericInterpolationOptions {
+  /** Interpolation mode; defaults to feedback. */
+  mode?: SpriteInterpolationMode;
+  /** Duration in milliseconds. */
+  durationMs: number;
+  /** Easing function mapping interpolation progress. Defaults to linear. */
+  easing?: EasingFunction;
+}
+
+/** Interpolation configuration for rotateDeg and offsetDeg. */
+export interface SpriteImageInterpolationOptions {
+  /** Interpolation settings for rotateDeg; null disables interpolation. */
+  rotateDeg?: SpriteNumericInterpolationOptions | null;
+  /** Interpolation settings for offset.offsetDeg; null disables interpolation. */
+  offsetDeg?: SpriteNumericInterpolationOptions | null;
+}
+
 /**
  * Initial attributes that define a sprite image.
  */
@@ -116,9 +140,9 @@ export interface SpriteImageDefinitionInit {
    */
   autoRotationMinDistanceMeters?: number;
   /**
-   * Optional interpolation settings for rotateDeg and offsetDeg.
+   * Optional interpolation settings.
    */
-  rotationInterpolation?: SpriteImageRotationInterpolationOptions;
+  interpolation?: SpriteImageInterpolationOptions;
 }
 
 /**
@@ -143,8 +167,8 @@ export interface SpriteImageDefinitionUpdate {
   autoRotation?: boolean;
   /** Minimum distance in meters before auto-rotation updates. */
   autoRotationMinDistanceMeters?: number;
-  /** Optional interpolation settings applied to rotateDeg and offsetDeg. */
-  rotationInterpolation?: SpriteImageRotationInterpolationOptions;
+  /** Optional interpolation settings. */
+  interpolation?: SpriteImageInterpolationOptions;
 }
 
 /**
@@ -274,14 +298,8 @@ export interface SpriteCurrentState<TTag> {
   readonly tag: TTag | null;
 }
 
-/** Defines movement interpolation modes. */
-export type SpriteInterpolationMode = 'feedback' | 'feedforward';
-
-/** Easing function signature used to map interpolation progress. */
-export type EasingFunction = (progress: number) => number;
-
 /** Options controlling position interpolation. */
-export interface SpriteInterpolationOptions {
+export interface SpriteLocationInterpolationOptions {
   /** Interpolation mode; defaults to feedback. */
   mode?: SpriteInterpolationMode;
   /** Duration in milliseconds. */
@@ -290,29 +308,13 @@ export interface SpriteInterpolationOptions {
   easing?: EasingFunction;
 }
 
-/** Options for interpolating numeric values such as angles. */
-export interface SpriteNumericInterpolationOptions {
-  /** Duration in milliseconds. */
-  durationMs: number;
-  /** Easing function mapping interpolation progress. Defaults to linear. */
-  easing?: EasingFunction;
-}
-
-/** Interpolation configuration for rotateDeg and offsetDeg. */
-export interface SpriteImageRotationInterpolationOptions {
-  /** Interpolation settings for rotateDeg; null disables interpolation. */
-  rotateDeg?: SpriteNumericInterpolationOptions | null;
-  /** Interpolation settings for offset.offsetDeg; null disables interpolation. */
-  offsetDeg?: SpriteNumericInterpolationOptions | null;
-}
-
 /**
  * Base structure for sprite updates.
  *
  * @template TTag Tag type stored on the sprite.
  * @property {boolean | undefined} isEnabled - Optional toggle to enable or disable the sprite.
  * @property {SpriteLocation | undefined} location - Optional target location for the sprite.
- * @property {SpriteInterpolationOptions | null | undefined} interpolation - Optional interpolation settings; `null` disables interpolation.
+ * @property {SpriteLocationInterpolationOptions | null | undefined} interpolation - Optional location interpolation settings; `null` disables interpolation.
  * @property {TTag | null | undefined} tag - Optional tag value to replace the current one; `null` clears the tag.
  */
 export interface SpriteUpdateEntryBase<TTag> {
@@ -321,7 +323,7 @@ export interface SpriteUpdateEntryBase<TTag> {
   /** Optional target location for the sprite. */
   location?: SpriteLocation;
   /** Optional interpolation settings; `null` disables interpolation. */
-  interpolation?: SpriteInterpolationOptions | null;
+  interpolation?: SpriteLocationInterpolationOptions | null;
   /** Optional tag value to replace the current one; `null` clears the tag. */
   tag?: TTag | null;
 }

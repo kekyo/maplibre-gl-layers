@@ -412,7 +412,7 @@ Of course, since this is a predicted coordinate, a disadvantage is that if the m
 
 Similar to sprite movement interpolation, you can also interpolate image rotation and angle rotation for offset rotation. While these functions are similar, they are distinct from sprite position interpolation.
 
-Use `rotationInterpolation` to smooth changes to `rotateDeg` and/or `offset.offsetDeg`. Each accepts its own `durationMs` and optional easing function. While interpolation is active, the angles update every frame until the specified duration completes; passing `null` disables interpolation.
+Use `interpolation` to smooth changes to `rotateDeg` and/or `offset.offsetDeg`. Each accepts its own `durationMs` and optional easing function. While interpolation is active, the angles update every frame until the specified duration completes; passing `null` disables interpolation for that angle.
 
 Below are examples of applying interpolation for the image rotation angle and offset angle respectively:
 
@@ -420,7 +420,7 @@ Below are examples of applying interpolation for the image rotation angle and of
 // Smoothly rotate the image to 180 degrees over 400 ms
 spriteLayer.updateSpriteImage('vehicle-rotated', 0, 0, {
   rotateDeg: 180, // Rotate toward 180 degrees
-  rotationInterpolation: {
+  interpolation: {
     rotateDeg: { durationMs: 400 },
   },
 });
@@ -431,7 +431,7 @@ spriteLayer.updateSpriteImage('vehicle-label', 1, 0, {
     offsetMeters: 12,
     offsetDeg: 45 // Rotate toward 180 degrees
   },
-  rotationInterpolation: {
+  interpolation: {
     offsetDeg: { durationMs: 600 },
   },
 });

@@ -28,11 +28,13 @@ export const normaliseAngleDeg = (angle: number): number => {
  * Parameters describing the rotation update request.
  * @property {number} currentAngleDeg - Current angle already applied to the sprite in degrees.
  * @property {number} targetAngleDeg - Desired angle in degrees that should be reached.
+ * @property {number | undefined} previousCommandAngleDeg - Previous commanded angle for feed-forward prediction.
  * @property {SpriteNumericInterpolationOptions | null} [options] - Optional interpolation configuration.
  */
 export interface ResolveRotationTargetParams {
   currentAngleDeg: number;
   targetAngleDeg: number;
+  previousCommandAngleDeg?: number;
   options?: SpriteNumericInterpolationOptions | null;
 }
 
@@ -57,6 +59,10 @@ export const resolveRotationTarget = (
   const options = params.options;
   const targetAngle = normaliseAngleDeg(params.targetAngleDeg);
   const currentAngle = normaliseAngleDeg(params.currentAngleDeg);
+  const previousCommandAngleDeg =
+    params.previousCommandAngleDeg !== undefined
+      ? normaliseAngleDeg(params.previousCommandAngleDeg)
+      : undefined;
 
   // Without options or with a zero/negative duration we snap to the target directly.
   if (!options || options.durationMs <= 0) {
@@ -69,6 +75,7 @@ export const resolveRotationTarget = (
   const { state, requiresInterpolation } = createNumericInterpolationState({
     currentValue: currentAngle,
     targetValue: targetAngle,
+    previousCommandValue: previousCommandAngleDeg,
     options,
   });
 

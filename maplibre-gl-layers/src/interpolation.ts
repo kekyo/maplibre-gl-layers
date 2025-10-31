@@ -7,7 +7,7 @@
 import type {
   EasingFunction,
   SpriteInterpolationMode,
-  SpriteInterpolationOptions,
+  SpriteLocationInterpolationOptions,
   SpriteLocation,
 } from './types';
 import { cloneSpriteLocation, lerpSpriteLocation } from './location';
@@ -46,7 +46,7 @@ export interface CreateInterpolationStateParams {
   currentLocation: SpriteLocation;
   lastCommandLocation?: SpriteLocation;
   nextCommandLocation: SpriteLocation;
-  options: SpriteInterpolationOptions;
+  options: SpriteLocationInterpolationOptions;
 }
 
 /**
@@ -112,7 +112,7 @@ interface NormalisedInterpolationOptions {
  * @returns Options safe for downstream consumption.
  */
 const normaliseOptions = (
-  options: SpriteInterpolationOptions
+  options: SpriteLocationInterpolationOptions
 ): NormalisedInterpolationOptions => {
   return {
     durationMs: Math.max(0, options.durationMs),

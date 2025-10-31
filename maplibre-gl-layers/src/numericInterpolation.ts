@@ -55,10 +55,12 @@ const normaliseOptions = (
 ): {
   durationMs: number;
   easing: EasingFunction;
+  mode: 'feedback' | 'feedforward';
 } => {
   return {
     durationMs: normaliseDuration(options.durationMs),
     easing: resolveEasing(options.easing),
+    mode: options.mode ?? 'feedback',
   };
 };
 
@@ -84,11 +86,13 @@ export interface NumericInterpolationState {
  * Parameters required to construct a {@link NumericInterpolationState}.
  * @property {number} currentValue - Current numeric value rendered on screen.
  * @property {number} targetValue - Desired value after interpolation completes.
+ * @property {number | undefined} previousCommandValue - Prior commanded value used for feed-forward prediction.
  * @property {SpriteNumericInterpolationOptions} options - Timing and easing configuration.
  */
 export interface CreateNumericInterpolationStateParams {
   currentValue: number;
   targetValue: number;
+  previousCommandValue?: number;
   options: SpriteNumericInterpolationOptions;
 }
 
@@ -113,7 +117,18 @@ export const createNumericInterpolationState = (
   const { currentValue, targetValue } = params;
   const options = normaliseOptions(params.options);
 
-  const delta = normaliseDelta(targetValue - currentValue);
+  let effectiveTarget = targetValue;
+  const previousCommand = params.previousCommandValue;
+  if (
+    options.mode === 'feedforward' &&
+    previousCommand !== undefined &&
+    Number.isFinite(previousCommand)
+  ) {
+    const commandDelta = normaliseDelta(targetValue - previousCommand);
+    effectiveTarget = targetValue + commandDelta;
+  }
+
+  const delta = normaliseDelta(effectiveTarget - currentValue);
   const pathTarget = currentValue + delta;
 
   // Duration must be positive and delta must exceed epsilon before we animate.
@@ -125,7 +140,7 @@ export const createNumericInterpolationState = (
     easing: options.easing,
     from: currentValue,
     to: pathTarget,
-    finalValue: targetValue,
+    finalValue: effectiveTarget,
     startTimestamp: -1,
   };
 

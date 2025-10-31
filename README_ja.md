@@ -437,7 +437,7 @@ spriteLayer.updateSprite(SPRITE_ID, {
 
 スプライト移動補間と似た機能として、画像の回転とオフセットの角度回転を補間することも出来ます。これらの機能は似ていますが、スプライト位置の補間とは別の機能です。
 
-`rotationInterpolation`で、画像の回転角の補間を有効にできます。`rotateDeg`の補間用と`offset.offsetDeg`の補間用で個別に`durationMs`と任意の`easing`関数を指定できます。補間が完了するまでは毎フレーム角度が滑らかに変化し、設定を削除するか`null`を渡すと即座に停止します。
+`interpolation`で、画像の回転角の補間を有効にできます。`rotateDeg`の補間用と`offset.offsetDeg`の補間用で個別に`durationMs`と任意の`easing`関数を指定できます。補間が完了するまでは毎フレーム角度が滑らかに変化し、設定を削除するか`null`を渡すと即座に停止します。
 
 以下に、画像の回転角とオフセットの角度のそれぞれで、補間を適用する例を示します:
 
@@ -445,7 +445,7 @@ spriteLayer.updateSprite(SPRITE_ID, {
 // 画像の回転角を400msで補間しながら変更する
 spriteLayer.updateSpriteImage('vehicle-anchor', 0, 0, {
   rotateDeg: 180, // 現在の角度から180度に向かって回転
-  rotationInterpolation: {
+  interpolation: {
     rotateDeg: { durationMs: 400 },
   },
 });
@@ -456,7 +456,7 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
     offsetMeters: 12,
     offsetDeg: 45, // 現在の角度から45度に向かって回転
   },
-  rotationInterpolation: {
+  interpolation: {
     offsetDeg: { durationMs: 600 },
   },
 });
