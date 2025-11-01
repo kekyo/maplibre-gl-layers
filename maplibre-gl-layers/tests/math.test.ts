@@ -27,6 +27,7 @@ import {
   calculateBillboardCornerScreenPositions,
   calculateSurfaceCenterPosition,
   calculateSurfaceCornerDisplacements,
+  computeSurfaceCornerShaderModel,
   type SurfaceDepthBiasFn,
   TRIANGLE_INDICES,
   UV_CORNERS,
@@ -379,18 +380,6 @@ describe('surface helpers', () => {
     expect(offset.north).toBeCloseTo(0, 6);
   });
 
-  it('applies displacement to lat/lng', () => {
-    const result = applySurfaceDisplacement(139, 35, 100, 200);
-    expect(result.lng).toBeCloseTo(
-      139 + (100 / (EARTH_RADIUS_METERS * Math.cos(deg(35)))) * (180 / Math.PI),
-      6
-    );
-    expect(result.lat).toBeCloseTo(
-      35 + (200 / EARTH_RADIUS_METERS) * (180 / Math.PI),
-      6
-    );
-  });
-
   it('keeps offset constant after spriteMaxPixel clamp', () => {
     const offsetDef = { offsetDeg: 0, offsetMeters: 10 } as const;
     const dimsAtClamp = calculateSurfaceWorldDimensions(128, 64, 1, 1, 1, {
@@ -457,6 +446,41 @@ describe('calculateEffectivePixelsPerMeter', () => {
   });
 });
 
+describe('applySurfaceDisplacement', () => {
+  it.each(displacementCases)(
+    'matches analytic displacement %#',
+    ({ baseLng, baseLat, east, north }) => {
+      const result = applySurfaceDisplacement(baseLng, baseLat, east, north);
+      const cosLat = Math.cos(deg(baseLat));
+      const clampedCos = Math.max(cosLat, 1e-6);
+      const expectedLng =
+        baseLng + (east / (EARTH_RADIUS_METERS * clampedCos)) * (180 / Math.PI);
+      const expectedLat =
+        baseLat + (north / EARTH_RADIUS_METERS) * (180 / Math.PI);
+      expect(result.lng).toBeCloseTo(expectedLng, 6);
+      expect(result.lat).toBeCloseTo(expectedLat, 6);
+    }
+  );
+
+  it('clamps cosine near the poles', () => {
+    const baseLat = 89.9999;
+    const result = applySurfaceDisplacement(45, baseLat, 500, 0);
+    expect(Number.isFinite(result.lng)).toBe(true);
+    const clampedCos = Math.max(Math.cos(deg(baseLat)), 1e-6);
+    const expectedLng =
+      45 + (500 / (EARTH_RADIUS_METERS * clampedCos)) * (180 / Math.PI);
+    expect(result.lng).toBeCloseTo(expectedLng, 6);
+    expect(result.lat).toBeCloseTo(baseLat, 6);
+  });
+
+  it('reverses small displacements symmetrically', () => {
+    const forward = applySurfaceDisplacement(10, -20, 30, -15);
+    const back = applySurfaceDisplacement(forward.lng, forward.lat, -30, 15);
+    expect(back.lng).toBeCloseTo(10, 6);
+    expect(back.lat).toBeCloseTo(-20, 6);
+  });
+});
+
 const anchorExtremes = [
   { x: -1, y: -1 },
   { x: -1, y: 1 },
@@ -493,6 +517,12 @@ const buildBillboardCases = () => {
 };
 
 const buildSurfaceCases = buildBillboardCases;
+
+const displacementCases = [
+  { baseLng: 139.0, baseLat: 35.0, east: 100, north: 200 },
+  { baseLng: -73.9857, baseLat: 40.758, east: -250, north: 400 },
+  { baseLng: 12.4924, baseLat: 80.0, east: 50, north: -75 },
+] as const;
 
 const computeBillboardCornersShaderModel = ({
   centerX,
@@ -915,6 +945,95 @@ describe('calculateSurfaceCornerDisplacements', () => {
       });
     }
   );
+});
+
+describe('computeSurfaceCornerShaderModel', () => {
+  const baseLocations = [
+    { lng: 0, lat: 0 },
+    { lng: 139.767125, lat: 35.681236 },
+    { lng: -73.9857, lat: 40.758 },
+    { lng: 45, lat: 85 },
+  ] as const;
+
+  it.each(buildSurfaceCases())(
+    'matches CPU corner displacements %#',
+    ({ anchor, rotation, scale, offset }) => {
+      for (const base of baseLocations) {
+        const worldDims = calculateSurfaceWorldDimensions(
+          128,
+          256,
+          1.5,
+          scale,
+          1
+        );
+        const offsetMeters = calculateSurfaceOffsetMeters(
+          offset,
+          scale,
+          1,
+          worldDims.scaleAdjustment
+        );
+
+        const cpuCorners = calculateSurfaceCornerDisplacements({
+          worldWidthMeters: worldDims.width,
+          worldHeightMeters: worldDims.height,
+          anchor,
+          totalRotateDeg: rotation,
+          offsetMeters,
+        });
+
+        const shaderCorners = computeSurfaceCornerShaderModel({
+          baseLngLat: { lng: base.lng, lat: base.lat },
+          worldWidthMeters: worldDims.width,
+          worldHeightMeters: worldDims.height,
+          anchor,
+          totalRotateDeg: rotation,
+          offsetMeters,
+        });
+
+        expect(shaderCorners).toHaveLength(cpuCorners.length);
+        shaderCorners.forEach((corner, index) => {
+          const cpuCorner = cpuCorners[index]!;
+          expect(corner.east).toBeCloseTo(cpuCorner.east, 6);
+          expect(corner.north).toBeCloseTo(cpuCorner.north, 6);
+          const displaced = applySurfaceDisplacement(
+            base.lng,
+            base.lat,
+            cpuCorner.east,
+            cpuCorner.north
+          );
+          expect(corner.lng).toBeCloseTo(displaced.lng, 6);
+          expect(corner.lat).toBeCloseTo(displaced.lat, 6);
+        });
+      }
+    }
+  );
+
+  it('returns offset-only corners for degenerate quads', () => {
+    const base = { lng: 10, lat: 45 };
+    const offsetMeters = { east: 12, north: -8 };
+    const shaderCorners = computeSurfaceCornerShaderModel({
+      baseLngLat: base,
+      worldWidthMeters: 0,
+      worldHeightMeters: 5,
+      anchor: { x: 0, y: 0 },
+      totalRotateDeg: 120,
+      offsetMeters,
+    });
+
+    expect(shaderCorners).toHaveLength(4);
+    shaderCorners.forEach((corner) => {
+      expect(corner.east).toBeCloseTo(offsetMeters.east, 6);
+      expect(corner.north).toBeCloseTo(offsetMeters.north, 6);
+      const expected = applySurfaceDisplacement(
+        base.lng,
+        base.lat,
+        offsetMeters.east,
+        offsetMeters.north
+      );
+      expect(corner.lng).toBeCloseTo(expected.lng, 6);
+      expect(corner.lat).toBeCloseTo(expected.lat, 6);
+    });
+  });
 });
 
 describe('screenToClip', () => {

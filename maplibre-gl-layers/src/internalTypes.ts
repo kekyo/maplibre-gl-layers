@@ -26,6 +26,37 @@ import type {
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * Corner model describing world displacements and resulting geographic coordinates for shader validation.
+ */
+export interface SurfaceShaderCornerState {
+  east: number;
+  north: number;
+  lng: number;
+  lat: number;
+}
+
+/**
+ * Aggregated inputs required to reproduce surface geometry on the GPU.
+ */
+export interface SurfaceShaderInputs {
+  mercatorCenter: { x: number; y: number; z: number };
+  worldToMercatorScale: { east: number; north: number };
+  halfSizeMeters: { east: number; north: number };
+  anchor: SpriteAnchor;
+  offsetMeters: { east: number; north: number };
+  sinCos: { sin: number; cos: number };
+  totalRotateDeg: number;
+  depthBiasNdc: number;
+  centerDisplacement: { east: number; north: number };
+  baseLngLat: SpriteLocation;
+  displacedCenter: SpriteLocation;
+  scaleAdjustment: number;
+  corners: SurfaceShaderCornerState[];
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
  * Runtime state describing the active interpolation between two sprite locations.
  * Consumers reuse the same state across ticks to avoid re-allocations while animation is running.
  *
@@ -201,6 +232,7 @@ export interface InternalSpriteImageState {
   lastCommandRotateDeg: number;
   lastCommandOffsetDeg: number;
   lastCommandOffsetMeters: number;
+  surfaceShaderInputs?: SurfaceShaderInputs;
   hitTestCorners?: [
     MutableSpriteScreenPoint,
     MutableSpriteScreenPoint,
