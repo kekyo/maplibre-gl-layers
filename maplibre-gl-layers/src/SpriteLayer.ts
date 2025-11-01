@@ -2029,55 +2029,14 @@ export const createSpriteLayer = <T = any>(
   const HIT_TEST_EPSILON = 1e-3;
 
   /**
-   * Determines whether a point lies inside the triangle defined by `a`, `b`, and `c`.
+   * Determines whether a point lies inside the quad defined by `corners`.
+   * Uses the edge order shared with the debug outline rendering so hit testing stays in sync
+   * with the visible polygon even when rotation reorders the logical corner layout.
    * @param {SpriteScreenPoint} point - Point to test.
-   * @param {SpriteScreenPoint} a - First triangle vertex.
-   * @param {SpriteScreenPoint} b - Second triangle vertex.
-   * @param {SpriteScreenPoint} c - Third triangle vertex.
-   * @returns {boolean} `true` when the point falls within or on the edges of the triangle.
+   * @param {readonly SpriteScreenPoint[]} corners - Quad corners used during rendering.
+   * @returns {boolean} `true` when the point lies inside either rendered triangle.
    */
-  const pointInTriangle = (
-    point: SpriteScreenPoint,
-    a: SpriteScreenPoint,
-    b: SpriteScreenPoint,
-    c: SpriteScreenPoint
-  ): boolean => {
-    const v0x = c.x - a.x;
-    const v0y = c.y - a.y;
-    const v1x = b.x - a.x;
-    const v1y = b.y - a.y;
-    const v2x = point.x - a.x;
-    const v2y = point.y - a.y;
-
-    const dot00 = v0x * v0x + v0y * v0y;
-    const dot01 = v0x * v1x + v0y * v1y;
-    const dot02 = v0x * v2x + v0y * v2y;
-    const dot11 = v1x * v1x + v1y * v1y;
-    const dot12 = v1x * v2x + v1y * v2y;
-
-    const denom = dot00 * dot11 - dot01 * dot01;
-    // Degenerate triangles produce near-zero denominators; bail out to avoid amplification.
-    if (Math.abs(denom) < HIT_TEST_EPSILON) {
-      return false;
-    }
-
-    const invDenom = 1 / denom;
-    const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
-    const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
-    const w = 1 - u - v;
-
-    return (
-      u >= -HIT_TEST_EPSILON && v >= -HIT_TEST_EPSILON && w >= -HIT_TEST_EPSILON
-    );
-  };
-
-  /**
-   * Determines whether a point lies inside a convex quad by decomposing into two triangles.
-   * @param {SpriteScreenPoint} point - Point to test.
-   * @param {readonly SpriteScreenPoint[]} corners - Quad corners ordered as [top-left, top-right, bottom-left, bottom-right].
-   * @returns {boolean} `true` when the point lies inside the quad.
-   */
-  const pointInQuad = (
+  const pointInRenderedQuad = (
     point: SpriteScreenPoint,
     corners: readonly [
       SpriteScreenPoint,
@@ -2085,9 +2044,36 @@ export const createSpriteLayer = <T = any>(
       SpriteScreenPoint,
       SpriteScreenPoint,
     ]
-  ): boolean =>
-    pointInTriangle(point, corners[0], corners[1], corners[2]) ||
-    pointInTriangle(point, corners[0], corners[2], corners[3]);
+  ): boolean => {
+    let hasPositiveCross = false;
+    let hasNegativeCross = false;
+    for (let i = 0; i < DEBUG_OUTLINE_CORNER_ORDER.length; i++) {
+      const currentIndex = DEBUG_OUTLINE_CORNER_ORDER[i]!;
+      const nextIndex =
+        DEBUG_OUTLINE_CORNER_ORDER[
+          (i + 1) % DEBUG_OUTLINE_CORNER_ORDER.length
+        ]!;
+      const a = corners[currentIndex]!;
+      const b = corners[nextIndex]!;
+      const edgeX = b.x - a.x;
+      const edgeY = b.y - a.y;
+      const pointX = point.x - a.x;
+      const pointY = point.y - a.y;
+      const cross = edgeX * pointY - edgeY * pointX;
+      if (Math.abs(cross) <= HIT_TEST_EPSILON) {
+        continue;
+      }
+      if (cross > 0) {
+        hasPositiveCross = true;
+      } else {
+        hasNegativeCross = true;
+      }
+      if (hasPositiveCross && hasNegativeCross) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   /**
    * Performs bounding-box precheck followed by triangle tests to confirm pointer hits.
@@ -2108,7 +2094,7 @@ export const createSpriteLayer = <T = any>(
     ) {
       return false;
     }
-    return pointInQuad(point, entry.corners);
+    return pointInRenderedQuad(point, entry.corners);
   };
 
   /**
