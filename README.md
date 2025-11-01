@@ -530,6 +530,9 @@ spriteLayer.on('spritehover', ({ sprite, image }) => {
 });
 ```
 
+Note: Hooking event handlers incurs additional overhead for coordinate detection.
+This may impact performance, especially when frequently updating sprite coordinates.
+
 ## Tags
 
 Each sprite can store arbitrary metadata through the `tag` property.
@@ -709,6 +712,7 @@ const spriteLayer = createSpriteLayer({
     generateMipmaps: true,
     maxAnisotropy: 4,
   },
+  showDebugBounds: false, // Draw red hit-test outlines while debugging
 });
 ```
 
@@ -729,6 +733,8 @@ const spriteLayer = createSpriteLayer({
 - `textureFiltering.minFilter` / `magFilter` - Override the WebGL texture filters used when sprites shrink or expand. The defaults match `linear` filtering in both directions. Setting `minFilter` to a mipmap variant (for example `linear-mipmap-linear`) automatically enables mipmap generation for newly registered images.
 - `textureFiltering.generateMipmaps` - Forces mipmap generation even when the chosen filter does not require it, improving quality for aggressively downscaled sprites on WebGL2 or power-of-two images. When the context cannot build mipmaps (for example WebGL1 with non power-of-two textures) the layer falls back to linear filtering automatically.
 - `textureFiltering.maxAnisotropy` - Requests anisotropic filtering (>= 1) when the runtime exposes `EXT_texture_filter_anisotropic`, helping surface-aligned sprites remain sharp at shallow viewing angles. The requested value is clamped to the GPU limit and only applied when mipmaps are available.
+- `showDebugBounds` - When `true`, the layer overlays red outlines representing sprite hit-test regions.
+  This is intended for debugging pointer interaction event handler and should remain `false` in production for best performance.
 
 All scaling values and texture filtering values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
 Invalid inputs are normalized and reported via `console.warn` to help catch configuration mistakes during development.
