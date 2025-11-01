@@ -1116,6 +1116,79 @@ export const calculateBillboardCornerScreenPositions = (
   return corners;
 };
 
+export type SurfaceShaderModelParams = {
+  baseLngLat: SpriteLocation;
+  worldWidthMeters: number;
+  worldHeightMeters: number;
+  anchor: SpriteAnchor;
+  totalRotateDeg: number;
+  offsetMeters: { east: number; north: number };
+};
+
+export type SurfaceShaderCornerModel = SurfaceCorner & SpriteLocation;
+
+export const computeSurfaceCornerShaderModel = (
+  params: SurfaceShaderModelParams
+): SurfaceShaderCornerModel[] => {
+  const {
+    baseLngLat,
+    worldWidthMeters,
+    worldHeightMeters,
+    anchor,
+    totalRotateDeg,
+    offsetMeters,
+  } = params;
+
+  const halfWidth = worldWidthMeters / 2;
+  const halfHeight = worldHeightMeters / 2;
+
+  if (halfWidth <= 0 || halfHeight <= 0) {
+    const cosLat = Math.cos(baseLngLat.lat * DEG2RAD);
+    const cosLatClamped = Math.max(cosLat, MIN_COS_LAT);
+    const deltaLat = (offsetMeters.north / EARTH_RADIUS_METERS) * RAD2DEG;
+    const deltaLng =
+      (offsetMeters.east / (EARTH_RADIUS_METERS * cosLatClamped)) * RAD2DEG;
+    return SURFACE_BASE_CORNERS.map(() => ({
+      east: offsetMeters.east,
+      north: offsetMeters.north,
+      lng: baseLngLat.lng + deltaLng,
+      lat: baseLngLat.lat + deltaLat,
+    }));
+  }
+
+  const anchorEast = (anchor?.x ?? 0) * halfWidth;
+  const anchorNorth = (anchor?.y ?? 0) * halfHeight;
+  const rad = -totalRotateDeg * DEG2RAD;
+  const sinR = Math.sin(rad);
+  const cosR = Math.cos(rad);
+  const cosLat = Math.cos(baseLngLat.lat * DEG2RAD);
+  const cosLatClamped = Math.max(cosLat, MIN_COS_LAT);
+
+  return SURFACE_BASE_CORNERS.map(([eastNorm, northNorm]) => {
+    const cornerEast = eastNorm * halfWidth;
+    const cornerNorth = northNorm * halfHeight;
+
+    const localEast = cornerEast - anchorEast;
+    const localNorth = cornerNorth - anchorNorth;
+
+    const rotatedEast = localEast * cosR - localNorth * sinR;
+    const rotatedNorth = localEast * sinR + localNorth * cosR;
+
+    const east = rotatedEast + offsetMeters.east;
+    const north = rotatedNorth + offsetMeters.north;
+
+    const deltaLat = (north / EARTH_RADIUS_METERS) * RAD2DEG;
+    const deltaLng = (east / (EARTH_RADIUS_METERS * cosLatClamped)) * RAD2DEG;
+
+    return {
+      east,
+      north,
+      lng: baseLngLat.lng + deltaLng,
+      lat: baseLngLat.lat + deltaLat,
+    };
+  });
+};
+
 /**
  * Parameters for projecting a surface sprite's center into screen space.
  * @typedef SurfaceCenterParams
