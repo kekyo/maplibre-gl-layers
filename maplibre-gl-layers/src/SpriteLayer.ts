@@ -150,6 +150,8 @@ import {
 
 /** Debug flag */
 const SL_DEBUG = false;
+/** Enables drawing red hit-test outlines around every sprite image during rendering. */
+const SL_DEBUG_DRAW_HIT_BOUNDS = true;
 
 /** Default sprite anchor centered at the image origin. */
 const DEFAULT_ANCHOR: SpriteAnchor = { x: 0.0, y: 0.0 };
@@ -565,6 +567,41 @@ const INITIAL_QUAD_VERTICES = new Float32Array(
 const QUAD_VERTEX_SCRATCH = new Float32Array(
   QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
 );
+
+/** Vertex shader for debug hit-test outline rendering in clip space. */
+const DEBUG_OUTLINE_VERTEX_SHADER_SOURCE = `
+attribute vec4 a_position;
+void main() {
+  gl_Position = a_position;
+}
+` as const;
+
+/** Fragment shader emitting a solid color for debug outlines. */
+const DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE = `
+precision mediump float;
+uniform vec4 u_color;
+void main() {
+  gl_FragColor = u_color;
+}
+` as const;
+
+/** Number of vertices required to outline a quad using LINE_LOOP. */
+const DEBUG_OUTLINE_VERTEX_COUNT = 4;
+/** Components per debug outline vertex (clipPosition.xyzw). */
+const DEBUG_OUTLINE_POSITION_COMPONENT_COUNT = 4;
+/** Stride in bytes for debug outline vertices. */
+const DEBUG_OUTLINE_VERTEX_STRIDE =
+  DEBUG_OUTLINE_POSITION_COMPONENT_COUNT * FLOAT_SIZE;
+/** Scratch buffer reused when emitting debug outlines. */
+const DEBUG_OUTLINE_VERTEX_SCRATCH = new Float32Array(
+  DEBUG_OUTLINE_VERTEX_COUNT * DEBUG_OUTLINE_POSITION_COMPONENT_COUNT
+);
+/** Solid red RGBA color used for debug outlines. */
+const DEBUG_OUTLINE_COLOR: readonly [number, number, number, number] = [
+  1.0, 0.0, 0.0, 1.0,
+];
+/** Corner traversal order used when outlining a quad without crossing diagonals. */
+const DEBUG_OUTLINE_CORNER_ORDER = [0, 1, 3, 2] as const;
 
 /**
  * Compiles a shader from source, throwing if compilation fails.
@@ -1364,6 +1401,14 @@ export const createSpriteLayer = <T = any>(
   let anisotropyExtension: EXT_texture_filter_anisotropic | null = null;
   /** Maximum anisotropy supported by the current context. */
   let maxSupportedAnisotropy = 1;
+  /** Debug outline shader program for rendering hit-test rectangles. */
+  let debugProgram: WebGLProgram | null = null;
+  /** Vertex buffer storing quad outline vertices during debug rendering. */
+  let debugVertexBuffer: WebGLBuffer | null = null;
+  /** Attribute location for debug outline vertex positions. */
+  let debugAttribPositionLocation = -1;
+  /** Uniform location for debug outline color. */
+  let debugUniformColorLocation: WebGLUniformLocation | null = null;
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -3143,6 +3188,43 @@ export const createSpriteLayer = <T = any>(
     // Unbind the ARRAY_BUFFER once initialization is complete.
     glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
 
+    if (SL_DEBUG_DRAW_HIT_BOUNDS) {
+      const debugShaderProgram = createShaderProgram(
+        glContext,
+        DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
+        DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE
+      );
+      debugProgram = debugShaderProgram;
+      debugAttribPositionLocation = glContext.getAttribLocation(
+        debugShaderProgram,
+        'a_position'
+      );
+      if (debugAttribPositionLocation === -1) {
+        throw new Error('Failed to acquire debug attribute location.');
+      }
+      const colorLocation = glContext.getUniformLocation(
+        debugShaderProgram,
+        'u_color'
+      );
+      if (!colorLocation) {
+        throw new Error('Failed to acquire debug color uniform.');
+      }
+      debugUniformColorLocation = colorLocation;
+
+      const outlineBuffer = glContext.createBuffer();
+      if (!outlineBuffer) {
+        throw new Error('Failed to create debug vertex buffer.');
+      }
+      debugVertexBuffer = outlineBuffer;
+      glContext.bindBuffer(glContext.ARRAY_BUFFER, outlineBuffer);
+      glContext.bufferData(
+        glContext.ARRAY_BUFFER,
+        DEBUG_OUTLINE_VERTEX_SCRATCH,
+        glContext.DYNAMIC_DRAW
+      );
+      glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+    }
+
     // Request a render pass.
     scheduleRender();
   };
@@ -3175,8 +3257,14 @@ export const createSpriteLayer = <T = any>(
       if (vertexBuffer) {
         glContext.deleteBuffer(vertexBuffer);
       }
+      if (debugVertexBuffer) {
+        glContext.deleteBuffer(debugVertexBuffer);
+      }
       if (program) {
         glContext.deleteProgram(program);
+      }
+      if (debugProgram) {
+        glContext.deleteProgram(debugProgram);
       }
     }
 
@@ -3187,10 +3275,14 @@ export const createSpriteLayer = <T = any>(
     map = null;
     program = null;
     vertexBuffer = null;
+    debugProgram = null;
+    debugVertexBuffer = null;
     attribPositionLocation = -1;
     attribUvLocation = -1;
+    debugAttribPositionLocation = -1;
     uniformTextureLocation = null;
     uniformOpacityLocation = null;
+    debugUniformColorLocation = null;
     anisotropyExtension = null;
     maxSupportedAnisotropy = 1;
   };
@@ -3911,6 +4003,68 @@ export const createSpriteLayer = <T = any>(
     for (const [, bucket] of sortedSubLayerBuckets) {
       // Process buckets in ascending sub-layer order so draw order respects configuration.
       renderSortedBucket(bucket);
+    }
+
+    if (
+      SL_DEBUG_DRAW_HIT_BOUNDS &&
+      debugProgram &&
+      debugVertexBuffer &&
+      debugUniformColorLocation &&
+      debugAttribPositionLocation !== -1
+    ) {
+      glContext.useProgram(debugProgram);
+      glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
+      glContext.enableVertexAttribArray(debugAttribPositionLocation);
+      glContext.vertexAttribPointer(
+        debugAttribPositionLocation,
+        DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
+        glContext.FLOAT,
+        false,
+        DEBUG_OUTLINE_VERTEX_STRIDE,
+        0
+      );
+      glContext.disable(glContext.DEPTH_TEST);
+      glContext.depthMask(false);
+      glContext.uniform4f(
+        debugUniformColorLocation,
+        DEBUG_OUTLINE_COLOR[0],
+        DEBUG_OUTLINE_COLOR[1],
+        DEBUG_OUTLINE_COLOR[2],
+        DEBUG_OUTLINE_COLOR[3]
+      );
+
+      for (const entry of hitTestEntries) {
+        let writeOffset = 0;
+        for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
+          const corner = entry.corners[cornerIndex]!;
+          const [clipX, clipY] = screenToClip(
+            corner.x,
+            corner.y,
+            drawingBufferWidth,
+            drawingBufferHeight,
+            pixelRatio
+          );
+          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = clipX;
+          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = clipY;
+          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
+          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+        }
+        glContext.bufferSubData(
+          glContext.ARRAY_BUFFER,
+          0,
+          DEBUG_OUTLINE_VERTEX_SCRATCH
+        );
+        glContext.drawArrays(
+          glContext.LINE_LOOP,
+          0,
+          DEBUG_OUTLINE_VERTEX_COUNT
+        );
+      }
+
+      glContext.depthMask(true);
+      glContext.enable(glContext.DEPTH_TEST);
+      glContext.disableVertexAttribArray(debugAttribPositionLocation);
+      glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
     }
 
     glContext.depthMask(true);
