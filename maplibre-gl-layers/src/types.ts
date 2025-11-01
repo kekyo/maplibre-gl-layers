@@ -589,6 +589,11 @@ export interface SpriteLayerOptions {
   spriteScaling?: SpriteScalingOptions;
   /** Optional texture filtering configuration. */
   textureFiltering?: SpriteTextureFilteringOptions;
+  /**
+   * When true, renders red outlines around sprite hit-test regions to aid debugging.
+   * Defaults to false.
+   */
+  showDebugBounds?: boolean;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////

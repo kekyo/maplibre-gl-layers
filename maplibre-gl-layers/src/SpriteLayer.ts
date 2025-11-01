@@ -150,8 +150,6 @@ import {
 
 /** Debug flag */
 const SL_DEBUG = false;
-/** Enables drawing red hit-test outlines around every sprite image during rendering. */
-const SL_DEBUG_DRAW_HIT_BOUNDS = true;
 
 /** Default sprite anchor centered at the image origin. */
 const DEFAULT_ANCHOR: SpriteAnchor = { x: 0.0, y: 0.0 };
@@ -1380,6 +1378,7 @@ export const createSpriteLayer = <T = any>(
   const resolvedTextureFiltering = resolveTextureFilteringOptions(
     options?.textureFiltering
   );
+  const showDebugBounds = options?.showDebugBounds === true;
 
   /** WebGL context supplied by MapLibre, assigned during onAdd. */
   let gl: WebGLRenderingContext | null = null;
@@ -3174,7 +3173,7 @@ export const createSpriteLayer = <T = any>(
     // Unbind the ARRAY_BUFFER once initialization is complete.
     glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
 
-    if (SL_DEBUG_DRAW_HIT_BOUNDS) {
+    if (showDebugBounds) {
       const debugShaderProgram = createShaderProgram(
         glContext,
         DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
@@ -3992,7 +3991,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     if (
-      SL_DEBUG_DRAW_HIT_BOUNDS &&
+      showDebugBounds &&
       debugProgram &&
       debugVertexBuffer &&
       debugUniformColorLocation &&
