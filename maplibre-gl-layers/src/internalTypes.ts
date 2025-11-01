@@ -8,6 +8,7 @@
  * Internal-only type definitions shared across SpriteLayer implementation modules.
  */
 
+import type { MercatorCoordinate } from 'maplibre-gl';
 import type {
   SpriteMode,
   SpriteAnchor,
@@ -21,6 +22,41 @@ import type {
   SpriteInterpolationMode,
   EasingFunction,
 } from './types';
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Corner model describing world displacements and resulting geographic coordinates for shader validation.
+ */
+export interface SurfaceShaderCornerState {
+  east: number;
+  north: number;
+  lng: number;
+  lat: number;
+}
+
+/**
+ * Aggregated inputs required to reproduce surface geometry on the GPU.
+ */
+export interface SurfaceShaderInputs {
+  mercatorCenter: { x: number; y: number; z: number };
+  worldToMercatorScale: { east: number; north: number };
+  halfSizeMeters: { east: number; north: number };
+  anchor: SpriteAnchor;
+  offsetMeters: { east: number; north: number };
+  sinCos: { sin: number; cos: number };
+  totalRotateDeg: number;
+  depthBiasNdc: number;
+  centerDisplacement: { east: number; north: number };
+  baseLngLat: SpriteLocation;
+  displacedCenter: SpriteLocation;
+  scaleAdjustment: number;
+  corners: SurfaceShaderCornerState[];
+  clipCenter: { x: number; y: number; z: number; w: number };
+  clipBasisEast: { x: number; y: number; z: number; w: number };
+  clipBasisNorth: { x: number; y: number; z: number; w: number };
+  clipCorners: Array<{ x: number; y: number; z: number; w: number }>;
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -200,6 +236,7 @@ export interface InternalSpriteImageState {
   lastCommandRotateDeg: number;
   lastCommandOffsetDeg: number;
   lastCommandOffsetMeters: number;
+  surfaceShaderInputs?: SurfaceShaderInputs;
   hitTestCorners?: [
     MutableSpriteScreenPoint,
     MutableSpriteScreenPoint,
@@ -224,4 +261,8 @@ export interface InternalSpriteCurrentState<TTag> {
   lastCommandLocation: SpriteLocation;
   lastAutoRotationLocation: SpriteLocation;
   lastAutoRotationAngleDeg: number;
+  cachedMercator: MercatorCoordinate;
+  cachedMercatorLng: number;
+  cachedMercatorLat: number;
+  cachedMercatorZ: number;
 }

@@ -62,6 +62,7 @@ import type {
   Canvas2DSource,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
+  SurfaceShaderInputs,
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './utils';
 import { cloneSpriteLocation, spriteLocationsEqual } from './location';
@@ -79,7 +80,6 @@ import {
   applySurfaceDisplacement,
   isFiniteNumber,
   clipToScreen,
-  screenToClip,
   resolveScalingOptions,
   calculateBillboardCenterPosition,
   calculateBillboardAnchorShiftPixels,
@@ -91,10 +91,12 @@ import {
   calculateSurfaceCenterPosition,
   calculateSurfaceCornerDisplacements,
   calculateSurfaceDepthKey,
+  computeSurfaceCornerShaderModel,
   type ProjectToClipSpaceFn,
   type UnprojectPointFn,
   TRIANGLE_INDICES,
   UV_CORNERS,
+  DEG2RAD,
 } from './math';
 import {
   applyOffsetUpdate,
@@ -150,6 +152,11 @@ import {
 
 /** Debug flag */
 const SL_DEBUG = false;
+
+/** Enables the upcoming shader-based billboard corner computation when true. */
+const USE_SHADER_BILLBOARD_GEOMETRY = true;
+/** Enables the upcoming shader-based surface corner computation when true. */
+const USE_SHADER_SURFACE_GEOMETRY = true;
 
 /** Default sprite anchor centered at the image origin. */
 const DEFAULT_ANCHOR: SpriteAnchor = { x: 0.0, y: 0.0 };
@@ -308,11 +315,13 @@ const resolveGlMagFilter = (
  * Used to calculate distance-based scaling that responds to pitch, zoom, and altitude.
  * @param {MapLibreMap} mapInstance - MapLibre map providing the transform and camera distance.
  * @param {SpriteLocation} location - Location used to derive mercator coordinates for scaling.
+ * @param {MercatorCoordinate | undefined} [cachedMercator] - Optional precomputed Mercator coordinate for the location.
  * @returns {number} Perspective ratio applied when scaling sprites; defaults to 1 if unavailable.
  */
 export const calculatePerspectiveRatio = (
   mapInstance: MapLibreMap,
-  location: SpriteLocation
+  location: SpriteLocation,
+  cachedMercator?: MercatorCoordinate
 ): number => {
   const transform = (mapInstance as unknown as { transform?: any }).transform;
   if (!transform) {
@@ -333,10 +342,12 @@ export const calculatePerspectiveRatio = (
   }
 
   try {
-    const mercator = MercatorCoordinate.fromLngLat(
-      { lng: location.lng, lat: location.lat },
-      location.z ?? 0
-    );
+    const mercator =
+      cachedMercator ??
+      MercatorCoordinate.fromLngLat(
+        { lng: location.lng, lat: location.lat },
+        location.z ?? 0
+      );
     const position = vec4.fromValues(
       mercator.x,
       mercator.y,
@@ -533,14 +544,63 @@ const UV_OFFSET = POSITION_COMPONENT_COUNT * FLOAT_SIZE;
 /** Vertex count required to draw one sprite as two triangles. */
 const QUAD_VERTEX_COUNT = 6;
 
-/** Shared vertex shader for both billboard and surface modes that accepts clip coordinates. */
+/** Shared vertex shader that converts screen-space vertices when requested. */
 const VERTEX_SHADER_SOURCE = `
 attribute vec4 a_position;
 attribute vec2 a_uv;
+uniform vec2 u_screenToClipScale;
+uniform vec2 u_screenToClipOffset;
+uniform float u_billboardMode;
+uniform float u_surfaceMode;
+uniform vec2 u_billboardCenter;
+uniform vec2 u_billboardHalfSize;
+uniform vec2 u_billboardAnchor;
+uniform vec2 u_billboardSinCos;
+uniform float u_surfaceClipEnabled;
+uniform vec4 u_surfaceClipCenter;
+uniform vec4 u_surfaceClipBasisEast;
+uniform vec4 u_surfaceClipBasisNorth;
+uniform float u_surfaceDepthBias;
 varying vec2 v_uv;
+vec2 computeBillboardCorner(vec2 uv) {
+  vec2 base = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+  vec2 anchorShift = vec2(u_billboardAnchor.x * u_billboardHalfSize.x, u_billboardAnchor.y * u_billboardHalfSize.y);
+  vec2 shifted = vec2(base.x * u_billboardHalfSize.x, base.y * u_billboardHalfSize.y) - anchorShift;
+  float sinR = u_billboardSinCos.x;
+  float cosR = u_billboardSinCos.y;
+  vec2 rotated = vec2(
+    shifted.x * cosR - shifted.y * sinR,
+    shifted.x * sinR + shifted.y * cosR
+  );
+  return vec2(
+    u_billboardCenter.x + rotated.x,
+    u_billboardCenter.y - rotated.y
+  );
+}
+vec4 computeSurfaceCorner(vec2 corner) {
+  if (u_surfaceClipEnabled < 0.5) {
+    return vec4(0.0, 0.0, 0.0, 1.0);
+  }
+  vec4 clip = u_surfaceClipCenter
+    + (corner.x * u_surfaceClipBasisEast)
+    + (corner.y * u_surfaceClipBasisNorth);
+  clip.z += u_surfaceDepthBias * clip.w;
+  return clip;
+}
 void main() {
   v_uv = a_uv;
-  gl_Position = a_position;
+  vec4 position;
+  if (u_billboardMode > 0.5) {
+    vec2 screenPosition = computeBillboardCorner(a_uv);
+    position = vec4(screenPosition, 0.0, 1.0);
+  } else if (u_surfaceMode > 0.5) {
+    vec2 baseCorner = vec2(a_position.x, a_position.y);
+    position = computeSurfaceCorner(baseCorner);
+  } else {
+    position = a_position;
+  }
+  position.xy = position.xy * u_screenToClipScale + u_screenToClipOffset;
+  gl_Position = position;
 }
 ` as const;
 
@@ -566,11 +626,15 @@ const QUAD_VERTEX_SCRATCH = new Float32Array(
   QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
 );
 
-/** Vertex shader for debug hit-test outline rendering in clip space. */
+/** Vertex shader for debug hit-test outline rendering using screen coordinates. */
 const DEBUG_OUTLINE_VERTEX_SHADER_SOURCE = `
 attribute vec4 a_position;
+uniform vec2 u_screenToClipScale;
+uniform vec2 u_screenToClipOffset;
 void main() {
-  gl_Position = a_position;
+  vec4 position = a_position;
+  position.xy = position.xy * u_screenToClipScale + u_screenToClipOffset;
+  gl_Position = position;
 }
 ` as const;
 
@@ -600,6 +664,180 @@ const DEBUG_OUTLINE_COLOR: readonly [number, number, number, number] = [
 ];
 /** Corner traversal order used when outlining a quad without crossing diagonals. */
 const DEBUG_OUTLINE_CORNER_ORDER = [0, 1, 3, 2] as const;
+
+const BILLBOARD_BASE_CORNERS: ReadonlyArray<readonly [number, number]> = [
+  [-1, 1],
+  [1, 1],
+  [-1, -1],
+  [1, -1],
+] as const;
+
+const SURFACE_BASE_CORNERS: ReadonlyArray<readonly [number, number]> = [
+  [-1, 1],
+  [1, 1],
+  [-1, -1],
+  [1, -1],
+] as const;
+
+const computeBillboardCornersShaderModel = ({
+  centerX,
+  centerY,
+  halfWidth,
+  halfHeight,
+  anchor,
+  rotationDeg,
+}: {
+  centerX: number;
+  centerY: number;
+  halfWidth: number;
+  halfHeight: number;
+  anchor?: SpriteAnchor;
+  rotationDeg: number;
+}): Array<{ x: number; y: number; u: number; v: number }> => {
+  const anchorX = anchor?.x ?? 0;
+  const anchorY = anchor?.y ?? 0;
+  const rad = -rotationDeg * DEG2RAD;
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+
+  return BILLBOARD_BASE_CORNERS.map(([cornerXNorm, cornerYNorm], index) => {
+    const cornerX = cornerXNorm * halfWidth;
+    const cornerY = cornerYNorm * halfHeight;
+    const shiftedX = cornerX - anchorX * halfWidth;
+    const shiftedY = cornerY - anchorY * halfHeight;
+    const rotatedX = shiftedX * cosR - shiftedY * sinR;
+    const rotatedY = shiftedX * sinR + shiftedY * cosR;
+    const [u, v] = UV_CORNERS[index]!;
+    return {
+      x: centerX + rotatedX,
+      y: centerY - rotatedY,
+      u,
+      v,
+    };
+  });
+};
+
+const calculateWorldToMercatorScale = (
+  base: SpriteLocation,
+  altitudeMeters: number
+): { east: number; north: number } => {
+  const origin = MercatorCoordinate.fromLngLat(
+    { lng: base.lng, lat: base.lat },
+    altitudeMeters
+  );
+  const eastLngLat = applySurfaceDisplacement(base.lng, base.lat, 1, 0);
+  const eastCoord = MercatorCoordinate.fromLngLat(
+    { lng: eastLngLat.lng, lat: eastLngLat.lat },
+    altitudeMeters
+  );
+  const northLngLat = applySurfaceDisplacement(base.lng, base.lat, 0, 1);
+  const northCoord = MercatorCoordinate.fromLngLat(
+    { lng: northLngLat.lng, lat: northLngLat.lat },
+    altitudeMeters
+  );
+  return {
+    east: eastCoord.x - origin.x,
+    north: northCoord.y - origin.y,
+  };
+};
+
+type PrepareSurfaceShaderInputsParams = {
+  baseLngLat: SpriteLocation;
+  worldWidthMeters: number;
+  worldHeightMeters: number;
+  anchor: SpriteAnchor;
+  totalRotateDeg: number;
+  offsetMeters: { east: number; north: number };
+  displacedCenter: SpriteLocation;
+  altitudeMeters: number;
+  depthBiasNdc: number;
+  scaleAdjustment: number;
+  centerDisplacement: { east: number; north: number };
+};
+
+const prepareSurfaceShaderInputs = (
+  params: PrepareSurfaceShaderInputsParams
+): SurfaceShaderInputs => {
+  const {
+    baseLngLat,
+    worldWidthMeters,
+    worldHeightMeters,
+    anchor,
+    totalRotateDeg,
+    offsetMeters,
+    displacedCenter,
+    altitudeMeters,
+    depthBiasNdc,
+    scaleAdjustment,
+    centerDisplacement,
+  } = params;
+
+  const halfSizeMeters = {
+    east: worldWidthMeters / 2,
+    north: worldHeightMeters / 2,
+  };
+  const rotationRad = -totalRotateDeg * DEG2RAD;
+  const sinR = Math.sin(rotationRad);
+  const cosR = Math.cos(rotationRad);
+
+  const mercatorCenter = MercatorCoordinate.fromLngLat(
+    { lng: displacedCenter.lng, lat: displacedCenter.lat },
+    altitudeMeters
+  );
+
+  const worldToMercatorScale = calculateWorldToMercatorScale(
+    displacedCenter,
+    altitudeMeters
+  );
+
+  const cornerModel = computeSurfaceCornerShaderModel({
+    baseLngLat,
+    worldWidthMeters,
+    worldHeightMeters,
+    anchor,
+    totalRotateDeg,
+    offsetMeters,
+  });
+
+  return {
+    mercatorCenter: {
+      x: mercatorCenter.x,
+      y: mercatorCenter.y,
+      z: mercatorCenter.z ?? 0,
+    },
+    worldToMercatorScale,
+    halfSizeMeters,
+    anchor,
+    offsetMeters: {
+      east: offsetMeters.east,
+      north: offsetMeters.north,
+    },
+    sinCos: { sin: sinR, cos: cosR },
+    totalRotateDeg,
+    depthBiasNdc,
+    centerDisplacement: {
+      east: centerDisplacement.east,
+      north: centerDisplacement.north,
+    },
+    baseLngLat,
+    displacedCenter: {
+      lng: displacedCenter.lng,
+      lat: displacedCenter.lat,
+      z: displacedCenter.z ?? altitudeMeters,
+    },
+    scaleAdjustment,
+    corners: cornerModel.map((corner) => ({
+      east: corner.east,
+      north: corner.north,
+      lng: corner.lng,
+      lat: corner.lat,
+    })),
+    clipCenter: { x: 0, y: 0, z: 0, w: 1 },
+    clipBasisEast: { x: 0, y: 0, z: 0, w: 0 },
+    clipBasisNorth: { x: 0, y: 0, z: 0, w: 0 },
+    clipCorners: [],
+  };
+};
 
 /**
  * Compiles a shader from source, throwing if compilation fails.
@@ -1396,6 +1634,32 @@ export const createSpriteLayer = <T = any>(
   let uniformTextureLocation: WebGLUniformLocation | null = null;
   /** Uniform location for sprite opacity. */
   let uniformOpacityLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for the screen-to-clip scale vector. */
+  let uniformScreenToClipScaleLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for the screen-to-clip offset vector. */
+  let uniformScreenToClipOffsetLocation: WebGLUniformLocation | null = null;
+  /** Uniform location toggling shader-based billboard geometry. */
+  let uniformBillboardModeLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for the billboard center in screen space. */
+  let uniformBillboardCenterLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for the billboard half-size in pixels. */
+  let uniformBillboardHalfSizeLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for the billboard anchor vector. */
+  let uniformBillboardAnchorLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for billboard rotation sine/cosine. */
+  let uniformBillboardSinCosLocation: WebGLUniformLocation | null = null;
+  /** Uniform location toggling shader-based surface geometry. */
+  let uniformSurfaceModeLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for surface depth bias multiplier. */
+  let uniformSurfaceDepthBiasLocation: WebGLUniformLocation | null = null;
+  /** Uniform enabling clip-space surface reconstruction. */
+  let uniformSurfaceClipEnabledLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for the surface clip-space center. */
+  let uniformSurfaceClipCenterLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for the surface clip-space east basis vector. */
+  let uniformSurfaceClipBasisEastLocation: WebGLUniformLocation | null = null;
+  /** Uniform location for the surface clip-space north basis vector. */
+  let uniformSurfaceClipBasisNorthLocation: WebGLUniformLocation | null = null;
   /** Cached anisotropic filtering extension instance (when available). */
   let anisotropyExtension: EXT_texture_filter_anisotropic | null = null;
   /** Maximum anisotropy supported by the current context. */
@@ -1408,6 +1672,11 @@ export const createSpriteLayer = <T = any>(
   let debugAttribPositionLocation = -1;
   /** Uniform location for debug outline color. */
   let debugUniformColorLocation: WebGLUniformLocation | null = null;
+  /** Debug uniform location for converting screen to clip space. */
+  let debugUniformScreenToClipScaleLocation: WebGLUniformLocation | null = null;
+  /** Debug uniform location for the screen-to-clip offset vector. */
+  let debugUniformScreenToClipOffsetLocation: WebGLUniformLocation | null =
+    null;
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -1451,6 +1720,36 @@ export const createSpriteLayer = <T = any>(
    * Collection of sprites currently managed by the layer.
    */
   const sprites = new Map<string, InternalSpriteCurrentState<T>>();
+
+  /**
+   * Ensures the sprite's cached Mercator coordinate matches its current location.
+   * Recomputes the coordinate lazily when longitude/latitude/altitude change.
+   * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
+   * @returns {MercatorCoordinate} Cached Mercator coordinate representing the current location.
+   */
+  const resolveSpriteMercator = (
+    sprite: InternalSpriteCurrentState<T>
+  ): MercatorCoordinate => {
+    const location = sprite.currentLocation;
+    const altitude = location.z ?? 0;
+    if (
+      sprite.cachedMercator &&
+      sprite.cachedMercatorLng === location.lng &&
+      sprite.cachedMercatorLat === location.lat &&
+      sprite.cachedMercatorZ === altitude
+    ) {
+      return sprite.cachedMercator;
+    }
+    const mercator = MercatorCoordinate.fromLngLat(
+      { lng: location.lng, lat: location.lat },
+      altitude
+    );
+    sprite.cachedMercator = mercator;
+    sprite.cachedMercatorLng = location.lng;
+    sprite.cachedMercatorLat = location.lat;
+    sprite.cachedMercatorZ = altitude;
+    return mercator;
+  };
 
   const HIT_TEST_WORLD_BOUNDS: LooseQuadTreeRect = {
     x0: -180,
@@ -1613,9 +1912,11 @@ export const createSpriteLayer = <T = any>(
       return null;
     }
 
+    const spriteMercator = resolveSpriteMercator(sprite);
     const perspectiveRatio = calculatePerspectiveRatio(
       mapInstance,
-      baseLocation
+      baseLocation,
+      spriteMercator
     );
     const effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
       metersPerPixelAtLat,
@@ -1715,9 +2016,11 @@ export const createSpriteLayer = <T = any>(
       return null;
     }
 
+    const spriteMercator = resolveSpriteMercator(sprite);
     const perspectiveRatio = calculatePerspectiveRatio(
       mapInstance,
-      baseLocation
+      baseLocation,
+      spriteMercator
     );
     const effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
       metersPerPixelAtLat,
@@ -3141,7 +3444,75 @@ export const createSpriteLayer = <T = any>(
       shaderProgram,
       'u_opacity'
     );
-    if (!uniformTextureLocation || !uniformOpacityLocation) {
+    uniformScreenToClipScaleLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_screenToClipScale'
+    );
+    uniformScreenToClipOffsetLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_screenToClipOffset'
+    );
+    uniformBillboardModeLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_billboardMode'
+    );
+    uniformBillboardCenterLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_billboardCenter'
+    );
+    uniformBillboardHalfSizeLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_billboardHalfSize'
+    );
+    uniformBillboardAnchorLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_billboardAnchor'
+    );
+    uniformBillboardSinCosLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_billboardSinCos'
+    );
+    uniformSurfaceModeLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_surfaceMode'
+    );
+    uniformSurfaceDepthBiasLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_surfaceDepthBias'
+    );
+    uniformSurfaceClipEnabledLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_surfaceClipEnabled'
+    );
+    uniformSurfaceClipCenterLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_surfaceClipCenter'
+    );
+    uniformSurfaceClipBasisEastLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_surfaceClipBasisEast'
+    );
+    uniformSurfaceClipBasisNorthLocation = glContext.getUniformLocation(
+      shaderProgram,
+      'u_surfaceClipBasisNorth'
+    );
+    if (
+      !uniformTextureLocation ||
+      !uniformOpacityLocation ||
+      !uniformScreenToClipScaleLocation ||
+      !uniformScreenToClipOffsetLocation ||
+      !uniformBillboardModeLocation ||
+      !uniformBillboardCenterLocation ||
+      !uniformBillboardHalfSizeLocation ||
+      !uniformBillboardAnchorLocation ||
+      !uniformBillboardSinCosLocation ||
+      !uniformSurfaceModeLocation ||
+      !uniformSurfaceDepthBiasLocation ||
+      !uniformSurfaceClipEnabledLocation ||
+      !uniformSurfaceClipCenterLocation ||
+      !uniformSurfaceClipBasisEastLocation ||
+      !uniformSurfaceClipBasisNorthLocation
+    ) {
       throw new Error('Failed to acquire uniform locations.');
     }
 
@@ -3169,6 +3540,32 @@ export const createSpriteLayer = <T = any>(
     // Use texture unit 0 and set the default opacity to 1.0.
     glContext.uniform1i(uniformTextureLocation, 0);
     glContext.uniform1f(uniformOpacityLocation, 1.0);
+    // Default to an identity transform; render() will update these each frame.
+    glContext.uniform2f(uniformScreenToClipScaleLocation, 1.0, 1.0);
+    glContext.uniform2f(uniformScreenToClipOffsetLocation, 0.0, 0.0);
+    glContext.uniform1f(uniformSurfaceClipEnabledLocation, 0.0);
+    glContext.uniform4f(uniformSurfaceClipCenterLocation, 0.0, 0.0, 0.0, 1.0);
+    glContext.uniform4f(
+      uniformSurfaceClipBasisEastLocation,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    );
+    glContext.uniform4f(
+      uniformSurfaceClipBasisNorthLocation,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    );
+    glContext.uniform1f(uniformBillboardModeLocation, 0);
+    glContext.uniform2f(uniformBillboardCenterLocation, 0.0, 0.0);
+    glContext.uniform2f(uniformBillboardHalfSizeLocation, 0.0, 0.0);
+    glContext.uniform2f(uniformBillboardAnchorLocation, 0.0, 0.0);
+    glContext.uniform2f(uniformBillboardSinCosLocation, 0.0, 1.0);
+    glContext.uniform1f(uniformSurfaceModeLocation, 0);
+    glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
 
     // Unbind the ARRAY_BUFFER once initialization is complete.
     glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
@@ -3195,6 +3592,22 @@ export const createSpriteLayer = <T = any>(
         throw new Error('Failed to acquire debug color uniform.');
       }
       debugUniformColorLocation = colorLocation;
+      debugUniformScreenToClipScaleLocation = glContext.getUniformLocation(
+        debugShaderProgram,
+        'u_screenToClipScale'
+      );
+      debugUniformScreenToClipOffsetLocation = glContext.getUniformLocation(
+        debugShaderProgram,
+        'u_screenToClipOffset'
+      );
+      if (
+        !debugUniformScreenToClipScaleLocation ||
+        !debugUniformScreenToClipOffsetLocation
+      ) {
+        throw new Error('Failed to acquire debug screen-to-clip uniforms.');
+      }
+      glContext.uniform2f(debugUniformScreenToClipScaleLocation, 1.0, 1.0);
+      glContext.uniform2f(debugUniformScreenToClipOffsetLocation, 0.0, 0.0);
 
       const outlineBuffer = glContext.createBuffer();
       if (!outlineBuffer) {
@@ -3267,7 +3680,18 @@ export const createSpriteLayer = <T = any>(
     debugAttribPositionLocation = -1;
     uniformTextureLocation = null;
     uniformOpacityLocation = null;
+    uniformScreenToClipScaleLocation = null;
+    uniformScreenToClipOffsetLocation = null;
+    uniformBillboardModeLocation = null;
+    uniformBillboardCenterLocation = null;
+    uniformBillboardHalfSizeLocation = null;
+    uniformBillboardAnchorLocation = null;
+    uniformBillboardSinCosLocation = null;
+    uniformSurfaceModeLocation = null;
+    uniformSurfaceDepthBiasLocation = null;
     debugUniformColorLocation = null;
+    debugUniformScreenToClipScaleLocation = null;
+    debugUniformScreenToClipOffsetLocation = null;
     anisotropyExtension = null;
     maxSupportedAnisotropy = 1;
   };
@@ -3293,7 +3717,12 @@ export const createSpriteLayer = <T = any>(
       return;
     }
     // Uniform locations must be resolved before drawing; skip the frame otherwise.
-    if (!uniformOpacityLocation || !uniformTextureLocation) {
+    if (
+      !uniformOpacityLocation ||
+      !uniformTextureLocation ||
+      !uniformScreenToClipScaleLocation ||
+      !uniformScreenToClipOffsetLocation
+    ) {
       return;
     }
 
@@ -3362,6 +3791,19 @@ export const createSpriteLayer = <T = any>(
     const drawingBufferWidth = glContext.drawingBufferWidth;
     const drawingBufferHeight = glContext.drawingBufferHeight;
     const pixelRatio = drawingBufferWidth / cssWidth;
+    if (drawingBufferWidth === 0 || drawingBufferHeight === 0) {
+      return;
+    }
+
+    const screenToClipScaleX = (2 * pixelRatio) / drawingBufferWidth;
+    const screenToClipScaleY = (-2 * pixelRatio) / drawingBufferHeight;
+    const screenToClipOffsetX = -1;
+    const screenToClipOffsetY = 1;
+    const identityScaleX = 1;
+    const identityScaleY = 1;
+    const identityOffsetX = 0;
+    const identityOffsetY = 0;
+
     const zoom = mapInstance.getZoom();
     const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const baseMetersPerPixel = resolvedScaling.metersPerPixel;
@@ -3372,7 +3814,6 @@ export const createSpriteLayer = <T = any>(
     if (!clipContext) {
       return;
     }
-
     // Enable blending and avoid depth-buffer interference.
     glContext.enable(glContext.BLEND);
     glContext.blendFunc(glContext.SRC_ALPHA, glContext.ONE_MINUS_SRC_ALPHA);
@@ -3400,6 +3841,92 @@ export const createSpriteLayer = <T = any>(
       UV_OFFSET
     );
     glContext.uniform1i(uniformTextureLocation, 0);
+    const screenToClipScaleLocation = uniformScreenToClipScaleLocation!;
+    const screenToClipOffsetLocation = uniformScreenToClipOffsetLocation!;
+
+    let currentScaleX = Number.NaN;
+    let currentScaleY = Number.NaN;
+    let currentOffsetX = Number.NaN;
+    let currentOffsetY = Number.NaN;
+    const applyScreenToClipUniforms = (
+      scaleX: number,
+      scaleY: number,
+      offsetX: number,
+      offsetY: number
+    ): void => {
+      if (
+        scaleX !== currentScaleX ||
+        scaleY !== currentScaleY ||
+        offsetX !== currentOffsetX ||
+        offsetY !== currentOffsetY
+      ) {
+        glContext.uniform2f(screenToClipScaleLocation, scaleX, scaleY);
+        glContext.uniform2f(screenToClipOffsetLocation, offsetX, offsetY);
+        currentScaleX = scaleX;
+        currentScaleY = scaleY;
+        currentOffsetX = offsetX;
+        currentOffsetY = offsetY;
+      }
+    };
+
+    let currentSurfaceMode = Number.NaN;
+    const applySurfaceMode = (enabled: boolean): void => {
+      if (!uniformSurfaceModeLocation) {
+        return;
+      }
+      const value = enabled ? 1 : 0;
+      if (value !== currentSurfaceMode) {
+        glContext.uniform1f(uniformSurfaceModeLocation, value);
+        currentSurfaceMode = value;
+      }
+    };
+
+    let currentSurfaceClipEnabled = Number.NaN;
+    const applySurfaceClipUniforms = (
+      enabled: boolean,
+      inputs: SurfaceShaderInputs | null
+    ): void => {
+      if (
+        !uniformSurfaceClipEnabledLocation ||
+        !uniformSurfaceClipCenterLocation ||
+        !uniformSurfaceClipBasisEastLocation ||
+        !uniformSurfaceClipBasisNorthLocation
+      ) {
+        return;
+      }
+      const value = enabled ? 1 : 0;
+      if (value !== currentSurfaceClipEnabled) {
+        glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
+        currentSurfaceClipEnabled = value;
+      }
+      const clipCenter =
+        enabled && inputs ? inputs.clipCenter : { x: 0, y: 0, z: 0, w: 1 };
+      glContext.uniform4f(
+        uniformSurfaceClipCenterLocation,
+        clipCenter.x,
+        clipCenter.y,
+        clipCenter.z,
+        clipCenter.w
+      );
+      const clipBasisEast =
+        enabled && inputs ? inputs.clipBasisEast : { x: 0, y: 0, z: 0, w: 0 };
+      glContext.uniform4f(
+        uniformSurfaceClipBasisEastLocation,
+        clipBasisEast.x,
+        clipBasisEast.y,
+        clipBasisEast.z,
+        clipBasisEast.w
+      );
+      const clipBasisNorth =
+        enabled && inputs ? inputs.clipBasisNorth : { x: 0, y: 0, z: 0, w: 0 };
+      glContext.uniform4f(
+        uniformSurfaceClipBasisNorthLocation,
+        clipBasisNorth.x,
+        clipBasisNorth.y,
+        clipBasisNorth.z,
+        clipBasisNorth.w
+      );
+    };
 
     /**
      * Uploads quad data and issues the draw call for a single sprite image.
@@ -3421,6 +3948,8 @@ export const createSpriteLayer = <T = any>(
       // Use per-image anchor/offset when provided; otherwise fall back to defaults.
       const anchor = imageEntry.anchor ?? DEFAULT_ANCHOR;
       const offsetDef = imageEntry.offset ?? DEFAULT_IMAGE_OFFSET;
+      applySurfaceMode(false);
+      applySurfaceClipUniforms(false, null);
       // Prefer the dynamically interpolated rotation when available; otherwise synthesize it from base + manual rotations.
       const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
         ? imageEntry.displayedRotateDeg
@@ -3435,6 +3964,7 @@ export const createSpriteLayer = <T = any>(
         return;
       }
 
+      const spriteMercator = resolveSpriteMercator(spriteEntry);
       const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
         zoom,
         spriteEntry.currentLocation.lat
@@ -3445,7 +3975,8 @@ export const createSpriteLayer = <T = any>(
 
       const perspectiveRatio = calculatePerspectiveRatio(
         mapInstance,
-        spriteEntry.currentLocation
+        spriteEntry.currentLocation,
+        spriteMercator
       );
       // Convert meters-per-pixel into pixels-per-meter when valid so scaling remains intuitive.
       const basePixelsPerMeter =
@@ -3460,6 +3991,7 @@ export const createSpriteLayer = <T = any>(
 
       // Input scale defaults to 1 when callers omit it.
       const imageScale = imageEntry.scale ?? 1;
+      const altitudeMeters = spriteEntry.currentLocation.z ?? 0;
 
       const centerParams: ComputeImageCenterParams = {
         mapInstance,
@@ -3475,7 +4007,7 @@ export const createSpriteLayer = <T = any>(
         drawingBufferHeight,
         pixelRatio,
         clipContext,
-        altitudeMeters: spriteEntry.currentLocation.z ?? 0,
+        altitudeMeters,
       };
 
       let baseProjected = { x: projected.x, y: projected.y };
@@ -3498,6 +4030,13 @@ export const createSpriteLayer = <T = any>(
       }
 
       if (imageEntry.mode === 'surface') {
+        applyScreenToClipUniforms(
+          identityScaleX,
+          identityScaleY,
+          identityOffsetX,
+          identityOffsetY
+        );
+        imageEntry.surfaceShaderInputs = undefined;
         const baseLngLat =
           imageEntry.originLocation !== undefined
             ? // When an origin reference is set, reproject the cached screen point back to geographic space.
@@ -3526,7 +4065,7 @@ export const createSpriteLayer = <T = any>(
           drawingBufferWidth,
           drawingBufferHeight,
           pixelRatio,
-          altitudeMeters: spriteEntry.currentLocation.z ?? 0,
+          altitudeMeters,
           project: !clipContext
             ? (lngLat) => {
                 const result = mapInstance.project(lngLat as any);
@@ -3538,6 +4077,10 @@ export const createSpriteLayer = <T = any>(
         if (!surfaceCenter.center) {
           // Projection failed for at least one corner; skip rendering to avoid NaNs.
           return;
+        }
+
+        if (uniformBillboardModeLocation) {
+          glContext.uniform1f(uniformBillboardModeLocation, 0);
         }
 
         const offsetMeters = calculateSurfaceOffsetMeters(
@@ -3554,7 +4097,66 @@ export const createSpriteLayer = <T = any>(
           offsetMeters,
         });
 
+        const orderIndex = Math.min(imageEntry.order, ORDER_MAX - 1);
+        const depthBiasNdc = ENABLE_NDC_BIAS_SURFACE
+          ? -((imageEntry.subLayer * ORDER_BUCKET + orderIndex) * EPS_NDC)
+          : 0;
+
+        const displacedCenterLngLat =
+          surfaceCenter.displacedLngLat ?? baseLngLat;
+        const displacedCenter: SpriteLocation = {
+          lng: displacedCenterLngLat.lng,
+          lat: displacedCenterLngLat.lat,
+          z: altitudeMeters,
+        };
+
+        const surfaceShaderInputs = prepareSurfaceShaderInputs({
+          baseLngLat,
+          worldWidthMeters: surfaceCenter.worldDimensions.width,
+          worldHeightMeters: surfaceCenter.worldDimensions.height,
+          anchor,
+          totalRotateDeg,
+          offsetMeters,
+          displacedCenter,
+          altitudeMeters,
+          depthBiasNdc,
+          scaleAdjustment: surfaceCenter.worldDimensions.scaleAdjustment,
+          centerDisplacement: surfaceCenter.totalDisplacement,
+        });
+        imageEntry.surfaceShaderInputs = surfaceShaderInputs;
+
+        let useShaderSurface = USE_SHADER_SURFACE_GEOMETRY && !!clipContext;
+        let clipCornerPositions: Array<
+          [number, number, number, number]
+        > | null = null;
+        let clipCenterPosition: [number, number, number, number] | null = null;
+        if (useShaderSurface) {
+          clipCornerPositions = new Array(SURFACE_BASE_CORNERS.length) as Array<
+            [number, number, number, number]
+          >;
+          clipCenterPosition = projectLngLatToClipSpace(
+            displacedCenter.lng,
+            displacedCenter.lat,
+            displacedCenter.z ?? altitudeMeters,
+            clipContext
+          );
+          if (!clipCenterPosition) {
+            useShaderSurface = false;
+            clipCornerPositions = null;
+          }
+        }
+
+        applySurfaceMode(useShaderSurface);
+        if (useShaderSurface && uniformSurfaceDepthBiasLocation) {
+          glContext.uniform1f(
+            uniformSurfaceDepthBiasLocation,
+            surfaceShaderInputs.depthBiasNdc
+          );
+        }
+
         const hitTestCorners = ensureHitTestCorners(imageEntry);
+        const debugClipCorners: Array<[number, number, number, number]> | null =
+          SL_DEBUG ? [] : null;
         let bufferOffset = 0;
         // Iterate through each vertex defined by TRIANGLE_INDICES to populate the vertex buffer.
         for (const index of TRIANGLE_INDICES) {
@@ -3569,8 +4171,7 @@ export const createSpriteLayer = <T = any>(
           const clipPosition = projectLngLatToClipSpace(
             displaced.lng,
             displaced.lat,
-            // Default altitude to zero when sprites lack explicit elevation.
-            spriteEntry.currentLocation.z ?? 0,
+            altitudeMeters,
             clipContext
           );
           if (!clipPosition) {
@@ -3578,26 +4179,24 @@ export const createSpriteLayer = <T = any>(
             return;
           }
 
-          const screenCorner = clipToScreen(
-            clipPosition,
-            drawingBufferWidth,
-            drawingBufferHeight,
-            pixelRatio
-          );
-          if (!screenCorner) {
-            return;
+          let [clipX, clipY, clipZ, clipW] = clipPosition;
+          if (!useShaderSurface) {
+            const screenCorner = clipToScreen(
+              clipPosition,
+              drawingBufferWidth,
+              drawingBufferHeight,
+              pixelRatio
+            );
+            if (!screenCorner) {
+              return;
+            }
+            const targetCorner = hitTestCorners[index]!;
+            targetCorner.x = screenCorner.x;
+            targetCorner.y = screenCorner.y;
           }
 
-          const targetCorner = hitTestCorners[index]!;
-          targetCorner.x = screenCorner.x;
-          targetCorner.y = screenCorner.y;
-
-          let [clipX, clipY, clipZ, clipW] = clipPosition;
-          if (ENABLE_NDC_BIAS_SURFACE) {
-            const orderIndex = Math.min(imageEntry.order, ORDER_MAX - 1);
-            const biasIndex = imageEntry.subLayer * ORDER_BUCKET + orderIndex;
-            const biasNdc = -(biasIndex * EPS_NDC);
-            clipZ += biasNdc * clipW;
+          if (depthBiasNdc !== 0) {
+            clipZ += depthBiasNdc * clipW;
             const minClipZ = -clipW + MIN_CLIP_Z_EPSILON;
             if (clipZ < minClipZ) {
               // Avoid crossing the near clip plane after biasing, which would invert winding.
@@ -3605,14 +4204,126 @@ export const createSpriteLayer = <T = any>(
             }
           }
 
-          const [u, v] = UV_CORNERS[index]!;
+          if (clipCornerPositions) {
+            clipCornerPositions[index] = [clipX, clipY, clipZ, clipW];
+          }
 
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = clipX;
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = clipY;
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = clipZ;
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = clipW;
+          const [u, v] = UV_CORNERS[index]!;
+          if (useShaderSurface) {
+            const baseCorner = SURFACE_BASE_CORNERS[index]!;
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = baseCorner[0];
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = baseCorner[1];
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = 0;
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = 1;
+          } else {
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = clipX;
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = clipY;
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = clipZ;
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = clipW;
+          }
           QUAD_VERTEX_SCRATCH[bufferOffset++] = u;
           QUAD_VERTEX_SCRATCH[bufferOffset++] = v;
+
+          if (debugClipCorners) {
+            debugClipCorners.push([clipX, clipY, clipZ, clipW]);
+          }
+        }
+
+        let clipUniformEnabled = false;
+        if (
+          clipCornerPositions &&
+          clipCenterPosition &&
+          clipCornerPositions.every((corner) => Array.isArray(corner))
+        ) {
+          const leftTop = clipCornerPositions[0];
+          const rightTop = clipCornerPositions[1];
+          const leftBottom = clipCornerPositions[2];
+          const rightBottom = clipCornerPositions[3];
+          if (leftTop && rightTop && leftBottom && rightBottom) {
+            const clipBasisEast: [number, number, number, number] = [
+              (rightTop[0] - leftTop[0]) * 0.5,
+              (rightTop[1] - leftTop[1]) * 0.5,
+              (rightTop[2] - leftTop[2]) * 0.5,
+              (rightTop[3] - leftTop[3]) * 0.5,
+            ];
+            const clipBasisNorth: [number, number, number, number] = [
+              (leftTop[0] - leftBottom[0]) * 0.5,
+              (leftTop[1] - leftBottom[1]) * 0.5,
+              (leftTop[2] - leftBottom[2]) * 0.5,
+              (leftTop[3] - leftBottom[3]) * 0.5,
+            ];
+            surfaceShaderInputs.clipCenter = {
+              x: clipCenterPosition[0],
+              y: clipCenterPosition[1],
+              z: clipCenterPosition[2],
+              w: clipCenterPosition[3],
+            };
+            surfaceShaderInputs.clipBasisEast = {
+              x: clipBasisEast[0],
+              y: clipBasisEast[1],
+              z: clipBasisEast[2],
+              w: clipBasisEast[3],
+            };
+            surfaceShaderInputs.clipBasisNorth = {
+              x: clipBasisNorth[0],
+              y: clipBasisNorth[1],
+              z: clipBasisNorth[2],
+              w: clipBasisNorth[3],
+            };
+            const clipCornersForInputs: Array<{
+              x: number;
+              y: number;
+              z: number;
+              w: number;
+            }> = [];
+            let allCornersResolved = true;
+            for (
+              let cornerIndex = 0;
+              cornerIndex < SURFACE_BASE_CORNERS.length;
+              cornerIndex++
+            ) {
+              const clipCorner = clipCornerPositions[cornerIndex];
+              if (!clipCorner) {
+                allCornersResolved = false;
+                break;
+              }
+              clipCornersForInputs.push({
+                x: clipCorner[0],
+                y: clipCorner[1],
+                z: clipCorner[2],
+                w: clipCorner[3],
+              });
+              const screenCorner = clipToScreen(
+                clipCorner,
+                drawingBufferWidth,
+                drawingBufferHeight,
+                pixelRatio
+              );
+              if (!screenCorner) {
+                return;
+              }
+              const targetCorner = hitTestCorners[cornerIndex]!;
+              targetCorner.x = screenCorner.x;
+              targetCorner.y = screenCorner.y;
+            }
+            if (allCornersResolved) {
+              surfaceShaderInputs.clipCorners = clipCornersForInputs;
+              clipUniformEnabled = true;
+            } else {
+              surfaceShaderInputs.clipCorners = [];
+            }
+          }
+        } else {
+          surfaceShaderInputs.clipCorners = [];
+        }
+
+        if (useShaderSurface) {
+          applySurfaceClipUniforms(
+            clipUniformEnabled,
+            clipUniformEnabled ? surfaceShaderInputs : null
+          );
+        } else {
+          applySurfaceClipUniforms(false, null);
         }
 
         screenCornerBuffer = hitTestCorners;
@@ -3638,9 +4349,21 @@ export const createSpriteLayer = <T = any>(
             baseLngLat,
             surfaceCenter,
             cornerDisplacements,
+            depthBiasNdc,
+            useShaderSurface,
+            surfaceShaderInputs,
+            clipCorners: debugClipCorners ?? undefined,
           };
         }
       } else {
+        applyScreenToClipUniforms(
+          screenToClipScaleX,
+          screenToClipScaleY,
+          screenToClipOffsetX,
+          screenToClipOffsetY
+        );
+        imageEntry.surfaceShaderInputs = undefined;
+        applySurfaceMode(false);
         const placement = calculateBillboardCenterPosition({
           base: baseProjected,
           imageWidth: imageResource.width,
@@ -3656,43 +4379,131 @@ export const createSpriteLayer = <T = any>(
           offset: offsetDef,
         });
 
-        const corners = calculateBillboardCornerScreenPositions({
+        const billboardShaderInputs = {
           centerX: placement.centerX,
           centerY: placement.centerY,
           halfWidth: placement.halfWidth,
           halfHeight: placement.halfHeight,
           anchor,
           totalRotateDeg,
-        });
-        const hitTestCorners = ensureHitTestCorners(imageEntry);
+        };
 
-        let bufferOffset = 0;
-        // Populate the billboard quad vertices in TRIANGLE_INDICES order.
-        for (const index of TRIANGLE_INDICES) {
-          const corner = corners[index]!;
-          const [clipX, clipY] = screenToClip(
-            corner.x,
-            corner.y,
-            drawingBufferWidth,
-            drawingBufferHeight,
-            pixelRatio
+        if (SL_DEBUG) {
+          (imageEntry as any).__billboardShaderInputs = billboardShaderInputs;
+        }
+
+        const useShaderBillboard = USE_SHADER_BILLBOARD_GEOMETRY;
+        if (uniformBillboardModeLocation) {
+          glContext.uniform1f(
+            uniformBillboardModeLocation,
+            useShaderBillboard ? 1 : 0
           );
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = clipX;
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = clipY;
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = 0;
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = 1;
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.u;
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.v;
         }
 
-        for (let i = 0; i < corners.length; i++) {
-          const source = corners[i]!;
-          const target = hitTestCorners[i]!;
-          target.x = source.x;
-          target.y = source.y;
+        const writeBillboardCorners = (
+          corners: ReturnType<typeof calculateBillboardCornerScreenPositions>,
+          useShaderGeometry: boolean
+        ): void => {
+          const hitTestCorners = ensureHitTestCorners(imageEntry);
+          let bufferOffset = 0;
+          for (const index of TRIANGLE_INDICES) {
+            const corner = corners[index]!;
+            if (useShaderGeometry) {
+              const baseCorner = BILLBOARD_BASE_CORNERS[index]!;
+              QUAD_VERTEX_SCRATCH[bufferOffset++] = baseCorner[0];
+              QUAD_VERTEX_SCRATCH[bufferOffset++] = baseCorner[1];
+            } else {
+              QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.x;
+              QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.y;
+            }
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = 0;
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = 1;
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.u;
+            QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.v;
+          }
+
+          for (let i = 0; i < corners.length; i++) {
+            const source = corners[i]!;
+            const target = hitTestCorners[i]!;
+            target.x = source.x;
+            target.y = source.y;
+          }
+
+          screenCornerBuffer = hitTestCorners;
+        };
+
+        let resolvedCorners: ReturnType<
+          typeof calculateBillboardCornerScreenPositions
+        >;
+        let shaderModelCorners:
+          | ReturnType<typeof calculateBillboardCornerScreenPositions>
+          | undefined;
+        if (useShaderBillboard) {
+          if (uniformBillboardCenterLocation) {
+            glContext.uniform2f(
+              uniformBillboardCenterLocation,
+              billboardShaderInputs.centerX,
+              billboardShaderInputs.centerY
+            );
+          }
+          if (uniformBillboardHalfSizeLocation) {
+            glContext.uniform2f(
+              uniformBillboardHalfSizeLocation,
+              billboardShaderInputs.halfWidth,
+              billboardShaderInputs.halfHeight
+            );
+          }
+          if (uniformBillboardAnchorLocation) {
+            glContext.uniform2f(
+              uniformBillboardAnchorLocation,
+              billboardShaderInputs.anchor?.x ?? 0,
+              billboardShaderInputs.anchor?.y ?? 0
+            );
+          }
+          if (uniformBillboardSinCosLocation) {
+            const rad = -billboardShaderInputs.totalRotateDeg * DEG2RAD;
+            glContext.uniform2f(
+              uniformBillboardSinCosLocation,
+              Math.sin(rad),
+              Math.cos(rad)
+            );
+          }
+          shaderModelCorners = computeBillboardCornersShaderModel({
+            centerX: billboardShaderInputs.centerX,
+            centerY: billboardShaderInputs.centerY,
+            halfWidth: billboardShaderInputs.halfWidth,
+            halfHeight: billboardShaderInputs.halfHeight,
+            anchor: billboardShaderInputs.anchor,
+            rotationDeg: billboardShaderInputs.totalRotateDeg,
+          });
+          resolvedCorners = shaderModelCorners;
+          if (SL_DEBUG) {
+            const cpuCorners = calculateBillboardCornerScreenPositions(
+              billboardShaderInputs
+            );
+            const cornerDelta = cpuCorners.map((corner, index) => {
+              const shaderCorner = shaderModelCorners![index]!;
+              return {
+                index,
+                dx: corner.x - shaderCorner.x,
+                dy: corner.y - shaderCorner.y,
+                du: corner.u - shaderCorner.u,
+                dv: corner.v - shaderCorner.v,
+              };
+            });
+            (imageEntry as any).__billboardCornerComparison = {
+              cpuCorners,
+              shaderModelCorners,
+              cornerDelta,
+            };
+          }
+        } else {
+          resolvedCorners = calculateBillboardCornerScreenPositions(
+            billboardShaderInputs
+          );
         }
 
-        screenCornerBuffer = hitTestCorners;
+        writeBillboardCorners(resolvedCorners, useShaderBillboard);
 
         if (SL_DEBUG) {
           (imageEntry as any).__debugBag = {
@@ -3714,7 +4525,12 @@ export const createSpriteLayer = <T = any>(
             offsetDef,
             baseProjected,
             placement,
-            corners,
+            billboardCornersCpu: useShaderBillboard
+              ? ((imageEntry as any).__billboardCornerComparison?.cpuCorners ??
+                resolvedCorners)
+              : resolvedCorners,
+            billboardCornersShaderModel: shaderModelCorners,
+            billboardCornersUsed: resolvedCorners,
           };
         }
       }
@@ -3786,6 +4602,7 @@ export const createSpriteLayer = <T = any>(
           continue;
         }
 
+        const spriteMercator = resolveSpriteMercator(spriteEntry);
         const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
           zoom,
           spriteEntry.currentLocation.lat
@@ -3797,7 +4614,8 @@ export const createSpriteLayer = <T = any>(
 
         const perspectiveRatio = calculatePerspectiveRatio(
           mapInstance,
-          spriteEntry.currentLocation
+          spriteEntry.currentLocation,
+          spriteMercator
         );
         const effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
           metersPerPixelAtLat,
@@ -4017,20 +4835,28 @@ export const createSpriteLayer = <T = any>(
         DEBUG_OUTLINE_COLOR[2],
         DEBUG_OUTLINE_COLOR[3]
       );
+      if (
+        debugUniformScreenToClipScaleLocation &&
+        debugUniformScreenToClipOffsetLocation
+      ) {
+        glContext.uniform2f(
+          debugUniformScreenToClipScaleLocation,
+          screenToClipScaleX,
+          screenToClipScaleY
+        );
+        glContext.uniform2f(
+          debugUniformScreenToClipOffsetLocation,
+          screenToClipOffsetX,
+          screenToClipOffsetY
+        );
+      }
 
       for (const entry of hitTestEntries) {
         let writeOffset = 0;
         for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
           const corner = entry.corners[cornerIndex]!;
-          const [clipX, clipY] = screenToClip(
-            corner.x,
-            corner.y,
-            drawingBufferWidth,
-            drawingBufferHeight,
-            pixelRatio
-          );
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = clipX;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = clipY;
+          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
+          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
           DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
           DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
         }
@@ -4520,6 +5346,11 @@ export const createSpriteLayer = <T = any>(
 
     // Construct internal sprite state.
     const currentLocation = cloneSpriteLocation(init.location);
+    const initialAltitude = currentLocation.z ?? 0;
+    const initialMercator = MercatorCoordinate.fromLngLat(
+      { lng: currentLocation.lng, lat: currentLocation.lat },
+      initialAltitude
+    );
     const spriteState: InternalSpriteCurrentState<T> = {
       spriteId,
       // Sprites default to enabled unless explicitly disabled in the init payload.
@@ -4535,6 +5366,10 @@ export const createSpriteLayer = <T = any>(
       lastCommandLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationAngleDeg: 0,
+      cachedMercator: initialMercator,
+      cachedMercatorLng: currentLocation.lng,
+      cachedMercatorLat: currentLocation.lat,
+      cachedMercatorZ: initialAltitude,
     };
 
     // Store the sprite state.

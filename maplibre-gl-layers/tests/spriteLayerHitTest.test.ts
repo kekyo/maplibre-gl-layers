@@ -172,6 +172,14 @@ class MockGLContext {
   readonly UNPACK_PREMULTIPLY_ALPHA_WEBGL = 0x9241;
   readonly RGBA = 0x1908;
   readonly UNSIGNED_BYTE = 0x1401;
+  readonly BLEND = 0x0be2;
+  readonly LINE_LOOP = 0x0002;
+  readonly COMPILE_STATUS = 0x8b81;
+  readonly LINK_STATUS = 0x8b82;
+  readonly VERTEX_SHADER = 0x8b31;
+  readonly FRAGMENT_SHADER = 0x8b30;
+  readonly TEXTURE_MIN_FILTER = 0x2801;
+  readonly TEXTURE_MAG_FILTER = 0x2800;
   readonly LINEAR = 0x2601;
   readonly NEAREST = 0x2600;
   readonly LINEAR_MIPMAP_LINEAR = 0x2703;
@@ -233,6 +241,7 @@ class MockGLContext {
     return 0;
   }
   enableVertexAttribArray(): void {}
+  disableVertexAttribArray(): void {}
   vertexAttribPointer(): void {}
 
   getUniformLocation(): unknown {
@@ -240,6 +249,10 @@ class MockGLContext {
   }
   uniform1i(): void {}
   uniform1f(): void {}
+  uniform2f(): void {}
+  uniform3f(): void {}
+  uniform4f(): void {}
+  uniformMatrix4fv(): void {}
 
   createTexture(): unknown {
     return { id: this.nextTextureId++ };
@@ -248,6 +261,7 @@ class MockGLContext {
   bindTexture(): void {}
   activeTexture(): void {}
   texParameteri(): void {}
+  texParameterf(): void {}
   pixelStorei(): void {}
   texImage2D(): void {}
   generateMipmap(): void {}
