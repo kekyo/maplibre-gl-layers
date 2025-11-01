@@ -589,6 +589,11 @@ export interface SpriteLayerOptions {
   spriteScaling?: SpriteScalingOptions;
   /** Optional texture filtering configuration. */
   textureFiltering?: SpriteTextureFilteringOptions;
+  /**
+   * When true, renders red outlines around sprite hit-test regions to aid debugging.
+   * Defaults to false.
+   */
+  showDebugBounds?: boolean;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -797,6 +802,12 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   readonly getSpriteState: (
     spriteId: string
   ) => SpriteCurrentState<TTag> | undefined;
+  /**
+   * Enables or disables hit-test maintenance (quad-tree updates).
+   *
+   * @param {boolean} enabled - When false, hit testing is skipped and the internal data structure is cleared.
+   */
+  readonly setHitTestEnabled: (enabled: boolean) => void;
 
   ////////////////////////////////////////////////////////////////////////////////
 
