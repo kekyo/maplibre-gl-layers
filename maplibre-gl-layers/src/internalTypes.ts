@@ -52,6 +52,10 @@ export interface SurfaceShaderInputs {
   displacedCenter: SpriteLocation;
   scaleAdjustment: number;
   corners: SurfaceShaderCornerState[];
+  clipCenter: { x: number; y: number; z: number; w: number };
+  clipBasisEast: { x: number; y: number; z: number; w: number };
+  clipBasisNorth: { x: number; y: number; z: number; w: number };
+  clipCorners: Array<{ x: number; y: number; z: number; w: number }>;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////

@@ -250,7 +250,9 @@ class MockGLContext {
   uniform1i(): void {}
   uniform1f(): void {}
   uniform2f(): void {}
+  uniform3f(): void {}
   uniform4f(): void {}
+  uniformMatrix4fv(): void {}
 
   createTexture(): unknown {
     return { id: this.nextTextureId++ };
