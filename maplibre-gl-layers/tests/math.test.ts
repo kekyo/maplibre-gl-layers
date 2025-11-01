@@ -494,6 +494,50 @@ const buildBillboardCases = () => {
 
 const buildSurfaceCases = buildBillboardCases;
 
+const computeBillboardCornersShaderModel = ({
+  centerX,
+  centerY,
+  halfWidth,
+  halfHeight,
+  anchor,
+  totalRotateDeg,
+}: {
+  centerX: number;
+  centerY: number;
+  halfWidth: number;
+  halfHeight: number;
+  anchor?: { x: number; y: number };
+  totalRotateDeg: number;
+}): Array<{ x: number; y: number; u: number; v: number }> => {
+  const baseCorners: ReadonlyArray<readonly [number, number]> = [
+    [-1, 1],
+    [1, 1],
+    [-1, -1],
+    [1, -1],
+  ];
+  const anchorX = anchor?.x ?? 0;
+  const anchorY = anchor?.y ?? 0;
+  const rad = -totalRotateDeg * (Math.PI / 180);
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+
+  return baseCorners.map(([cornerXNorm, cornerYNorm], index) => {
+    const cornerX = cornerXNorm * halfWidth;
+    const cornerY = cornerYNorm * halfHeight;
+    const shiftedX = cornerX - anchorX * halfWidth;
+    const shiftedY = cornerY - anchorY * halfHeight;
+    const rotatedX = shiftedX * cosR - shiftedY * sinR;
+    const rotatedY = shiftedX * sinR + shiftedY * cosR;
+    const [u, v] = UV_CORNERS[index]!;
+    return {
+      x: centerX + rotatedX,
+      y: centerY - rotatedY,
+      u,
+      v,
+    };
+  });
+};
+
 describe('calculateBillboardCenterPosition', () => {
   const base = { x: 120, y: 340 };
   const imageWidth = 200;
@@ -646,31 +690,21 @@ describe('calculateBillboardCornerScreenPositions', () => {
         totalRotateDeg: rotation,
       });
 
-      const anchorOffsetX = (anchor?.x ?? 0) * placement.halfWidth;
-      const anchorOffsetY = (anchor?.y ?? 0) * placement.halfHeight;
-      const rad = -rotation * (Math.PI / 180);
-      const cosR = Math.cos(rad);
-      const sinR = Math.sin(rad);
+      const expected = computeBillboardCornersShaderModel({
+        centerX: placement.centerX,
+        centerY: placement.centerY,
+        halfWidth: placement.halfWidth,
+        halfHeight: placement.halfHeight,
+        anchor,
+        totalRotateDeg: rotation,
+      });
 
-      UV_CORNERS.forEach(([u, v], index) => {
-        const baseCorners: Array<[number, number]> = [
-          [-placement.halfWidth, placement.halfHeight],
-          [placement.halfWidth, placement.halfHeight],
-          [-placement.halfWidth, -placement.halfHeight],
-          [placement.halfWidth, -placement.halfHeight],
-        ];
-        const [cornerX, cornerY] = baseCorners[index]!;
-        const shiftedX = cornerX - anchorOffsetX;
-        const shiftedY = cornerY - anchorOffsetY;
-        const rotatedX = shiftedX * cosR - shiftedY * sinR;
-        const rotatedY = shiftedX * sinR + shiftedY * cosR;
-        const expectedX = placement.centerX + rotatedX;
-        const expectedY = placement.centerY - rotatedY;
+      expected.forEach((expectation, index) => {
         const corner = corners[index]!;
-        expect(corner.x).toBeCloseTo(expectedX, 6);
-        expect(corner.y).toBeCloseTo(expectedY, 6);
-        expect(corner.u).toBe(u);
-        expect(corner.v).toBe(v);
+        expect(corner.x).toBeCloseTo(expectation.x, 6);
+        expect(corner.y).toBeCloseTo(expectation.y, 6);
+        expect(corner.u).toBe(expectation.u);
+        expect(corner.v).toBe(expectation.v);
       });
     }
   );

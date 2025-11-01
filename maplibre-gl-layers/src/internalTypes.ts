@@ -8,6 +8,7 @@
  * Internal-only type definitions shared across SpriteLayer implementation modules.
  */
 
+import type { MercatorCoordinate } from 'maplibre-gl';
 import type {
   SpriteMode,
   SpriteAnchor,
@@ -224,4 +225,8 @@ export interface InternalSpriteCurrentState<TTag> {
   lastCommandLocation: SpriteLocation;
   lastAutoRotationLocation: SpriteLocation;
   lastAutoRotationAngleDeg: number;
+  cachedMercator: MercatorCoordinate;
+  cachedMercatorLng: number;
+  cachedMercatorLat: number;
+  cachedMercatorZ: number;
 }
