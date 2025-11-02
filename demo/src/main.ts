@@ -931,6 +931,7 @@ const createHud = () => {
             }
           </button>
         </div>
+        <!-- Orbit interpolation feedforward mode is ignored because it does not update values continuous.
         <div>
           <button
             type="button"
@@ -955,6 +956,7 @@ const createHud = () => {
             Feedforward
           </button>
         </div>
+        -->
         <div class="secondary-interpolation-group">
           <button
             type="button"
@@ -971,6 +973,7 @@ const createHud = () => {
             }
           </button>
         </div>
+        <!-- Orbit interpolation feedforward mode is ignored because it does not update values continuous.
         <div>
           <button
             type="button"
@@ -995,6 +998,7 @@ const createHud = () => {
             Feedforward
           </button>
         </div>
+        -->
       </div>
       <div class="control-group" data-testid="group-arrow-shape">
         <h1>Arrow Shape</h1>
@@ -3144,6 +3148,45 @@ const main = async () => {
         isAutoRotationEnabled
       );
 
+      const secondaryImageId =
+        isSecondaryImageReady && currentSecondaryImageType === 'text'
+          ? `${SECONDARY_TEXT_IMAGE_PREFIX}${id}`
+          : SECONDARY_IMAGE_ID;
+
+      let secondaryOpacity = 1.0;
+      let secondaryOffset:
+        | {
+            offsetMeters: number;
+            offsetDeg: number;
+          }
+        | undefined;
+
+      switch (currentSecondaryImageOrbitMode) {
+        case 'hidden':
+          secondaryOpacity = 0.0;
+          break;
+        case 'center':
+          secondaryOffset = {
+            offsetMeters: 0.0,
+            offsetDeg: 0.0,
+          };
+          break;
+        case 'shift':
+          secondaryOffset = {
+            offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+            offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
+          };
+          break;
+        case 'orbit':
+          secondaryOffset = {
+            offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+            offsetDeg: secondaryImageOrbitDegrees,
+          };
+          break;
+        default:
+          break;
+      }
+
       // Prepare a tag object so the initializer can populate required fields.
       const newTag = {} as DemoSpriteTag;
       newTag.orderIndex = index;
@@ -3184,12 +3227,17 @@ const main = async () => {
           {
             subLayer: SECONDARY_SUB_LAYER, // Place on the secondary sub-layer.
             order: 0,
-            imageId: SECONDARY_IMAGE_ID, // Fixed image ID.
+            imageId: secondaryImageId,
             mode: 'billboard', // Always render the satellite as a billboard.
             autoRotation: false, // Satellite orbits the anchor and does not face direction.
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
             scale: SECONDARY_IMAGE_SCALE,
-            opacity: currentSecondaryImageOrbitMode === 'hidden' ? 0.0 : 1.0,
+            opacity: secondaryOpacity,
+            ...(secondaryOffset
+              ? {
+                  offset: secondaryOffset,
+                }
+              : {}),
             interpolation:
               isOrbitDegInterpolationEnabled ||
               isOrbitMetersInterpolationEnabled

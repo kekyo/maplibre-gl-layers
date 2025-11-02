@@ -10,6 +10,7 @@ import type {
   SpriteLocation,
   SpriteScalingOptions,
 } from './types';
+import type { MatrixInput } from './internalTypes';
 import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './const';
 
 /**
@@ -36,6 +37,46 @@ export const RAD2DEG = 180 / Math.PI;
  * @constant
  */
 export const TILE_SIZE = 512;
+
+/**
+ * Multiplies a 4x4 matrix with a 4-component vector using row-major indexing.
+ * @param {MatrixInput} matrix - Matrix to multiply.
+ * @param {number} x - X component of the vector.
+ * @param {number} y - Y component of the vector.
+ * @param {number} z - Z component of the vector.
+ * @param {number} w - W component of the vector.
+ * @returns {[number, number, number, number]} Resulting homogeneous coordinate.
+ */
+export const multiplyMatrixAndVector = (
+  matrix: MatrixInput,
+  x: number,
+  y: number,
+  z: number,
+  w: number
+): [number, number, number, number] => {
+  const m0 = matrix[0] ?? 0;
+  const m1 = matrix[1] ?? 0;
+  const m2 = matrix[2] ?? 0;
+  const m3 = matrix[3] ?? 0;
+  const m4 = matrix[4] ?? 0;
+  const m5 = matrix[5] ?? 0;
+  const m6 = matrix[6] ?? 0;
+  const m7 = matrix[7] ?? 0;
+  const m8 = matrix[8] ?? 0;
+  const m9 = matrix[9] ?? 0;
+  const m10 = matrix[10] ?? 0;
+  const m11 = matrix[11] ?? 0;
+  const m12 = matrix[12] ?? 0;
+  const m13 = matrix[13] ?? 0;
+  const m14 = matrix[14] ?? 0;
+  const m15 = matrix[15] ?? 0;
+  return [
+    m0 * x + m4 * y + m8 * z + m12 * w,
+    m1 * x + m5 * y + m9 * z + m13 * w,
+    m2 * x + m6 * y + m10 * z + m14 * w,
+    m3 * x + m7 * y + m11 * z + m15 * w,
+  ];
+};
 
 /**
  * Structure holding resolved sprite scaling options.
