@@ -13,7 +13,7 @@
  * ordering rules, and depth-normalization helpers for avoiding Z-buffer issues.
  */
 
-import { type Map as MapLibreMap, MercatorCoordinate } from 'maplibre-gl';
+import { type Map as MapLibreMap } from 'maplibre-gl';
 import type { CustomRenderMethodInput } from 'maplibre-gl';
 import {
   type SpriteInit,
@@ -55,13 +55,13 @@ import type {
   ResolvedBorderSides,
   ResolvedTextGlyphOptions,
   MutableSpriteScreenPoint,
-  MatrixInput,
-  ClipContext,
   Canvas2DContext,
   Canvas2DSource,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
   SurfaceShaderInputs,
+  ProjectionHost,
+  SpriteMercatorCoordinate,
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './loadImage';
 import {
@@ -93,7 +93,7 @@ import {
   stepSpriteImageInterpolations,
   syncImageRotationChannel,
 } from './interpolationChannels';
-import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './const';
+import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './default';
 import {
   createLooseQuadTree,
   type Item as LooseQuadTreeItem,
@@ -120,12 +120,28 @@ import {
   createShaderProgram,
 } from './shader';
 import {
-  calculatePerspectiveRatio,
   type ImageCenterCache,
   type PrepareSpriteImageDrawResult,
   collectDepthSortedItems,
   prepareSpriteEachImageDraw,
 } from './calculation';
+import {
+  DEFAULT_ANCHOR,
+  DEFAULT_IMAGE_OFFSET,
+  DEFAULT_TEXT_GLYPH_ALIGN,
+  DEFAULT_TEXT_GLYPH_COLOR,
+  DEFAULT_TEXT_GLYPH_FONT_FAMILY,
+  DEFAULT_TEXT_GLYPH_FONT_SIZE,
+  DEFAULT_TEXT_GLYPH_FONT_STYLE,
+  DEFAULT_TEXT_GLYPH_FONT_WEIGHT,
+  DEFAULT_TEXT_GLYPH_RENDER_PIXEL_RATIO,
+  HIT_TEST_EPSILON,
+  HIT_TEST_WORLD_BOUNDS,
+  MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO,
+  MIN_TEXT_GLYPH_FONT_SIZE,
+} from './const';
+import { SL_DEBUG } from './config';
+import { createMapLibreProjectionHost } from './mapLibreProjectionHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -164,41 +180,11 @@ import {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-/** Debug flag */
-const SL_DEBUG = false;
-
-/** Enables the upcoming shader-based billboard corner computation when true. */
-const USE_SHADER_BILLBOARD_GEOMETRY = true;
-/** Enables the upcoming shader-based surface corner computation when true. */
-const USE_SHADER_SURFACE_GEOMETRY = true;
-
-/** Default sprite anchor centered at the image origin. */
-const DEFAULT_ANCHOR: SpriteAnchor = { x: 0.0, y: 0.0 };
-
 /** Default threshold in meters for auto-rotation to treat movement as significant. */
 const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
 
-/** Default image offset applied when none is provided. */
-const DEFAULT_IMAGE_OFFSET: SpriteImageOffset = {
-  offsetMeters: 0,
-  offsetDeg: 0,
-};
-
 /** Query radius (in CSS pixels) when sampling the hit-test QuadTree. */
 const HIT_TEST_QUERY_RADIUS_PIXELS = 32;
-
-// Clamp the clip-space w component to avoid instability near the clip plane.
-const MIN_CLIP_Z_EPSILON = 1e-7;
-
-/** Small depth bias applied in NDC space. */
-const EPS_NDC = 1e-6;
-/** Whether to enable the NDC bias for surface rendering (disabled by default). */
-const ENABLE_NDC_BIAS_SURFACE = true;
-
-/** Maximum number of order slots available within a sub-layer (0..ORDER_MAX-1). */
-const ORDER_MAX = 16;
-/** Bucket width used to encode sub-layer and order into a single number. */
-const ORDER_BUCKET = 16;
 
 /** List of acceptable minification filters exposed to callers. */
 const MIN_FILTER_VALUES: readonly SpriteTextureMinFilter[] = [
@@ -324,32 +310,6 @@ const resolveGlMagFilter = (
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Computes the perspective ratio from MapLibre's internal transform.
- * Used to calculate distance-based scaling that responds to pitch, zoom, and altitude.
- * @param {MapLibreMap} mapInstance - MapLibre map providing the transform and camera distance.
- * @param {SpriteLocation} location - Location used to derive mercator coordinates for scaling.
- * @param {MercatorCoordinate | undefined} [cachedMercator] - Optional precomputed Mercator coordinate for the location.
- * @returns {number} Perspective ratio applied when scaling sprites; defaults to 1 if unavailable.
- */
-
-/**
- * Extracts the current clip-space context from MapLibre if the mercator matrix is available.
- * @param {MapLibreMap} mapInstance - Map instance storing the transform.
- * @returns {ClipContext | null} Clip context or `null` when the transform is not ready.
- */
-const getClipContext = (mapInstance: MapLibreMap): ClipContext | null => {
-  const transform = (mapInstance as unknown as { transform?: any }).transform;
-  if (!transform) {
-    return null;
-  }
-  const mercatorMatrix: MatrixInput | undefined = transform._mercatorMatrix;
-  if (!mercatorMatrix) {
-    return null;
-  }
-  return { mercatorMatrix };
-};
-
-/**
  * Applies auto-rotation to all images within a sprite when movement exceeds the configured threshold.
  * @template T Arbitrary sprite tag type.
  * @param {InternalSpriteCurrentState<T>} sprite - Sprite undergoing potential rotation update.
@@ -421,16 +381,6 @@ export const applyAutoRotation = <T>(
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
-
-const DEFAULT_TEXT_GLYPH_FONT_FAMILY = 'sans-serif';
-const DEFAULT_TEXT_GLYPH_FONT_STYLE: 'normal' | 'italic' = 'normal';
-const DEFAULT_TEXT_GLYPH_FONT_WEIGHT = 'normal';
-const DEFAULT_TEXT_GLYPH_COLOR = '#000000';
-const DEFAULT_TEXT_GLYPH_ALIGN: SpriteTextGlyphHorizontalAlign = 'center';
-const DEFAULT_TEXT_GLYPH_FONT_SIZE = 32;
-const DEFAULT_TEXT_GLYPH_RENDER_PIXEL_RATIO = 1;
-const MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO = 4;
-const MIN_TEXT_GLYPH_FONT_SIZE = 4;
 
 /**
  * Resolves text padding into a fully populated structure with non-negative values.
@@ -1234,48 +1184,39 @@ export const createSpriteLayer = <T = any>(
   /**
    * Ensures the sprite's cached Mercator coordinate matches its current location.
    * Recomputes the coordinate lazily when longitude/latitude/altitude change.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
-   * @returns {MercatorCoordinate} Cached Mercator coordinate representing the current location.
+   * @returns {SpriteMercatorCoordinate} Cached Mercator coordinate representing the current location.
    */
   const resolveSpriteMercator = (
+    projectionHost: ProjectionHost,
     sprite: InternalSpriteCurrentState<T>
-  ): MercatorCoordinate => {
+  ): SpriteMercatorCoordinate => {
     const location = sprite.currentLocation;
-    const altitude = location.z ?? 0;
     if (
       sprite.cachedMercator &&
       sprite.cachedMercatorLng === location.lng &&
       sprite.cachedMercatorLat === location.lat &&
-      sprite.cachedMercatorZ === altitude
+      sprite.cachedMercatorZ === location.z
     ) {
       return sprite.cachedMercator;
     }
-    const mercator = MercatorCoordinate.fromLngLat(
-      { lng: location.lng, lat: location.lat },
-      altitude
-    );
+    const mercator = projectionHost.fromLngLat(location);
     sprite.cachedMercator = mercator;
     sprite.cachedMercatorLng = location.lng;
     sprite.cachedMercatorLat = location.lat;
-    sprite.cachedMercatorZ = altitude;
+    sprite.cachedMercatorZ = location.z;
     return mercator;
-  };
-
-  const HIT_TEST_WORLD_BOUNDS: LooseQuadTreeRect = {
-    x0: -180,
-    y0: -90,
-    x1: 180,
-    y1: 90,
   };
 
   /**
    * State stored in the QuadTree used for hit testing.
    */
-  type HitTestTreeState = {
-    readonly sprite: InternalSpriteCurrentState<T>;
-    readonly image: InternalSpriteImageState;
+  interface HitTestTreeState {
+    readonly sprite: Readonly<InternalSpriteCurrentState<T>>;
+    readonly image: Readonly<InternalSpriteImageState>;
     drawIndex: number;
-  };
+  }
 
   /**
    * Hit-test QuadTree based on longitude and latitude.
@@ -1284,10 +1225,10 @@ export const createSpriteLayer = <T = any>(
     bounds: HIT_TEST_WORLD_BOUNDS,
   });
 
-  type HitTestTreeHandle = {
-    rect: LooseQuadTreeRect;
-    item: LooseQuadTreeItem<HitTestTreeState>;
-  };
+  interface HitTestTreeHandle {
+    rect: Readonly<LooseQuadTreeRect>;
+    item: Readonly<LooseQuadTreeItem<HitTestTreeState>>;
+  }
 
   /**
    * Reverse lookup table from an image state to the corresponding QuadTree item.
@@ -1306,7 +1247,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {LooseQuadTreeRect | null} Generated rectangle; returns null when the input is invalid.
    */
   const rectFromLngLatPoints = (
-    points: SpriteLocation[]
+    points: readonly Readonly<SpriteLocation>[]
   ): LooseQuadTreeRect | null => {
     let minLng = Number.POSITIVE_INFINITY;
     let maxLng = Number.NEGATIVE_INFINITY;
@@ -1363,7 +1304,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {LooseQuadTreeRect | null} Generated rectangle.
    */
   const rectFromRadiusMeters = (
-    base: SpriteLocation,
+    base: Readonly<SpriteLocation>,
     radiusMeters: number
   ): LooseQuadTreeRect | null => {
     if (
@@ -1389,26 +1330,23 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Estimates the geographic rectangle that a surface-mode image may occupy.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
    * @param {InternalSpriteImageState} image - Target image.
    * @returns {LooseQuadTreeRect | null} Estimated rectangle.
    */
   const estimateSurfaceImageBounds = (
-    sprite: InternalSpriteCurrentState<T>,
-    image: InternalSpriteImageState
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
+    image: Readonly<InternalSpriteImageState>
   ): LooseQuadTreeRect | null => {
-    const mapInstance = map;
-    if (!mapInstance) {
-      return null;
-    }
-
     const imageResource = images.get(image.imageId);
     if (!imageResource) {
       return null;
     }
 
     const baseLocation = sprite.currentLocation;
-    const zoom = mapInstance.getZoom();
+    const zoom = projectionHost.getZoom();
     const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
@@ -1418,9 +1356,8 @@ export const createSpriteLayer = <T = any>(
       return null;
     }
 
-    const spriteMercator = resolveSpriteMercator(sprite);
-    const perspectiveRatio = calculatePerspectiveRatio(
-      mapInstance,
+    const spriteMercator = resolveSpriteMercator(projectionHost, sprite);
+    const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
       baseLocation,
       spriteMercator
     );
@@ -1493,21 +1430,17 @@ export const createSpriteLayer = <T = any>(
    * @returns {LooseQuadTreeRect | null} Estimated rectangle.
    */
   const estimateBillboardImageBounds = (
+    projectionHost: ProjectionHost,
     sprite: InternalSpriteCurrentState<T>,
     image: InternalSpriteImageState
   ): LooseQuadTreeRect | null => {
-    const mapInstance = map;
-    if (!mapInstance) {
-      return null;
-    }
-
     const imageResource = images.get(image.imageId);
     if (!imageResource) {
       return null;
     }
 
     const baseLocation = sprite.currentLocation;
-    const zoom = mapInstance.getZoom();
+    const zoom = projectionHost.getZoom();
     const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
@@ -1517,9 +1450,8 @@ export const createSpriteLayer = <T = any>(
       return null;
     }
 
-    const spriteMercator = resolveSpriteMercator(sprite);
-    const perspectiveRatio = calculatePerspectiveRatio(
-      mapInstance,
+    const spriteMercator = resolveSpriteMercator(projectionHost, sprite);
+    const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
       baseLocation,
       spriteMercator
     );
@@ -1586,21 +1518,23 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Estimates the geographic bounding box of an image.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
    * @param {InternalSpriteImageState} image - Target image.
    * @returns {LooseQuadTreeRect | null} Estimated rectangle.
    */
   const estimateImageBounds = (
-    sprite: InternalSpriteCurrentState<T>,
-    image: InternalSpriteImageState
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
+    image: Readonly<InternalSpriteImageState>
   ): LooseQuadTreeRect | null => {
     if (image.opacity <= 0 || !sprite.isEnabled) {
       return null;
     }
     if (image.mode === 'surface') {
-      return estimateSurfaceImageBounds(sprite, image);
+      return estimateSurfaceImageBounds(projectionHost, sprite, image);
     }
-    return estimateBillboardImageBounds(sprite, image);
+    return estimateBillboardImageBounds(projectionHost, sprite, image);
   };
 
   const removeImageBoundsFromHitTestTree = (
@@ -1637,8 +1571,9 @@ export const createSpriteLayer = <T = any>(
   };
 
   const registerImageBoundsInHitTestTree = (
-    sprite: InternalSpriteCurrentState<T>,
-    image: InternalSpriteImageState
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
+    image: Readonly<InternalSpriteImageState>
   ): void => {
     const existingHandle = hitTestTreeItems.get(image);
 
@@ -1649,7 +1584,7 @@ export const createSpriteLayer = <T = any>(
       return;
     }
 
-    const rect = estimateImageBounds(sprite, image);
+    const rect = estimateImageBounds(projectionHost, sprite, image);
 
     if (!rect) {
       if (existingHandle) {
@@ -1727,11 +1662,12 @@ export const createSpriteLayer = <T = any>(
   };
 
   const refreshSpriteHitTestBounds = (
-    sprite: InternalSpriteCurrentState<T>
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>
   ): void => {
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
-        registerImageBoundsInHitTestTree(sprite, image);
+        registerImageBoundsInHitTestTree(projectionHost, sprite, image);
       });
     });
   };
@@ -1746,7 +1682,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {InternalSpriteImageState | undefined} Image state when present.
    */
   const getImageState = (
-    sprite: InternalSpriteCurrentState<T>,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
     subLayer: number,
     order: number
   ): InternalSpriteImageState | undefined =>
@@ -1760,8 +1696,8 @@ export const createSpriteLayer = <T = any>(
    * @returns {void}
    */
   const setImageState = (
-    sprite: InternalSpriteCurrentState<T>,
-    state: InternalSpriteImageState
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
+    state: Readonly<InternalSpriteImageState>
   ): void => {
     let inner = sprite.images.get(state.subLayer);
     if (!inner) {
@@ -1779,7 +1715,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when an image state exists.
    */
   const hasImageState = (
-    sprite: InternalSpriteCurrentState<T>,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
     subLayer: number,
     order: number
   ): boolean =>
@@ -1794,7 +1730,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when the image existed and was deleted.
    */
   const deleteImageState = (
-    sprite: InternalSpriteCurrentState<T>,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
     subLayer: number,
     order: number
   ): boolean => {
@@ -1813,7 +1749,7 @@ export const createSpriteLayer = <T = any>(
     InternalSpriteImageState,
   ];
 
-  type HitTestEntry = {
+  interface HitTestEntry {
     readonly sprite: InternalSpriteCurrentState<T>;
     readonly image: InternalSpriteImageState;
     readonly corners: readonly [
@@ -1826,10 +1762,7 @@ export const createSpriteLayer = <T = any>(
     readonly maxX: number;
     readonly minY: number;
     readonly maxY: number;
-  };
-
-  /** Small tolerance used to handle floating-point error during hit testing. */
-  const HIT_TEST_EPSILON = 1e-3;
+  }
 
   /**
    * Determines whether a point lies inside the quad defined by `corners`.
@@ -1967,8 +1900,8 @@ export const createSpriteLayer = <T = any>(
    * @param {readonly SpriteScreenPoint[]} screenCorners - Quad corners in screen space.
    */
   const registerHitTestEntry = (
-    spriteEntry: InternalSpriteCurrentState<T>,
-    imageEntry: InternalSpriteImageState,
+    spriteEntry: Readonly<InternalSpriteCurrentState<T>>,
+    imageEntry: Readonly<InternalSpriteImageState>,
     screenCorners: readonly [
       SpriteScreenPoint,
       SpriteScreenPoint,
@@ -3001,10 +2934,13 @@ export const createSpriteLayer = <T = any>(
 
     // Abort early if any critical resource (map, program, vertex buffer) is missing.
     const mapInstance = map;
-    // Rendering cannot proceed if core resources (map/program/buffer) are missing; bail out early.
     if (!mapInstance || !program || !vertexBuffer) {
       return;
     }
+
+    // Prepare to create projection host (From MapLibre, TODO)
+    const projectionHost = createMapLibreProjectionHost(mapInstance);
+
     // Uniform locations must be resolved before drawing; skip the frame otherwise.
     if (
       !uniformOpacityLocation ||
@@ -3093,12 +3029,12 @@ export const createSpriteLayer = <T = any>(
     const identityOffsetX = 0;
     const identityOffsetY = 0;
 
-    const zoom = mapInstance.getZoom();
+    const zoom = projectionHost.getZoom();
     const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const baseMetersPerPixel = resolvedScaling.metersPerPixel;
     const spriteMinPixel = resolvedScaling.spriteMinPixel;
     const spriteMaxPixel = resolvedScaling.spriteMaxPixel;
-    const clipContext = getClipContext(mapInstance);
+    const clipContext = projectionHost.getClipContext();
     // Without a clip context we cannot project to clip space; skip rendering.
     if (!clipContext) {
       return;
@@ -3341,7 +3277,7 @@ export const createSpriteLayer = <T = any>(
     const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
       const itemsWithDepth = collectDepthSortedItems<T>({
         bucket,
-        mapInstance,
+        projectionHost,
         images,
         clipContext,
         zoom,
@@ -3354,19 +3290,12 @@ export const createSpriteLayer = <T = any>(
         pixelRatio,
         originCenterCache,
         resolveSpriteMercator,
-        defaultAnchor: DEFAULT_ANCHOR,
-        defaultImageOffset: DEFAULT_IMAGE_OFFSET,
-        enableNdcBiasSurface: ENABLE_NDC_BIAS_SURFACE,
-        orderMax: ORDER_MAX,
-        orderBucket: ORDER_BUCKET,
-        epsNdc: EPS_NDC,
-        minClipZEpsilon: MIN_CLIP_Z_EPSILON,
       });
 
       const preparedItems = prepareSpriteEachImageDraw<T>({
         items: itemsWithDepth,
         originCenterCache,
-        mapInstance,
+        projectionHost,
         images,
         zoom,
         zoomScaleFactor,
@@ -3385,16 +3314,6 @@ export const createSpriteLayer = <T = any>(
         screenToClipScaleY,
         screenToClipOffsetX,
         screenToClipOffsetY,
-        defaultAnchor: DEFAULT_ANCHOR,
-        defaultImageOffset: DEFAULT_IMAGE_OFFSET,
-        useShaderSurfaceGeometry: USE_SHADER_SURFACE_GEOMETRY,
-        useShaderBillboardGeometry: USE_SHADER_BILLBOARD_GEOMETRY,
-        enableNdcBiasSurface: ENABLE_NDC_BIAS_SURFACE,
-        orderMax: ORDER_MAX,
-        orderBucket: ORDER_BUCKET,
-        epsNdc: EPS_NDC,
-        minClipZEpsilon: MIN_CLIP_Z_EPSILON,
-        slDebug: SL_DEBUG,
         ensureHitTestCorners,
         resolveSpriteMercator,
       });
@@ -3866,11 +3785,13 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Internal helper that constructs sprite state without scheduling redraws.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {string} spriteId - Sprite identifier.
    * @param {SpriteInit<T>} init - Initial sprite parameters.
    * @returns {boolean} `true` when the sprite is stored; `false` when the ID already exists or is invalid.
    */
   const addSpriteInternal = (
+    projectionHost: ProjectionHost,
     spriteId: string,
     init: SpriteInit<T>
   ): boolean => {
@@ -3948,10 +3869,7 @@ export const createSpriteLayer = <T = any>(
     // Construct internal sprite state.
     const currentLocation = cloneSpriteLocation(init.location);
     const initialAltitude = currentLocation.z ?? 0;
-    const initialMercator = MercatorCoordinate.fromLngLat(
-      { lng: currentLocation.lng, lat: currentLocation.lat },
-      initialAltitude
-    );
+    const initialMercator = projectionHost.fromLngLat(currentLocation);
     const spriteState: InternalSpriteCurrentState<T> = {
       spriteId,
       // Sprites default to enabled unless explicitly disabled in the init payload.
@@ -3976,7 +3894,7 @@ export const createSpriteLayer = <T = any>(
     // Store the sprite state.
     sprites.set(spriteId, spriteState);
 
-    refreshSpriteHitTestBounds(spriteState);
+    refreshSpriteHitTestBounds(projectionHost, spriteState);
 
     return true;
   };
@@ -4005,7 +3923,14 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when the sprite is added; `false` when the ID already exists.
    */
   const addSprite = (spriteId: string, init: SpriteInit<T>): boolean => {
-    const isAdded = addSpriteInternal(spriteId, init);
+    if (!map) {
+      return false;
+    }
+
+    // TODO: Replace to createProjectionHost
+    const projectionHost = createMapLibreProjectionHost(map);
+
+    const isAdded = addSpriteInternal(projectionHost, spriteId, init);
     if (isAdded) {
       // Rebuild render target entries.
       ensureRenderTargetEntries();
@@ -4021,11 +3946,18 @@ export const createSpriteLayer = <T = any>(
    * @returns {number} Number of sprites that were newly added.
    */
   const addSprites = (collection: SpriteInitCollection<T>): number => {
+    if (!map) {
+      return 0;
+    }
+
+    // TODO: Replace to createProjectionHost
+    const projectionHost = createMapLibreProjectionHost(map);
+
     let addedCount = 0;
     for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
       collection
     )) {
-      if (addSpriteInternal(spriteId, spriteInit)) {
+      if (addSpriteInternal(projectionHost, spriteId, spriteInit)) {
         addedCount++;
       }
     }
@@ -4110,11 +4042,8 @@ export const createSpriteLayer = <T = any>(
     }
 
     hitTestTree.clear();
-    hitTestTreeItems = new WeakMap<
-      InternalSpriteImageState,
-      HitTestTreeHandle
-    >();
-    hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
+    hitTestTreeItems = new WeakMap();
+    hitTestEntryByImage = new WeakMap();
     sprites.clear();
 
     // Rebuild render target entries.
@@ -4175,6 +4104,7 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Adds an image definition to the sprite, validating origin references and initializing rotation state.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {InternalSpriteCurrentState<T>} sprite - Sprite receiving the image.
    * @param {number} subLayer - Sub-layer identifier.
    * @param {number} order - Order slot within the sub-layer.
@@ -4183,6 +4113,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when the image is added; `false` when the slot already exists.
    */
   const addSpriteImageInternal = (
+    projectionHost: ProjectionHost,
     sprite: InternalSpriteCurrentState<T>,
     subLayer: number,
     order: number,
@@ -4236,7 +4167,7 @@ export const createSpriteLayer = <T = any>(
     syncImageRotationChannel(state);
 
     setImageState(sprite, state);
-    registerImageBoundsInHitTestTree(sprite, state);
+    registerImageBoundsInHitTestTree(projectionHost, sprite, state);
     resultOut.isUpdated = true;
     return true;
   };
@@ -4261,9 +4192,23 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    if (!map) {
+      return false;
+    }
+
+    // TODO: Replace to createProjectionHost
+    const projectionHost = createMapLibreProjectionHost(map);
+
     // Insert the image definition.
     const result: SpriteImageOperationInternalResult = { isUpdated: false };
-    addSpriteImageInternal(sprite, subLayer, order, imageInit, result);
+    addSpriteImageInternal(
+      projectionHost,
+      sprite,
+      subLayer,
+      order,
+      imageInit,
+      result
+    );
     if (!result.isUpdated) {
       return false;
     }
@@ -4278,6 +4223,7 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Updates an existing image with partial changes, handling interpolation and auto-rotation adjustments.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {InternalSpriteCurrentState<T>} sprite - Sprite containing the image.
    * @param {number} subLayer - Sub-layer identifier.
    * @param {number} order - Order slot within the sub-layer.
@@ -4286,6 +4232,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when the image exists and the update succeeded.
    */
   const updateSpriteImageInternal = (
+    projectionHost: ProjectionHost,
     sprite: InternalSpriteCurrentState<T>,
     subLayer: number,
     order: number,
@@ -4409,7 +4356,7 @@ export const createSpriteLayer = <T = any>(
       );
     }
 
-    registerImageBoundsInHitTestTree(sprite, state);
+    registerImageBoundsInHitTestTree(projectionHost, sprite, state);
 
     resultOut.isUpdated = true;
     return true;
@@ -4429,6 +4376,13 @@ export const createSpriteLayer = <T = any>(
     order: number,
     imageUpdate: SpriteImageDefinitionUpdate
   ): boolean => {
+    if (!map) {
+      return false;
+    }
+
+    // TODO: Replace to createProjectionHost
+    const projectionHost = createMapLibreProjectionHost(map);
+
     // Fail if the sprite cannot be found.
     const sprite = sprites.get(spriteId);
     if (!sprite) {
@@ -4437,7 +4391,14 @@ export const createSpriteLayer = <T = any>(
 
     // Apply the image update.
     const result: SpriteImageOperationInternalResult = { isUpdated: false };
-    updateSpriteImageInternal(sprite, subLayer, order, imageUpdate, result);
+    updateSpriteImageInternal(
+      projectionHost,
+      sprite,
+      subLayer,
+      order,
+      imageUpdate,
+      result
+    );
     if (!result.isUpdated) {
       return false;
     }
@@ -4525,6 +4486,7 @@ export const createSpriteLayer = <T = any>(
     | 'isRequiredRender';
 
   const updateSpriteInternal = (
+    projectionHost: ProjectionHost,
     spriteId: string,
     update: SpriteUpdateEntry<T>
   ): UpdateSpriteResult => {
@@ -4668,7 +4630,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     if (needsHitTestRefresh) {
-      refreshSpriteHitTestBounds(sprite);
+      refreshSpriteHitTestBounds(projectionHost, sprite);
     }
 
     // Rendering must be scheduled when draw-affecting changes occurred.
@@ -4692,8 +4654,15 @@ export const createSpriteLayer = <T = any>(
     spriteId: string,
     update: SpriteUpdateEntry<T>
   ): boolean => {
+    if (!map) {
+      return false;
+    }
+
+    // TODO: Replace to createProjectionHost
+    const projectionHost = createMapLibreProjectionHost(map);
+
     // Perform the update.
-    const result = updateSpriteInternal(spriteId, update);
+    const result = updateSpriteInternal(projectionHost, spriteId, update);
 
     switch (result) {
       case 'notfound':
@@ -4727,6 +4696,13 @@ export const createSpriteLayer = <T = any>(
       return 0;
     }
 
+    if (!map) {
+      return 0;
+    }
+
+    // TODO: Replace to createProjectionHost
+    const projectionHost = createMapLibreProjectionHost(map);
+
     let changedCount = 0;
     let isRequiredRender = false;
 
@@ -4750,6 +4726,7 @@ export const createSpriteLayer = <T = any>(
       },
       addImage: (subLayer, order, imageInit) => {
         const added = addSpriteImageInternal(
+          projectionHost,
           currentSprite,
           subLayer,
           order,
@@ -4763,6 +4740,7 @@ export const createSpriteLayer = <T = any>(
       },
       updateImage: (subLayer, order, imageUpdate) => {
         const updated = updateSpriteImageInternal(
+          projectionHost,
           currentSprite,
           subLayer,
           order,
@@ -4797,7 +4775,7 @@ export const createSpriteLayer = <T = any>(
         if (!init) {
           continue;
         }
-        if (addSpriteInternal(spriteId, init)) {
+        if (addSpriteInternal(projectionHost, spriteId, init)) {
           changedCount++;
           isRequiredRender = true;
         }
@@ -4820,7 +4798,11 @@ export const createSpriteLayer = <T = any>(
           isRequiredRender = true;
         }
       } else {
-        const updateResult = updateSpriteInternal(spriteId, updateObject);
+        const updateResult = updateSpriteInternal(
+          projectionHost,
+          spriteId,
+          updateObject
+        );
         let spriteChanged = false;
 
         switch (updateResult) {
@@ -4872,6 +4854,13 @@ export const createSpriteLayer = <T = any>(
       update: SpriteUpdaterEntry<T>
     ) => boolean
   ): number => {
+    if (!map) {
+      return 0;
+    }
+
+    // TODO: Replace to createProjectionHost
+    const projectionHost = createMapLibreProjectionHost(map);
+
     let updatedCount = 0;
     let isRequiredRender = false;
 
@@ -4890,6 +4879,7 @@ export const createSpriteLayer = <T = any>(
       },
       addImage: (subLayer, order, imageInit) =>
         addSpriteImageInternal(
+          projectionHost,
           currentSprite,
           subLayer,
           order,
@@ -4898,6 +4888,7 @@ export const createSpriteLayer = <T = any>(
         ),
       updateImage: (subLayer, order, imageUpdate) =>
         updateSpriteImageInternal(
+          projectionHost,
           currentSprite,
           subLayer,
           order,
@@ -4921,7 +4912,11 @@ export const createSpriteLayer = <T = any>(
       updater(sprite as SpriteCurrentState<T>, updateObject);
 
       // Apply the update.
-      const result = updateSpriteInternal(sprite.spriteId, updateObject);
+      const result = updateSpriteInternal(
+        projectionHost,
+        sprite.spriteId,
+        updateObject
+      );
 
       switch (result) {
         case 'notfound':
@@ -4957,6 +4952,33 @@ export const createSpriteLayer = <T = any>(
     return updatedCount;
   };
 
+  const setHitTestEnabled = (enabled: boolean) => {
+    if (isHitTestEnabled === enabled) {
+      return;
+    }
+    isHitTestEnabled = enabled;
+    hitTestTree.clear();
+    hitTestTreeItems = new WeakMap<
+      InternalSpriteImageState,
+      HitTestTreeHandle
+    >();
+    hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
+    if (!enabled) {
+      return;
+    }
+
+    if (!map) {
+      return;
+    }
+
+    // TODO: Replace to createProjectionHost
+    const projectionHost = createMapLibreProjectionHost(map);
+
+    sprites.forEach((sprite) => {
+      refreshSpriteHitTestBounds(projectionHost, sprite);
+    });
+  };
+
   /**
    * MapLibre CustomLayerInterface-compatible object exposing sprite management APIs.
    */
@@ -4985,27 +5007,7 @@ export const createSpriteLayer = <T = any>(
     updateSprite,
     mutateSprites,
     updateForEach,
-    setHitTestEnabled: (enabled: boolean) => {
-      if (isHitTestEnabled === enabled) {
-        return;
-      }
-      isHitTestEnabled = enabled;
-      hitTestTree.clear();
-      hitTestTreeItems = new WeakMap<
-        InternalSpriteImageState,
-        HitTestTreeHandle
-      >();
-      hitTestEntryByImage = new WeakMap<
-        InternalSpriteImageState,
-        HitTestEntry
-      >();
-      if (!enabled) {
-        return;
-      }
-      sprites.forEach((sprite) => {
-        refreshSpriteHitTestBounds(sprite);
-      });
-    },
+    setHitTestEnabled,
     on: addEventListener,
     off: removeEventListener,
   };

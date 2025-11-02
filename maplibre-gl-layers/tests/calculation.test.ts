@@ -7,8 +7,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MercatorCoordinate, type Map as MapLibreMap } from 'maplibre-gl';
 
+import { createMapLibreProjectionHost } from '../src/mapLibreProjectionHost';
 import {
-  calculatePerspectiveRatio,
   collectDepthSortedItems,
   prepareSpriteEachImageDraw,
   projectLngLatToClipSpace,
@@ -16,17 +16,21 @@ import {
   type DepthSortedItem,
   type ImageCenterCache,
 } from '../src/calculation';
+import { EPS_NDC, ORDER_BUCKET, ORDER_MAX } from '../src/const';
 import type {
   ClipContext,
   InternalSpriteCurrentState,
   InternalSpriteImageState,
   MutableSpriteScreenPoint,
+  ProjectionHost,
   RegisteredImage,
+  SpriteMercatorCoordinate,
 } from '../src/internalTypes';
 import type {
   SpriteAnchor,
   SpriteImageOffset,
   SpriteLocation,
+  SpritePoint,
 } from '../src/types';
 import { TRIANGLE_INDICES } from '../src/math';
 import { BILLBOARD_BASE_CORNERS, SURFACE_BASE_CORNERS } from '../src/shader';
@@ -42,40 +46,75 @@ const DEFAULT_CLIP_CONTEXT: ClipContext = { mercatorMatrix: IDENTITY_MATRIX };
 
 type ProjectOverride = (
   location: Readonly<SpriteLocation>
-) => { x: number; y: number } | null;
+) => SpritePoint | null;
 
 type UnprojectOverride = (
-  point: readonly [number, number]
+  point: Readonly<SpritePoint>
 ) => SpriteLocation | null;
 
-const createFakeMap = (options?: {
-  project?: ProjectOverride;
-  unproject?: UnprojectOverride;
-  cameraDistance?: number;
-}): MapLibreMap => {
+type FakeProjectionHostOptions = {
+  readonly project?: ProjectOverride;
+  readonly unproject?: UnprojectOverride;
+  readonly fromLngLat?: (
+    location: Readonly<SpriteLocation>
+  ) => SpriteMercatorCoordinate;
+  readonly clipContext?: ClipContext | null;
+  readonly zoom?: number;
+  readonly perspectiveRatio?:
+    | number
+    | ((
+        location: Readonly<SpriteLocation>,
+        cached?: SpriteMercatorCoordinate
+      ) => number);
+};
+
+const createFakeProjectionHost = (
+  options: FakeProjectionHostOptions = {}
+): ProjectionHost => {
   const project =
-    options?.project ??
+    options.project ??
     ((location: Readonly<SpriteLocation>) => ({
       x: location.lng * SCALE,
       y: -location.lat * SCALE,
     }));
   const unproject =
-    options?.unproject ??
-    (([x, y]: readonly [number, number]) => ({
-      lng: x / SCALE,
-      lat: -y / SCALE,
-      z: 0,
+    options.unproject ??
+    ((point: Readonly<SpritePoint>) => ({
+      lng: point.x / SCALE,
+      lat: -point.y / SCALE,
     }));
-  const cameraToCenterDistance = options?.cameraDistance ?? 8;
+  const fromLngLat =
+    options.fromLngLat ??
+    ((location: Readonly<SpriteLocation>): SpriteMercatorCoordinate => {
+      const mercator = MercatorCoordinate.fromLngLat(
+        { lng: location.lng, lat: location.lat },
+        location.z ?? 0
+      );
+      return {
+        x: mercator.x,
+        y: mercator.y,
+        z: mercator.z ?? 0,
+      };
+    });
+  const clipContext =
+    options.clipContext === undefined
+      ? DEFAULT_CLIP_CONTEXT
+      : options.clipContext;
+  const zoom = options.zoom ?? 10;
+  const perspective = options.perspectiveRatio;
+  const defaultRatio = typeof perspective === 'number' ? perspective : 8;
+
+  const calculatePerspectiveRatio: ProjectionHost['calculatePerspectiveRatio'] =
+    typeof perspective === 'function' ? perspective : () => defaultRatio;
+
   return {
+    getZoom: () => zoom,
+    getClipContext: () => clipContext,
+    fromLngLat,
     project,
     unproject,
-    transform: {
-      mercatorMatrix: IDENTITY_MATRIX,
-      _mercatorMatrix: IDENTITY_MATRIX,
-      cameraToCenterDistance,
-    },
-  } as unknown as MapLibreMap;
+    calculatePerspectiveRatio,
+  };
 };
 
 const createImageResource = (id: string): RegisteredImage => ({
@@ -176,42 +215,52 @@ const createEnsureHitTestCorners = () => {
   };
 };
 
+type CollectOptionsOverrides = Partial<CollectDepthSortedItemsOptions<null>> & {
+  readonly projectionHostOptions?: FakeProjectionHostOptions;
+};
+
 const createCollectOptions = (
-  overrides: Partial<CollectDepthSortedItemsOptions<null>> = {}
+  overrides: CollectOptionsOverrides = {}
 ): CollectDepthSortedItemsOptions<null> => {
-  const mapInstance =
-    overrides.mapInstance ?? createFakeMap({ cameraDistance: 8 });
+  const { projectionHostOptions, ...rest } = overrides;
+  const projectionHost =
+    rest.projectionHost ?? createFakeProjectionHost(projectionHostOptions);
+  const clipContext =
+    rest.clipContext === undefined
+      ? projectionHost.getClipContext()
+      : rest.clipContext;
+  const resolveSpriteMercator: CollectDepthSortedItemsOptions<null>['resolveSpriteMercator'] =
+    rest.resolveSpriteMercator ??
+    ((host, sprite) =>
+      sprite.cachedMercator ?? host.fromLngLat(sprite.currentLocation));
   return {
-    bucket: overrides.bucket ?? [],
-    mapInstance,
-    images: overrides.images ?? new Map(),
-    clipContext: overrides.clipContext ?? DEFAULT_CLIP_CONTEXT,
-    zoom: overrides.zoom ?? 10,
-    zoomScaleFactor: overrides.zoomScaleFactor ?? 1,
-    baseMetersPerPixel: overrides.baseMetersPerPixel ?? 1,
-    spriteMinPixel: overrides.spriteMinPixel ?? 0,
-    spriteMaxPixel: overrides.spriteMaxPixel ?? 4096,
-    drawingBufferWidth: overrides.drawingBufferWidth ?? 1024,
-    drawingBufferHeight: overrides.drawingBufferHeight ?? 768,
-    pixelRatio: overrides.pixelRatio ?? 1,
+    bucket: rest.bucket ?? [],
+    projectionHost,
+    images: rest.images ?? new Map(),
+    clipContext,
+    zoom: rest.zoom ?? 10,
+    zoomScaleFactor: rest.zoomScaleFactor ?? 1,
+    baseMetersPerPixel: rest.baseMetersPerPixel ?? 1,
+    spriteMinPixel: rest.spriteMinPixel ?? 0,
+    spriteMaxPixel: rest.spriteMaxPixel ?? 4096,
+    drawingBufferWidth: rest.drawingBufferWidth ?? 1024,
+    drawingBufferHeight: rest.drawingBufferHeight ?? 768,
+    pixelRatio: rest.pixelRatio ?? 1,
     originCenterCache:
-      overrides.originCenterCache ?? (new Map() as ImageCenterCache),
-    resolveSpriteMercator:
-      overrides.resolveSpriteMercator ?? ((sprite) => sprite.cachedMercator),
-    defaultAnchor: overrides.defaultAnchor ?? DEFAULT_ANCHOR,
-    defaultImageOffset: overrides.defaultImageOffset ?? DEFAULT_OFFSET,
-    enableNdcBiasSurface: overrides.enableNdcBiasSurface ?? false,
-    orderMax: overrides.orderMax ?? 8,
-    orderBucket: overrides.orderBucket ?? 4,
-    epsNdc: overrides.epsNdc ?? 1e-6,
-    minClipZEpsilon: overrides.minClipZEpsilon ?? 1e-6,
+      rest.originCenterCache ?? (new Map() as ImageCenterCache),
+    resolveSpriteMercator,
   };
 };
 
 describe('projectLngLatToClipSpace', () => {
   it('returns homogeneous coordinates when a clip context is available', () => {
     const location: SpriteLocation = { lng: 0, lat: 0, z: 0 };
-    const clip = projectLngLatToClipSpace(location, DEFAULT_CLIP_CONTEXT);
+    const projectionHost = createFakeProjectionHost();
+    const clip = projectLngLatToClipSpace(
+      projectionHost,
+      location,
+      projectionHost.getClipContext()
+    );
     expect(clip).not.toBeNull();
     if (!clip) {
       return;
@@ -226,7 +275,9 @@ describe('projectLngLatToClipSpace', () => {
     const matrix = new Float64Array([
       1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
     ]);
+    const projectionHost = createFakeProjectionHost();
     const result = projectLngLatToClipSpace(
+      projectionHost,
       { lng: 0, lat: 0, z: 0 },
       { mercatorMatrix: matrix }
     );
@@ -237,7 +288,9 @@ describe('projectLngLatToClipSpace', () => {
     const matrix = new Float64Array([
       1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 5e-7,
     ]);
+    const projectionHost = createFakeProjectionHost();
     const result = projectLngLatToClipSpace(
+      projectionHost,
       { lng: 0, lat: 0, z: 0 },
       { mercatorMatrix: matrix }
     );
@@ -245,57 +298,79 @@ describe('projectLngLatToClipSpace', () => {
   });
 
   it('returns null when clip context is missing', () => {
-    expect(projectLngLatToClipSpace({ lng: 0, lat: 0, z: 0 }, null)).toBeNull();
+    const projectionHost = createFakeProjectionHost();
+    expect(
+      projectLngLatToClipSpace(projectionHost, { lng: 0, lat: 0, z: 0 }, null)
+    ).toBeNull();
   });
 });
 
 describe('calculatePerspectiveRatio', () => {
-  it('derives the ratio from the mercator matrix and camera distance', () => {
-    const mapInstance = createFakeMap({ cameraDistance: 12 });
-    const ratio = calculatePerspectiveRatio(mapInstance, {
-      lng: 0,
-      lat: 0,
-      z: 0,
-    });
-    expect(ratio).toBeCloseTo(12, 6);
-  });
+  const location: SpriteLocation = { lng: 0, lat: 0, z: 0 };
 
-  it('falls back to _mercatorMatrix when mercatorMatrix is unavailable', () => {
-    const mapInstance = {
-      project: (location: SpriteLocation) => ({
-        x: location.lng * SCALE,
-        y: -location.lat * SCALE,
-      }),
+  const createMapStub = (params?: {
+    readonly mercatorMatrix?: Float64Array | null;
+    readonly fallbackMatrix?: Float64Array | null;
+    readonly cameraDistance?: number;
+  }): MapLibreMap => {
+    const transform =
+      params === undefined
+        ? {
+            mercatorMatrix: IDENTITY_MATRIX,
+            _mercatorMatrix: IDENTITY_MATRIX,
+            cameraToCenterDistance: 8,
+          }
+        : params === null
+          ? undefined
+          : {
+              mercatorMatrix: params.mercatorMatrix ?? undefined,
+              _mercatorMatrix: params.fallbackMatrix ?? IDENTITY_MATRIX,
+              cameraToCenterDistance: params.cameraDistance ?? 8,
+            };
+    return {
+      getZoom: () => 10,
+      project: (lngLat: SpriteLocation | [number, number]) => {
+        const { lng, lat } = Array.isArray(lngLat)
+          ? { lng: lngLat[0] ?? 0, lat: lngLat[1] ?? 0 }
+          : { lng: lngLat.lng, lat: lngLat.lat };
+        return {
+          x: lng * SCALE,
+          y: -lat * SCALE,
+        };
+      },
       unproject: ([x, y]: [number, number]) => ({
         lng: x / SCALE,
         lat: -y / SCALE,
         z: 0,
       }),
-      transform: {
-        _mercatorMatrix: IDENTITY_MATRIX,
-        cameraToCenterDistance: 5,
-      },
+      transform,
     } as unknown as MapLibreMap;
-    const ratio = calculatePerspectiveRatio(mapInstance, {
-      lng: 0,
-      lat: 0,
-      z: 0,
+  };
+
+  it('derives the ratio from the mercator matrix and camera distance', () => {
+    const map = createMapStub({
+      mercatorMatrix: IDENTITY_MATRIX,
+      fallbackMatrix: IDENTITY_MATRIX,
+      cameraDistance: 12,
     });
-    expect(ratio).toBeCloseTo(5, 6);
+    const host = createMapLibreProjectionHost(map);
+    expect(host.calculatePerspectiveRatio(location)).toBeCloseTo(12, 6);
+  });
+
+  it('falls back to _mercatorMatrix when mercatorMatrix is unavailable', () => {
+    const map = createMapStub({
+      mercatorMatrix: undefined,
+      fallbackMatrix: IDENTITY_MATRIX,
+      cameraDistance: 5,
+    });
+    const host = createMapLibreProjectionHost(map);
+    expect(host.calculatePerspectiveRatio(location)).toBeCloseTo(5, 6);
   });
 
   it('falls back to 1 when transform is unavailable', () => {
-    const mapInstance = {
-      project: () => ({ x: 0, y: 0 }),
-      unproject: () => ({ lng: 0, lat: 0 }),
-    } as unknown as MapLibreMap;
-    expect(
-      calculatePerspectiveRatio(mapInstance, {
-        lng: 0,
-        lat: 0,
-        z: 0,
-      })
-    ).toBe(1);
+    const map = createMapStub();
+    const host = createMapLibreProjectionHost(map);
+    expect(host.calculatePerspectiveRatio(location)).toBe(1);
   });
 });
 
@@ -398,27 +473,20 @@ describe('collectDepthSortedItems', () => {
     const biased = collectDepthSortedItems(
       createCollectOptions({
         ...sharedOptions,
-        enableNdcBiasSurface: true,
-        originCenterCache: new Map(),
-      })
-    );
-    const unbiased = collectDepthSortedItems(
-      createCollectOptions({
-        ...sharedOptions,
-        enableNdcBiasSurface: false,
         originCenterCache: new Map(),
       })
     );
 
     expect(biased).toHaveLength(2);
-    expect(unbiased).toHaveLength(2);
 
-    const biasedDelta = biased[1].depthKey - biased[0].depthKey;
-    const unbiasedDelta = Math.abs(unbiased[1].depthKey - unbiased[0].depthKey);
+    const delta = Math.abs(biased[1].depthKey - biased[0].depthKey);
+    const expectedDelta =
+      (Math.min(surfaceFront.order, ORDER_MAX - 1) -
+        Math.min(surfaceBase.order, ORDER_MAX - 1)) *
+      EPS_NDC;
 
-    expect(biasedDelta).toBeGreaterThan(0);
-    expect(unbiasedDelta).toBeLessThanOrEqual(1e-6);
-    expect(biasedDelta).toBeGreaterThan(unbiasedDelta);
+    expect(delta).toBeGreaterThan(0);
+    expect(delta).toBeCloseTo(expectedDelta, 6);
   });
 
   it('skips entries whose textures are not uploaded', () => {
@@ -456,7 +524,7 @@ describe('prepareSpriteEachImageDraw', () => {
     const prepared = prepareSpriteEachImageDraw({
       items,
       originCenterCache: new Map(),
-      mapInstance: collectOptions.mapInstance,
+      projectionHost: collectOptions.projectionHost,
       images: new Map([['icon-d', resource]]),
       zoom: collectOptions.zoom,
       zoomScaleFactor: collectOptions.zoomScaleFactor,
@@ -475,16 +543,6 @@ describe('prepareSpriteEachImageDraw', () => {
       screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
       screenToClipOffsetX: -1,
       screenToClipOffsetY: 1,
-      defaultAnchor: DEFAULT_ANCHOR,
-      defaultImageOffset: DEFAULT_OFFSET,
-      useShaderSurfaceGeometry: false,
-      useShaderBillboardGeometry: false,
-      enableNdcBiasSurface: false,
-      orderMax: collectOptions.orderMax,
-      orderBucket: collectOptions.orderBucket,
-      epsNdc: collectOptions.epsNdc,
-      minClipZEpsilon: collectOptions.minClipZEpsilon,
-      slDebug: false,
       ensureHitTestCorners: createEnsureHitTestCorners(),
       resolveSpriteMercator: collectOptions.resolveSpriteMercator,
     });
@@ -520,7 +578,7 @@ describe('prepareSpriteEachImageDraw', () => {
     const prepared = prepareSpriteEachImageDraw({
       items,
       originCenterCache: new Map(),
-      mapInstance: collectOptions.mapInstance,
+      projectionHost: collectOptions.projectionHost,
       images: new Map([['icon-billboard', resource]]),
       zoom: collectOptions.zoom,
       zoomScaleFactor: collectOptions.zoomScaleFactor,
@@ -539,16 +597,6 @@ describe('prepareSpriteEachImageDraw', () => {
       screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
       screenToClipOffsetX: -1,
       screenToClipOffsetY: 1,
-      defaultAnchor: DEFAULT_ANCHOR,
-      defaultImageOffset: DEFAULT_OFFSET,
-      useShaderSurfaceGeometry: false,
-      useShaderBillboardGeometry: true,
-      enableNdcBiasSurface: false,
-      orderMax: collectOptions.orderMax,
-      orderBucket: collectOptions.orderBucket,
-      epsNdc: collectOptions.epsNdc,
-      minClipZEpsilon: collectOptions.minClipZEpsilon,
-      slDebug: false,
       ensureHitTestCorners: createEnsureHitTestCorners(),
       resolveSpriteMercator: collectOptions.resolveSpriteMercator,
     });
@@ -568,7 +616,7 @@ describe('prepareSpriteEachImageDraw', () => {
     }
   });
 
-  it('falls back to CPU surface path when shader geometry is disabled', () => {
+  it('falls back to CPU surface path when clip context is unavailable', () => {
     const resource = createImageResource('icon-surface-cpu');
     const image = createImageState({
       imageId: 'icon-surface-cpu',
@@ -588,7 +636,7 @@ describe('prepareSpriteEachImageDraw', () => {
     const prepared = prepareSpriteEachImageDraw({
       items,
       originCenterCache: new Map(),
-      mapInstance: collectOptions.mapInstance,
+      projectionHost: collectOptions.projectionHost,
       images: new Map([['icon-surface-cpu', resource]]),
       zoom: collectOptions.zoom,
       zoomScaleFactor: collectOptions.zoomScaleFactor,
@@ -598,7 +646,7 @@ describe('prepareSpriteEachImageDraw', () => {
       drawingBufferWidth: collectOptions.drawingBufferWidth,
       drawingBufferHeight: collectOptions.drawingBufferHeight,
       pixelRatio: collectOptions.pixelRatio,
-      clipContext: collectOptions.clipContext,
+      clipContext: null,
       identityScaleX: 1,
       identityScaleY: 1,
       identityOffsetX: 0,
@@ -607,31 +655,12 @@ describe('prepareSpriteEachImageDraw', () => {
       screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
       screenToClipOffsetX: -1,
       screenToClipOffsetY: 1,
-      defaultAnchor: DEFAULT_ANCHOR,
-      defaultImageOffset: DEFAULT_OFFSET,
-      useShaderSurfaceGeometry: false,
-      useShaderBillboardGeometry: false,
-      enableNdcBiasSurface: false,
-      orderMax: collectOptions.orderMax,
-      orderBucket: collectOptions.orderBucket,
-      epsNdc: collectOptions.epsNdc,
-      minClipZEpsilon: collectOptions.minClipZEpsilon,
-      slDebug: false,
       ensureHitTestCorners: ensureCorners,
       resolveSpriteMercator: collectOptions.resolveSpriteMercator,
     });
 
-    expect(prepared).toHaveLength(1);
-    const [draw] = prepared;
-    expect(draw.useShaderSurface).toBe(false);
-    expect(draw.surfaceClipEnabled).toBe(false);
-    expect(draw.surfaceShaderInputs).toBeDefined();
-    expect(draw.hitTestCorners).not.toBeNull();
-    const corners = draw.hitTestCorners!;
-    corners.forEach((corner) => {
-      expect(Number.isFinite(corner.x)).toBe(true);
-      expect(Number.isFinite(corner.y)).toBe(true);
-    });
+    expect(prepared).toHaveLength(0);
+    expect(image.surfaceShaderInputs).toBeUndefined();
   });
 
   it('clamps depth bias using orderMax when order exceeds the limit', () => {
@@ -644,25 +673,18 @@ describe('prepareSpriteEachImageDraw', () => {
     });
     const sprite = createSpriteState('sprite-surface-bias', [image]);
 
-    const epsNdc = 5e-5;
-    const orderMax = 4;
-    const orderBucket = 3;
-
     const collectOptions = createCollectOptions({
       bucket: [[sprite, image] as const],
       images: new Map([['icon-surface-bias', resource]]),
       clipContext: DEFAULT_CLIP_CONTEXT,
       originCenterCache: new Map(),
-      orderMax,
-      orderBucket,
-      epsNdc,
     });
     const items = collectDepthSortedItems(collectOptions);
 
     const prepared = prepareSpriteEachImageDraw({
       items,
       originCenterCache: new Map(),
-      mapInstance: collectOptions.mapInstance,
+      projectionHost: collectOptions.projectionHost,
       images: new Map([['icon-surface-bias', resource]]),
       zoom: collectOptions.zoom,
       zoomScaleFactor: collectOptions.zoomScaleFactor,
@@ -681,16 +703,6 @@ describe('prepareSpriteEachImageDraw', () => {
       screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
       screenToClipOffsetX: -1,
       screenToClipOffsetY: 1,
-      defaultAnchor: DEFAULT_ANCHOR,
-      defaultImageOffset: DEFAULT_OFFSET,
-      useShaderSurfaceGeometry: true,
-      useShaderBillboardGeometry: false,
-      enableNdcBiasSurface: true,
-      orderMax: collectOptions.orderMax,
-      orderBucket: collectOptions.orderBucket,
-      epsNdc: collectOptions.epsNdc,
-      minClipZEpsilon: collectOptions.minClipZEpsilon,
-      slDebug: false,
       ensureHitTestCorners: createEnsureHitTestCorners(),
       resolveSpriteMercator: collectOptions.resolveSpriteMercator,
     });
@@ -699,9 +711,10 @@ describe('prepareSpriteEachImageDraw', () => {
     const [draw] = prepared;
     const surfaceInputs = draw.surfaceShaderInputs;
     expect(surfaceInputs).toBeDefined();
-    const expectedOrderIndex = Math.min(image.order, orderMax - 1);
-    const expectedBiasIndex = image.subLayer * orderBucket + expectedOrderIndex;
-    const expectedDepthBias = -(expectedBiasIndex * epsNdc);
+    const expectedOrderIndex = Math.min(image.order, ORDER_MAX - 1);
+    const expectedBiasIndex =
+      image.subLayer * ORDER_BUCKET + expectedOrderIndex;
+    const expectedDepthBias = -(expectedBiasIndex * EPS_NDC);
     expect(surfaceInputs!.depthBiasNdc).toBeCloseTo(expectedDepthBias, 6);
   });
 
@@ -727,7 +740,7 @@ describe('prepareSpriteEachImageDraw', () => {
     const prepared = prepareSpriteEachImageDraw({
       items,
       originCenterCache: new Map(),
-      mapInstance: collectOptions.mapInstance,
+      projectionHost: collectOptions.projectionHost,
       images: new Map([['icon-surface', resource]]),
       zoom: collectOptions.zoom,
       zoomScaleFactor: collectOptions.zoomScaleFactor,
@@ -746,16 +759,6 @@ describe('prepareSpriteEachImageDraw', () => {
       screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
       screenToClipOffsetX: -1,
       screenToClipOffsetY: 1,
-      defaultAnchor: DEFAULT_ANCHOR,
-      defaultImageOffset: DEFAULT_OFFSET,
-      useShaderSurfaceGeometry: true,
-      useShaderBillboardGeometry: false,
-      enableNdcBiasSurface: false,
-      orderMax: collectOptions.orderMax,
-      orderBucket: collectOptions.orderBucket,
-      epsNdc: collectOptions.epsNdc,
-      minClipZEpsilon: collectOptions.minClipZEpsilon,
-      slDebug: false,
       ensureHitTestCorners: ensureCorners,
       resolveSpriteMercator: collectOptions.resolveSpriteMercator,
     });
@@ -801,13 +804,14 @@ describe('prepareSpriteEachImageDraw', () => {
     });
 
     const unprojectSpy = vi.fn(
-      ([x, y]: readonly [number, number]): SpriteLocation => ({
-        lng: x / SCALE,
-        lat: -y / SCALE,
-        z: 0,
+      (point: Readonly<SpritePoint>): SpriteLocation => ({
+        lng: point.x / SCALE,
+        lat: -point.y / SCALE,
       })
     );
-    const mapInstance = createFakeMap({ unproject: unprojectSpy });
+    const projectionHost = createFakeProjectionHost({
+      unproject: (point) => unprojectSpy(point),
+    });
 
     const sprite = createSpriteState('sprite-origin', [baseImage, childImage]);
 
@@ -819,14 +823,14 @@ describe('prepareSpriteEachImageDraw', () => {
       ]),
       clipContext: DEFAULT_CLIP_CONTEXT,
       originCenterCache: new Map(),
-      mapInstance,
+      projectionHost,
     });
 
     const items = collectDepthSortedItems(collectOptions);
     const prepared = prepareSpriteEachImageDraw({
       items,
       originCenterCache: new Map(),
-      mapInstance,
+      projectionHost,
       images: new Map([
         ['icon-origin-base', resourceBase],
         ['icon-origin-child', resourceChild],
@@ -848,16 +852,6 @@ describe('prepareSpriteEachImageDraw', () => {
       screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
       screenToClipOffsetX: -1,
       screenToClipOffsetY: 1,
-      defaultAnchor: DEFAULT_ANCHOR,
-      defaultImageOffset: DEFAULT_OFFSET,
-      useShaderSurfaceGeometry: true,
-      useShaderBillboardGeometry: false,
-      enableNdcBiasSurface: false,
-      orderMax: collectOptions.orderMax,
-      orderBucket: collectOptions.orderBucket,
-      epsNdc: collectOptions.epsNdc,
-      minClipZEpsilon: collectOptions.minClipZEpsilon,
-      slDebug: false,
       ensureHitTestCorners: createEnsureHitTestCorners(),
       resolveSpriteMercator: collectOptions.resolveSpriteMercator,
     });
@@ -887,7 +881,7 @@ describe('prepareSpriteEachImageDraw', () => {
     const firstPrepared = prepareSpriteEachImageDraw({
       items,
       originCenterCache: new Map(),
-      mapInstance: collectOptions.mapInstance,
+      projectionHost: collectOptions.projectionHost,
       images: new Map([['icon-hitreuse', resource]]),
       zoom: collectOptions.zoom,
       zoomScaleFactor: collectOptions.zoomScaleFactor,
@@ -906,16 +900,6 @@ describe('prepareSpriteEachImageDraw', () => {
       screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
       screenToClipOffsetX: -1,
       screenToClipOffsetY: 1,
-      defaultAnchor: DEFAULT_ANCHOR,
-      defaultImageOffset: DEFAULT_OFFSET,
-      useShaderSurfaceGeometry: false,
-      useShaderBillboardGeometry: false,
-      enableNdcBiasSurface: false,
-      orderMax: collectOptions.orderMax,
-      orderBucket: collectOptions.orderBucket,
-      epsNdc: collectOptions.epsNdc,
-      minClipZEpsilon: collectOptions.minClipZEpsilon,
-      slDebug: false,
       ensureHitTestCorners: ensureCorners,
       resolveSpriteMercator: collectOptions.resolveSpriteMercator,
     });
@@ -926,7 +910,7 @@ describe('prepareSpriteEachImageDraw', () => {
     const secondPrepared = prepareSpriteEachImageDraw({
       items,
       originCenterCache: new Map(),
-      mapInstance: collectOptions.mapInstance,
+      projectionHost: collectOptions.projectionHost,
       images: new Map([['icon-hitreuse', resource]]),
       zoom: collectOptions.zoom,
       zoomScaleFactor: collectOptions.zoomScaleFactor,
@@ -945,16 +929,6 @@ describe('prepareSpriteEachImageDraw', () => {
       screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
       screenToClipOffsetX: -1,
       screenToClipOffsetY: 1,
-      defaultAnchor: DEFAULT_ANCHOR,
-      defaultImageOffset: DEFAULT_OFFSET,
-      useShaderSurfaceGeometry: false,
-      useShaderBillboardGeometry: false,
-      enableNdcBiasSurface: false,
-      orderMax: collectOptions.orderMax,
-      orderBucket: collectOptions.orderBucket,
-      epsNdc: collectOptions.epsNdc,
-      minClipZEpsilon: collectOptions.minClipZEpsilon,
-      slDebug: false,
       ensureHitTestCorners: ensureCorners,
       resolveSpriteMercator: collectOptions.resolveSpriteMercator,
     });
@@ -980,12 +954,13 @@ describe('prepareSpriteEachImageDraw', () => {
       depthKey: 0,
     };
 
+    const projectionHost = createFakeProjectionHost({
+      project: () => null,
+    });
     const prepared = prepareSpriteEachImageDraw({
       items: [depthItem],
       originCenterCache: new Map(),
-      mapInstance: createFakeMap({
-        project: () => null,
-      }),
+      projectionHost,
       images: new Map([['icon-e', resource]]),
       zoom: 10,
       zoomScaleFactor: 1,
@@ -1004,18 +979,8 @@ describe('prepareSpriteEachImageDraw', () => {
       screenToClipScaleY: 0,
       screenToClipOffsetX: 0,
       screenToClipOffsetY: 0,
-      defaultAnchor: DEFAULT_ANCHOR,
-      defaultImageOffset: DEFAULT_OFFSET,
-      useShaderSurfaceGeometry: false,
-      useShaderBillboardGeometry: false,
-      enableNdcBiasSurface: false,
-      orderMax: 8,
-      orderBucket: 4,
-      epsNdc: 1e-6,
-      minClipZEpsilon: 1e-6,
-      slDebug: false,
       ensureHitTestCorners: createEnsureHitTestCorners(),
-      resolveSpriteMercator: (spriteEntry) => spriteEntry.cachedMercator,
+      resolveSpriteMercator: (_host, spriteEntry) => spriteEntry.cachedMercator,
     });
 
     expect(prepared).toHaveLength(0);

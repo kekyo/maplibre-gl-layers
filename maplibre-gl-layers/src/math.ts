@@ -13,7 +13,7 @@ import type {
   SpriteScreenPoint,
 } from './types';
 import type { MatrixInput } from './internalTypes';
-import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './const';
+import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './default';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

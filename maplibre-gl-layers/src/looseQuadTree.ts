@@ -5,8 +5,10 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 const DEFAULT_MAX_ITEMS_PER_NODE = 16;
-const DEFAULT_MAX_DEPTH = 8;
+const DEFAULT_MAX_DEPTH = 20;
 const DEFAULT_LOOSENESS = 1.5;
+
+/////////////////////////////////////////////////////////////////////////////////
 
 export interface Rect {
   readonly x0: number;
@@ -19,24 +21,17 @@ export interface Item<TState> extends Rect {
   readonly state: TState;
 }
 
-export interface LooseQuadTreeOptions {
-  readonly bounds: Rect;
-  readonly maxItemsPerNode?: number;
-  readonly maxDepth?: number;
-  readonly looseness?: number;
-}
-
 export interface LooseQuadTree<TState> {
   readonly size: number;
-  add(item: Item<TState>): void;
-  remove(
+  readonly add: (item: Item<TState>) => void;
+  readonly remove: (
     x0: number,
     y0: number,
     x1: number,
     y1: number,
     item: Item<TState>
-  ): boolean;
-  update(
+  ) => boolean;
+  readonly update: (
     oldX0: number,
     oldY0: number,
     oldX1: number,
@@ -46,10 +41,17 @@ export interface LooseQuadTree<TState> {
     newX1: number,
     newY1: number,
     item: Item<TState>
-  ): boolean;
-  lookup(x0: number, y0: number, x1: number, y1: number): Item<TState>[];
-  clear(): void;
+  ) => boolean;
+  readonly lookup: (
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number
+  ) => Item<TState>[];
+  readonly clear: () => void;
 }
+
+/////////////////////////////////////////////////////////////////////////////////
 
 interface QuadItem<TState> {
   readonly item: Item<TState>;
@@ -65,6 +67,8 @@ interface QuadNode<TState> {
   children: QuadNode<TState>[] | null;
   readonly depth: number;
 }
+
+/////////////////////////////////////////////////////////////////////////////////
 
 const createNode = <TState>(
   bounds: Rect,
@@ -122,6 +126,15 @@ const rectsOverlapInclusive = (a: Rect, b: Rect): boolean =>
 const rectEquals = (a: Rect, b: Rect): boolean =>
   a.x0 === b.x0 && a.y0 === b.y0 && a.x1 === b.x1 && a.y1 === b.y1;
 
+/////////////////////////////////////////////////////////////////////////////////
+
+export interface LooseQuadTreeOptions {
+  readonly bounds: Rect;
+  readonly maxItemsPerNode?: number;
+  readonly maxDepth?: number;
+  readonly looseness?: number;
+}
+
 export const createLooseQuadTree = <TState>(
   options: LooseQuadTreeOptions
 ): LooseQuadTree<TState> => {
@@ -147,6 +160,8 @@ export const createLooseQuadTree = <TState>(
   let root: QuadNode<TState> = createNode(normalizedBounds, looseness, 0);
   let count = 0;
   let registry = new WeakMap<Item<TState>, QuadItem<TState>>();
+
+  //////////////////////////////////////////////////////////////////
 
   const insertIntoNode = (
     node: QuadNode<TState>,
@@ -221,6 +236,57 @@ export const createLooseQuadTree = <TState>(
     detachFromNode(quadItem);
     insertIntoNode(node.children[childIndex]!, quadItem);
   };
+
+  const collectFromNode = (
+    node: QuadNode<TState>,
+    rect: Rect,
+    results: Item<TState>[]
+  ): void => {
+    if (!rectsOverlapInclusive(node.looseBounds, rect)) {
+      return;
+    }
+    for (const quadItem of node.items) {
+      if (rectsOverlapInclusive(quadItem.rect, rect)) {
+        results.push(quadItem.item);
+      }
+    }
+    if (!node.children) {
+      return;
+    }
+    for (const child of node.children!) {
+      collectFromNode(child, rect, results);
+    }
+  };
+
+  const findChildIndex = <T>(children: QuadNode<T>[], rect: Rect): number => {
+    for (let i = 0; i < children.length; i += 1) {
+      const child = children[i]!;
+      if (rectContainsRectInclusive(child.looseBounds, rect)) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  const subdivide = (node: QuadNode<TState>): void => {
+    if (node.children) {
+      return;
+    }
+    const { bounds } = node;
+    const splitX = bounds.x0 + (bounds.x1 - bounds.x0) / 2;
+    const splitY = bounds.y0 + (bounds.y1 - bounds.y0) / 2;
+    const childrenBounds: Rect[] = [
+      normalizeRect({ x0: bounds.x0, y0: bounds.y0, x1: splitX, y1: splitY }),
+      normalizeRect({ x0: splitX, y0: bounds.y0, x1: bounds.x1, y1: splitY }),
+      normalizeRect({ x0: bounds.x0, y0: splitY, x1: splitX, y1: bounds.y1 }),
+      normalizeRect({ x0: splitX, y0: splitY, x1: bounds.x1, y1: bounds.y1 }),
+    ];
+    node.children = childrenBounds.map((childBounds) =>
+      createNode(childBounds, looseness, node.depth + 1)
+    );
+  };
+
+  //////////////////////////////////////////////////////////////////
 
   const add = (item: Item<TState>): void => {
     const rect = normalizeRect(item);
@@ -324,54 +390,7 @@ export const createLooseQuadTree = <TState>(
     count = 0;
   };
 
-  const collectFromNode = (
-    node: QuadNode<TState>,
-    rect: Rect,
-    results: Item<TState>[]
-  ): void => {
-    if (!rectsOverlapInclusive(node.looseBounds, rect)) {
-      return;
-    }
-    for (const quadItem of node.items) {
-      if (rectsOverlapInclusive(quadItem.rect, rect)) {
-        results.push(quadItem.item);
-      }
-    }
-    if (!node.children) {
-      return;
-    }
-    for (const child of node.children!) {
-      collectFromNode(child, rect, results);
-    }
-  };
-
-  const findChildIndex = <T>(children: QuadNode<T>[], rect: Rect): number => {
-    for (let i = 0; i < children.length; i += 1) {
-      const child = children[i]!;
-      if (rectContainsRectInclusive(child.looseBounds, rect)) {
-        return i;
-      }
-    }
-    return -1;
-  };
-
-  const subdivide = (node: QuadNode<TState>): void => {
-    if (node.children) {
-      return;
-    }
-    const { bounds } = node;
-    const splitX = bounds.x0 + (bounds.x1 - bounds.x0) / 2;
-    const splitY = bounds.y0 + (bounds.y1 - bounds.y0) / 2;
-    const childrenBounds: Rect[] = [
-      normalizeRect({ x0: bounds.x0, y0: bounds.y0, x1: splitX, y1: splitY }),
-      normalizeRect({ x0: splitX, y0: bounds.y0, x1: bounds.x1, y1: splitY }),
-      normalizeRect({ x0: bounds.x0, y0: splitY, x1: splitX, y1: bounds.y1 }),
-      normalizeRect({ x0: splitX, y0: splitY, x1: bounds.x1, y1: bounds.y1 }),
-    ];
-    node.children = childrenBounds.map((childBounds) =>
-      createNode(childBounds, looseness, node.depth + 1)
-    );
-  };
+  //////////////////////////////////////////////////////////////////
 
   return {
     get size(): number {

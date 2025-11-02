@@ -4,7 +4,40 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { MercatorCoordinate } from 'maplibre-gl';
+
+vi.mock('../src/projectionHost', async () => {
+  return {
+    createProjectionHost: (map: any) => ({
+      getZoom: () => map.getZoom(),
+      getClipContext: () => {
+        const transform = map.transform;
+        if (!transform) {
+          return null;
+        }
+        const mercatorMatrix =
+          transform.mercatorMatrix ?? transform._mercatorMatrix;
+        return mercatorMatrix ? { mercatorMatrix } : null;
+      },
+      fromLngLat: (location: { lng: number; lat: number; z?: number }) => {
+        const mercator = MercatorCoordinate.fromLngLat(
+          { lng: location.lng, lat: location.lat },
+          location.z ?? 0
+        );
+        return {
+          x: mercator.x,
+          y: mercator.y,
+          z: mercator.z ?? 0,
+        };
+      },
+      project: (location: any) => map.project(location),
+      unproject: (point: any) => map.unproject(point),
+      calculatePerspectiveRatio: () =>
+        map.transform?.cameraToCenterDistance ?? 1,
+    }),
+  };
+});
 
 import { createSpriteLayer } from '../src/SpriteLayer';
 import type { SpriteLayerClickEvent } from '../src/types';

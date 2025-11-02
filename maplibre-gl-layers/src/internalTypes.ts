@@ -8,7 +8,6 @@
  * Internal-only type definitions shared across SpriteLayer implementation modules.
  */
 
-import type { MercatorCoordinate } from 'maplibre-gl';
 import type {
   SpriteMode,
   SpriteAnchor,
@@ -22,8 +21,69 @@ import type {
   SpriteInterpolationMode,
   EasingFunction,
   SpriteScreenPoint,
+  SpritePoint,
 } from './types';
 import type { SurfaceCorner } from './math';
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Represents a projected three dimensional position.
+ * `MercatorCoordinate` uses the web mercator projection ([EPSG:3857](https://epsg.io/3857)) with slightly different units:
+ * - the size of 1 unit is the width of the projected world instead of the "mercator meter"
+ * - the origin of the coordinate space is at the north-west corner instead of the middle
+ */
+export interface SpriteMercatorCoordinate {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/**
+ * Abstraction that exposes projection-related helpers.
+ */
+export interface ProjectionHost {
+  /**
+   * Get current zoom level.
+   * @returns Zoom level.
+   */
+  readonly getZoom: () => number;
+  /**
+   * Extracts the current clip-space context if the mercator matrix is available.
+   * @returns {ClipContext | null} Clip context or `null` when the transform is not ready.
+   */
+  readonly getClipContext: () => ClipContext | null;
+  /**
+   * Get mercator coordinate from the location
+   * @param location Location.
+   * @returns Mercator coordinate.
+   */
+  readonly fromLngLat: (
+    location: Readonly<SpriteLocation>
+  ) => SpriteMercatorCoordinate;
+  /**
+   * Project the location.
+   * @param location Location.
+   * @returns Projected point if valid location.
+   */
+  readonly project: (location: Readonly<SpriteLocation>) => SpritePoint | null;
+  /**
+   * Unproject the location.
+   * @param point Projected point.
+   * @returns Location if valid point.
+   */
+  readonly unproject: (point: Readonly<SpritePoint>) => SpriteLocation | null;
+  /**
+   * Calculate perspective ratio.
+   * @param location Location.
+   * @param cachedMercator Mercator coodinate when available earlier calculation.
+   * @returns The ratio.
+   */
+  readonly calculatePerspectiveRatio: (
+    location: Readonly<SpriteLocation>,
+    cachedMercator?: SpriteMercatorCoordinate
+  ) => number;
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -284,8 +344,8 @@ export interface InternalSpriteCurrentState<TTag> {
   lastCommandLocation: Readonly<SpriteLocation>;
   lastAutoRotationLocation: Readonly<SpriteLocation>;
   lastAutoRotationAngleDeg: number;
-  cachedMercator: Readonly<MercatorCoordinate>;
+  cachedMercator: Readonly<SpriteMercatorCoordinate>;
   cachedMercatorLng: number;
   cachedMercatorLat: number;
-  cachedMercatorZ: number;
+  cachedMercatorZ: number | undefined;
 }

@@ -4,8 +4,6 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import { MercatorCoordinate, type Map as MapLibreMap } from 'maplibre-gl';
-import { vec4, type ReadonlyMat4 } from 'gl-matrix';
 import { normalizeAngleDeg } from './rotationInterpolation';
 import {
   calculateBillboardCenterPosition,
@@ -44,14 +42,29 @@ import type {
   SurfaceShaderInputs,
   ClipContext,
   MutableSpriteScreenPoint,
+  ProjectionHost,
+  SpriteMercatorCoordinate,
 } from './internalTypes';
 import type {
   SpriteAnchor,
-  SpriteImageOffset,
   SpriteLocation,
   SpritePoint,
   SpriteScreenPoint,
 } from './types';
+import {
+  DEFAULT_ANCHOR,
+  DEFAULT_IMAGE_OFFSET,
+  EPS_NDC,
+  MIN_CLIP_Z_EPSILON,
+  ORDER_BUCKET,
+  ORDER_MAX,
+} from './const';
+import {
+  ENABLE_NDC_BIAS_SURFACE,
+  SL_DEBUG,
+  USE_SHADER_BILLBOARD_GEOMETRY,
+  USE_SHADER_SURFACE_GEOMETRY,
+} from './config';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -73,7 +86,7 @@ export interface DepthSortedItem<T> {
 
 export interface CollectDepthSortedItemsOptions<T> {
   readonly bucket: readonly Readonly<RenderTargetEntryLike<T>>[];
-  readonly mapInstance: MapLibreMap;
+  readonly projectionHost: ProjectionHost;
   readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
   readonly clipContext: Readonly<ClipContext> | null;
   readonly zoom: number;
@@ -86,20 +99,14 @@ export interface CollectDepthSortedItemsOptions<T> {
   readonly pixelRatio: number;
   readonly originCenterCache: ImageCenterCache;
   readonly resolveSpriteMercator: (
+    projectionHost: ProjectionHost,
     sprite: Readonly<InternalSpriteCurrentState<T>>
-  ) => MercatorCoordinate;
-  readonly defaultAnchor: SpriteAnchor;
-  readonly defaultImageOffset: SpriteImageOffset;
-  readonly enableNdcBiasSurface: boolean;
-  readonly orderMax: number;
-  readonly orderBucket: number;
-  readonly epsNdc: number;
-  readonly minClipZEpsilon: number;
+  ) => SpriteMercatorCoordinate;
 }
 
 export const collectDepthSortedItems = <T>({
   bucket,
-  mapInstance,
+  projectionHost,
   images,
   clipContext,
   zoom,
@@ -112,21 +119,14 @@ export const collectDepthSortedItems = <T>({
   pixelRatio,
   originCenterCache,
   resolveSpriteMercator,
-  defaultAnchor,
-  defaultImageOffset,
-  enableNdcBiasSurface,
-  orderMax,
-  orderBucket,
-  epsNdc,
-  minClipZEpsilon,
 }: CollectDepthSortedItemsOptions<T>): DepthSortedItem<T>[] => {
   const itemsWithDepth: DepthSortedItem<T>[] = [];
 
   const projectToClipSpace: ProjectToClipSpaceFn = (location) =>
-    projectLngLatToClipSpace(location, clipContext);
+    projectLngLatToClipSpace(projectionHost, location, clipContext);
 
   const unprojectPoint: UnprojectPointFn = (point: SpriteScreenPoint) => {
-    return mapInstance.unproject([point.x, point.y]);
+    return projectionHost.unproject(point);
   };
 
   for (const [spriteEntry, imageEntry] of bucket) {
@@ -135,12 +135,12 @@ export const collectDepthSortedItems = <T>({
       continue;
     }
 
-    const projected = mapInstance.project(spriteEntry.currentLocation);
+    const projected = projectionHost.project(spriteEntry.currentLocation);
     if (!projected) {
       continue;
     }
 
-    const spriteMercator = resolveSpriteMercator(spriteEntry);
+    const spriteMercator = resolveSpriteMercator(projectionHost, spriteEntry);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
       spriteEntry.currentLocation.lat
@@ -149,8 +149,7 @@ export const collectDepthSortedItems = <T>({
       continue;
     }
 
-    const perspectiveRatio = calculatePerspectiveRatio(
-      mapInstance,
+    const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
       spriteEntry.currentLocation,
       spriteMercator
     );
@@ -163,7 +162,7 @@ export const collectDepthSortedItems = <T>({
     }
 
     const centerParams: ComputeImageCenterParams = {
-      mapInstance,
+      projectionHost,
       images,
       originCenterCache,
       projected,
@@ -178,8 +177,8 @@ export const collectDepthSortedItems = <T>({
       clipContext,
     };
 
-    const anchorResolved = imageEntry.anchor ?? defaultAnchor;
-    const offsetResolved = imageEntry.offset ?? defaultImageOffset;
+    const anchorResolved = imageEntry.anchor ?? DEFAULT_ANCHOR;
+    const offsetResolved = imageEntry.offset ?? DEFAULT_IMAGE_OFFSET;
 
     const depthCenter = computeImageCenterXY(
       spriteEntry,
@@ -239,10 +238,7 @@ export const collectDepthSortedItems = <T>({
                   imageEntry.originLocation.useResolvedAnchor ?? false,
               }
             );
-            const baseLngLatLike = mapInstance.unproject([
-              baseCenter.x,
-              baseCenter.y,
-            ]);
+            const baseLngLatLike = projectionHost.unproject(baseCenter);
             if (baseLngLatLike) {
               return baseLngLatLike;
             }
@@ -256,14 +252,14 @@ export const collectDepthSortedItems = <T>({
         cornerDisplacements,
         projectToClipSpace,
         {
-          biasFn: enableNdcBiasSurface
+          biasFn: ENABLE_NDC_BIAS_SURFACE
             ? ({ clipZ, clipW }) => {
-                const orderIndex = Math.min(imageEntry.order, orderMax - 1);
+                const orderIndex = Math.min(imageEntry.order, ORDER_MAX - 1);
                 const biasIndex =
-                  imageEntry.subLayer * orderBucket + orderIndex;
-                const biasNdc = -(biasIndex * epsNdc);
+                  imageEntry.subLayer * ORDER_BUCKET + orderIndex;
+                const biasNdc = -(biasIndex * EPS_NDC);
                 const biasedClipZ = clipZ + biasNdc * clipW;
-                const minClipZ = -clipW + minClipZEpsilon;
+                const minClipZ = -clipW + MIN_CLIP_Z_EPSILON;
                 return {
                   clipZ: biasedClipZ < minClipZ ? minClipZ : biasedClipZ,
                   clipW,
@@ -333,7 +329,7 @@ export type ImageCenterCache = Map<string, Map<string, ImageCenterCacheEntry>>;
  * Parameters required to determine an image center in screen space.
  */
 export interface ComputeImageCenterParams {
-  readonly mapInstance: MapLibreMap;
+  readonly projectionHost: ProjectionHost;
   readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
   readonly originCenterCache: ImageCenterCache;
   readonly projected: Readonly<SpriteScreenPoint>;
@@ -348,53 +344,6 @@ export interface ComputeImageCenterParams {
   readonly clipContext: Readonly<ClipContext> | null;
 }
 
-export const calculatePerspectiveRatio = (
-  mapInstance: MapLibreMap,
-  location: Readonly<SpriteLocation>,
-  cachedMercator?: Readonly<MercatorCoordinate>
-): number => {
-  const transform = mapInstance.transform;
-  if (!transform) {
-    return 1.0;
-  }
-
-  // DIRTY: Refers internal mercator matrix... How to extract with safe method?
-  const mercatorMatrix: ReadonlyMat4 | undefined =
-    (transform as any).mercatorMatrix ?? (transform as any)._mercatorMatrix;
-  const cameraToCenterDistance: number | undefined =
-    transform.cameraToCenterDistance;
-
-  if (
-    !mercatorMatrix ||
-    typeof cameraToCenterDistance !== 'number' ||
-    !Number.isFinite(cameraToCenterDistance)
-  ) {
-    return 1.0;
-  }
-
-  try {
-    const mercator =
-      cachedMercator ??
-      MercatorCoordinate.fromLngLat(location, location.z ?? 0);
-    const position = vec4.fromValues(
-      mercator.x,
-      mercator.y,
-      mercator.z ?? 0,
-      1
-    );
-
-    vec4.transformMat4(position, position, mercatorMatrix);
-    const w = position[3];
-    if (!Number.isFinite(w) || w <= 0) {
-      return 1.0;
-    }
-    const ratio = cameraToCenterDistance / w;
-    return Number.isFinite(ratio) && ratio > 0 ? ratio : 1.0;
-  } catch {
-    return 1.0;
-  }
-};
-
 /**
  * Projects a longitude/latitude/elevation tuple into clip space using the provided context.
  * @param {number} lng - Longitude in degrees.
@@ -404,6 +353,7 @@ export const calculatePerspectiveRatio = (
  * @returns {[number, number, number, number] | null} Clip coordinates or `null` when projection fails.
  */
 export const projectLngLatToClipSpace = (
+  projectionHost: ProjectionHost,
   location: Readonly<SpriteLocation>,
   context: Readonly<ClipContext> | null
 ): [number, number, number, number] | null => {
@@ -411,7 +361,7 @@ export const projectLngLatToClipSpace = (
     return null;
   }
   const { mercatorMatrix } = context;
-  const coord = MercatorCoordinate.fromLngLat(location, location.z);
+  const coord = projectionHost.fromLngLat(location);
   const [clipX, clipY, clipZ, clipW] = multiplyMatrixAndVector(
     mercatorMatrix,
     coord.x,
@@ -449,7 +399,7 @@ export const computeImageCenterXY = <T>(
     spriteMaxPixel,
     effectivePixelsPerMeter,
     images,
-    mapInstance,
+    projectionHost,
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
@@ -530,12 +480,13 @@ export const computeImageCenterXY = <T>(
   const baseLngLat: SpriteLocation =
     img.originLocation !== undefined
       ? // When anchored to another image, reproject the 2D reference point back to geographic space.
-        mapInstance.unproject([base.x, base.y])
+        (projectionHost.unproject(base) ?? sprite.currentLocation)
       : // Otherwise use the sprite's own interpolated geographic location.
         sprite.currentLocation;
 
   const projectToClipSpace: ProjectToClipSpaceFn | undefined = clipContext
-    ? (location) => projectLngLatToClipSpace(location, clipContext)
+    ? (location) =>
+        projectLngLatToClipSpace(projectionHost, location, clipContext)
     : undefined;
 
   const surfacePlacement = calculateSurfaceCenterPosition({
@@ -556,7 +507,7 @@ export const computeImageCenterXY = <T>(
     drawingBufferHeight,
     pixelRatio,
     resolveAnchorless: true,
-    project: projectToClipSpace === undefined ? mapInstance.project : undefined,
+    project: projectToClipSpace ? undefined : projectionHost.project,
   });
 
   // If the anchorless placement could not be projected, fall back to the original screen position.
@@ -574,17 +525,18 @@ export const computeImageCenterXY = <T>(
   return useResolvedAnchor ? anchorAppliedCenter : anchorlessCenter;
 };
 
-const CORNER_EAST = { east: 1, north: 0 } as const;
-const CORNER_NORTH = { east: 0, north: 1 } as const;
+const CORNER_EAST: SurfaceCorner = { east: 1, north: 0 } as const;
+const CORNER_NORTH: SurfaceCorner = { east: 0, north: 1 } as const;
 
 const calculateWorldToMercatorScale = (
+  projectionHost: ProjectionHost,
   base: Readonly<SpriteLocation>
 ): SurfaceCorner => {
-  const origin = MercatorCoordinate.fromLngLat(base, base.z);
+  const origin = projectionHost.fromLngLat(base);
   const eastLngLat = applySurfaceDisplacement(base, CORNER_EAST);
-  const eastCoord = MercatorCoordinate.fromLngLat(eastLngLat, eastLngLat.z);
+  const eastCoord = projectionHost.fromLngLat(eastLngLat);
   const northLngLat = applySurfaceDisplacement(base, CORNER_NORTH);
-  const northCoord = MercatorCoordinate.fromLngLat(northLngLat, northLngLat.z);
+  const northCoord = projectionHost.fromLngLat(northLngLat);
   return {
     east: eastCoord.x - origin.x,
     north: northCoord.y - origin.y,
@@ -594,6 +546,7 @@ const calculateWorldToMercatorScale = (
 //////////////////////////////////////////////////////////////////////////////////////
 
 interface PrepareSurfaceShaderInputsParams {
+  readonly projectionHost: ProjectionHost;
   readonly baseLngLat: Readonly<SpriteLocation>;
   readonly worldWidthMeters: number;
   readonly worldHeightMeters: number;
@@ -610,6 +563,7 @@ const prepareSurfaceShaderInputs = (
   params: PrepareSurfaceShaderInputsParams
 ): SurfaceShaderInputs => {
   const {
+    projectionHost,
     baseLngLat,
     worldWidthMeters,
     worldHeightMeters,
@@ -630,9 +584,12 @@ const prepareSurfaceShaderInputs = (
   const sinR = Math.sin(rotationRad);
   const cosR = Math.cos(rotationRad);
 
-  const mercatorCenter = MercatorCoordinate.fromLngLat(displacedCenter);
+  const mercatorCenter = projectionHost.fromLngLat(displacedCenter);
 
-  const worldToMercatorScale = calculateWorldToMercatorScale(displacedCenter);
+  const worldToMercatorScale = calculateWorldToMercatorScale(
+    projectionHost,
+    displacedCenter
+  );
 
   const cornerModel = computeSurfaceCornerShaderModel({
     baseLngLat,
@@ -688,9 +645,9 @@ interface PrepareSpriteImageDrawOptions<T> {
   readonly imageEntry: InternalSpriteImageState;
   readonly imageResource: Readonly<RegisteredImage>;
   readonly originCenterCache: ImageCenterCache;
-  readonly mapInstance: MapLibreMap;
+  readonly projectionHost: ProjectionHost;
   readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
-  readonly spriteMercator: Readonly<MercatorCoordinate>;
+  readonly spriteMercator: SpriteMercatorCoordinate;
   readonly zoom: number;
   readonly zoomScaleFactor: number;
   readonly baseMetersPerPixel: number;
@@ -708,16 +665,6 @@ interface PrepareSpriteImageDrawOptions<T> {
   readonly screenToClipScaleY: number;
   readonly screenToClipOffsetX: number;
   readonly screenToClipOffsetY: number;
-  readonly defaultAnchor: Readonly<SpriteAnchor>;
-  readonly defaultImageOffset: Readonly<SpriteImageOffset>;
-  readonly useShaderSurfaceGeometry: boolean;
-  readonly useShaderBillboardGeometry: boolean;
-  readonly enableNdcBiasSurface: boolean;
-  readonly orderMax: number;
-  readonly orderBucket: number;
-  readonly epsNdc: number;
-  readonly minClipZEpsilon: number;
-  readonly slDebug: boolean;
   readonly ensureHitTestCorners: (
     imageEntry: Readonly<InternalSpriteImageState>
   ) => [
@@ -774,7 +721,7 @@ const prepareSpriteImageDraw = <T>(
     imageEntry,
     imageResource,
     originCenterCache,
-    mapInstance,
+    projectionHost,
     images,
     spriteMercator,
     zoom,
@@ -794,16 +741,6 @@ const prepareSpriteImageDraw = <T>(
     screenToClipScaleY,
     screenToClipOffsetX,
     screenToClipOffsetY,
-    defaultAnchor,
-    defaultImageOffset,
-    useShaderSurfaceGeometry,
-    useShaderBillboardGeometry,
-    enableNdcBiasSurface,
-    orderMax,
-    orderBucket,
-    epsNdc,
-    minClipZEpsilon,
-    slDebug,
     ensureHitTestCorners,
   } = options;
 
@@ -837,8 +774,8 @@ const prepareSpriteImageDraw = <T>(
     offsetY: identityOffsetY,
   };
   // Use per-image anchor/offset when provided; otherwise fall back to defaults.
-  const anchor = imageEntry.anchor ?? defaultAnchor;
-  const offsetDef = imageEntry.offset ?? defaultImageOffset;
+  const anchor = imageEntry.anchor ?? DEFAULT_ANCHOR;
+  const offsetDef = imageEntry.offset ?? DEFAULT_IMAGE_OFFSET;
   // Prefer the dynamically interpolated rotation when available; otherwise synthesize it from base + manual rotations.
   const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
     ? imageEntry.displayedRotateDeg
@@ -846,7 +783,7 @@ const prepareSpriteImageDraw = <T>(
         (imageEntry.resolvedBaseRotateDeg ?? 0) + (imageEntry.rotateDeg ?? 0)
       );
 
-  const projected = mapInstance.project(spriteEntry.currentLocation);
+  const projected = projectionHost.project(spriteEntry.currentLocation);
   if (!projected) {
     // Projection may fail when the coordinate exits the viewport.
     return null;
@@ -860,8 +797,7 @@ const prepareSpriteImageDraw = <T>(
     return null;
   }
 
-  const perspectiveRatio = calculatePerspectiveRatio(
-    mapInstance,
+  const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
     spriteEntry.currentLocation,
     spriteMercator
   );
@@ -880,7 +816,7 @@ const prepareSpriteImageDraw = <T>(
   const imageScale = imageEntry.scale ?? 1;
 
   const centerParams: ComputeImageCenterParams = {
-    mapInstance,
+    projectionHost,
     images,
     originCenterCache,
     projected,
@@ -918,7 +854,8 @@ const prepareSpriteImageDraw = <T>(
     const baseLngLat =
       imageEntry.originLocation !== undefined
         ? // When an origin reference is set, reproject the cached screen point back to geographic space.
-          mapInstance.unproject([baseProjected.x, baseProjected.y])
+          (projectionHost.unproject(baseProjected) ??
+          spriteEntry.currentLocation)
         : // Otherwise base the surface on the sprite's current longitude/latitude.
           spriteEntry.currentLocation;
 
@@ -936,11 +873,11 @@ const prepareSpriteImageDraw = <T>(
       spriteMinPixel,
       spriteMaxPixel,
       projectToClipSpace: (location) =>
-        projectLngLatToClipSpace(location, clipContext),
+        projectLngLatToClipSpace(projectionHost, location, clipContext),
       drawingBufferWidth,
       drawingBufferHeight,
       pixelRatio,
-      project: !clipContext ? mapInstance.project : undefined,
+      project: clipContext ? undefined : projectionHost.project,
     });
 
     if (!surfaceCenter.center) {
@@ -962,14 +899,15 @@ const prepareSpriteImageDraw = <T>(
       offsetMeters,
     });
 
-    const orderIndex = Math.min(imageEntry.order, orderMax - 1);
-    const depthBiasNdc = enableNdcBiasSurface
-      ? -((imageEntry.subLayer * orderBucket + orderIndex) * epsNdc)
+    const orderIndex = Math.min(imageEntry.order, ORDER_MAX - 1);
+    const depthBiasNdc = ENABLE_NDC_BIAS_SURFACE
+      ? -((imageEntry.subLayer * ORDER_BUCKET + orderIndex) * EPS_NDC)
       : 0;
 
     const displacedCenter = surfaceCenter.displacedLngLat ?? baseLngLat;
 
     const surfaceShaderInputs = prepareSurfaceShaderInputs({
+      projectionHost,
       baseLngLat,
       worldWidthMeters: surfaceCenter.worldDimensions.width,
       worldHeightMeters: surfaceCenter.worldDimensions.height,
@@ -983,7 +921,7 @@ const prepareSpriteImageDraw = <T>(
     });
     imageEntry.surfaceShaderInputs = surfaceShaderInputs;
 
-    useShaderSurface = useShaderSurfaceGeometry && !!clipContext;
+    useShaderSurface = USE_SHADER_SURFACE_GEOMETRY && !!clipContext;
     let clipCornerPositions: Array<[number, number, number, number]> | null =
       null;
     let clipCenterPosition: [number, number, number, number] | null = null;
@@ -992,6 +930,7 @@ const prepareSpriteImageDraw = <T>(
         [number, number, number, number]
       >;
       clipCenterPosition = projectLngLatToClipSpace(
+        projectionHost,
         displacedCenter,
         clipContext
       );
@@ -1003,14 +942,18 @@ const prepareSpriteImageDraw = <T>(
 
     const hitTestCorners = ensureHitTestCorners(imageEntry);
     const debugClipCorners: Array<[number, number, number, number]> | null =
-      slDebug ? [] : null;
+      SL_DEBUG ? [] : null;
     let bufferOffset = 0;
     // Iterate through each vertex defined by TRIANGLE_INDICES to populate the vertex buffer.
     for (const index of TRIANGLE_INDICES) {
       const displacement = cornerDisplacements[index]!;
       const displaced = applySurfaceDisplacement(baseLngLat, displacement);
 
-      const clipPosition = projectLngLatToClipSpace(displaced, clipContext);
+      const clipPosition = projectLngLatToClipSpace(
+        projectionHost,
+        displaced,
+        clipContext
+      );
       if (!clipPosition) {
         // A vertex left the clip volume; abort drawing this image to prevent corrupt geometry.
         return null;
@@ -1034,7 +977,7 @@ const prepareSpriteImageDraw = <T>(
 
       if (depthBiasNdc !== 0) {
         clipZ += depthBiasNdc * clipW;
-        const minClipZ = -clipW + minClipZEpsilon;
+        const minClipZ = -clipW + MIN_CLIP_Z_EPSILON;
         if (clipZ < minClipZ) {
           // Avoid crossing the near clip plane after biasing, which would invert winding.
           clipZ = minClipZ;
@@ -1177,7 +1120,7 @@ const prepareSpriteImageDraw = <T>(
     screenCornerBuffer = hitTestCorners;
     resolvedSurfaceShaderInputs = surfaceShaderInputs;
 
-    if (slDebug) {
+    if (SL_DEBUG) {
       (imageEntry as any).__debugBag = {
         mode: 'surface',
         drawingBufferWidth,
@@ -1236,11 +1179,11 @@ const prepareSpriteImageDraw = <T>(
       totalRotateDeg,
     };
 
-    if (slDebug) {
+    if (SL_DEBUG) {
       (imageEntry as any).__billboardShaderInputs = billboardShaderInputs;
     }
 
-    useShaderBillboard = useShaderBillboardGeometry;
+    useShaderBillboard = USE_SHADER_BILLBOARD_GEOMETRY;
     billboardUniforms = useShaderBillboard
       ? {
           center: billboardShaderInputs.center,
@@ -1295,7 +1238,7 @@ const prepareSpriteImageDraw = <T>(
         rotationDeg: billboardShaderInputs.totalRotateDeg,
       });
       resolvedCorners = shaderModelCorners;
-      if (slDebug) {
+      if (SL_DEBUG) {
         const cpuCorners = calculateBillboardCornerScreenPositions(
           billboardShaderInputs
         );
@@ -1323,7 +1266,7 @@ const prepareSpriteImageDraw = <T>(
 
     writeBillboardCorners(resolvedCorners, useShaderBillboard);
 
-    if (slDebug) {
+    if (SL_DEBUG) {
       (imageEntry as any).__debugBag = {
         mode: 'billboard',
         drawingBufferWidth,
@@ -1376,7 +1319,7 @@ const prepareSpriteImageDraw = <T>(
 export interface PrepareSpriteEachImageDrawOptions<T> {
   readonly items: readonly Readonly<DepthSortedItem<T>>[];
   readonly originCenterCache: ImageCenterCache;
-  readonly mapInstance: MapLibreMap;
+  readonly projectionHost: ProjectionHost;
   readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
   readonly zoom: number;
   readonly zoomScaleFactor: number;
@@ -1395,16 +1338,6 @@ export interface PrepareSpriteEachImageDrawOptions<T> {
   readonly screenToClipScaleY: number;
   readonly screenToClipOffsetX: number;
   readonly screenToClipOffsetY: number;
-  readonly defaultAnchor: Readonly<SpriteAnchor>;
-  readonly defaultImageOffset: Readonly<SpriteImageOffset>;
-  readonly useShaderSurfaceGeometry: boolean;
-  readonly useShaderBillboardGeometry: boolean;
-  readonly enableNdcBiasSurface: boolean;
-  readonly orderMax: number;
-  readonly orderBucket: number;
-  readonly epsNdc: number;
-  readonly minClipZEpsilon: number;
-  readonly slDebug: boolean;
   readonly ensureHitTestCorners: (
     imageEntry: Readonly<InternalSpriteImageState>
   ) => [
@@ -1414,14 +1347,15 @@ export interface PrepareSpriteEachImageDrawOptions<T> {
     MutableSpriteScreenPoint,
   ];
   readonly resolveSpriteMercator: (
+    projectionHost: ProjectionHost,
     sprite: Readonly<InternalSpriteCurrentState<T>>
-  ) => MercatorCoordinate;
+  ) => SpriteMercatorCoordinate;
 }
 
 export const prepareSpriteEachImageDraw = <T>({
   items,
   originCenterCache,
-  mapInstance,
+  projectionHost,
   images,
   zoom,
   zoomScaleFactor,
@@ -1440,16 +1374,6 @@ export const prepareSpriteEachImageDraw = <T>({
   screenToClipScaleY,
   screenToClipOffsetX,
   screenToClipOffsetY,
-  defaultAnchor,
-  defaultImageOffset,
-  useShaderSurfaceGeometry,
-  useShaderBillboardGeometry,
-  enableNdcBiasSurface,
-  orderMax,
-  orderBucket,
-  epsNdc,
-  minClipZEpsilon,
-  slDebug,
   ensureHitTestCorners,
   resolveSpriteMercator,
 }: PrepareSpriteEachImageDrawOptions<T>): PrepareSpriteImageDrawResult<T>[] => {
@@ -1461,9 +1385,9 @@ export const prepareSpriteEachImageDraw = <T>({
       imageEntry: item.image,
       imageResource: item.resource,
       originCenterCache,
-      mapInstance,
+      projectionHost,
       images,
-      spriteMercator: resolveSpriteMercator(item.sprite),
+      spriteMercator: resolveSpriteMercator(projectionHost, item.sprite),
       zoom,
       zoomScaleFactor,
       baseMetersPerPixel,
@@ -1481,16 +1405,6 @@ export const prepareSpriteEachImageDraw = <T>({
       screenToClipScaleY,
       screenToClipOffsetX,
       screenToClipOffsetY,
-      defaultAnchor,
-      defaultImageOffset,
-      useShaderSurfaceGeometry,
-      useShaderBillboardGeometry,
-      enableNdcBiasSurface,
-      orderMax,
-      orderBucket,
-      epsNdc,
-      minClipZEpsilon,
-      slDebug,
       ensureHitTestCorners,
     });
 
