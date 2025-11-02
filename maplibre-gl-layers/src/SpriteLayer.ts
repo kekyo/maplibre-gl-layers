@@ -63,8 +63,7 @@ import type {
   InternalSpriteCurrentState,
   SurfaceShaderInputs,
 } from './internalTypes';
-import { loadImageBitmap, SvgSizeResolutionError } from './utils';
-import { cloneSpriteLocation, spriteLocationsEqual } from './location';
+import { loadImageBitmap, SvgSizeResolutionError } from './loadImage';
 import {
   createInterpolationState,
   evaluateInterpolation,
@@ -84,6 +83,8 @@ import {
   calculateBillboardOffsetPixels,
   calculateEffectivePixelsPerMeter,
   calculateSurfaceCornerDisplacements,
+  cloneSpriteLocation,
+  spriteLocationsEqual,
 } from './math';
 import {
   applyOffsetUpdate,

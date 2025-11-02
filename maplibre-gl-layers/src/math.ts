@@ -15,6 +15,8 @@ import type {
 import type { MatrixInput } from './internalTypes';
 import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './const';
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * WGS84-compatible Earth radius in meters.
  * Used to convert one radian of longitude into meters when scaling sprites.
@@ -39,6 +41,59 @@ export const RAD2DEG = 180 / Math.PI;
  * @constant
  */
 export const TILE_SIZE = 512;
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Produces a deep copy so later updates do not mutate the original object.
+ */
+export const cloneSpriteLocation = (
+  location: SpriteLocation
+): SpriteLocation => {
+  if (location.z === undefined) {
+    return { lng: location.lng, lat: location.lat };
+  }
+  return { lng: location.lng, lat: location.lat, z: location.z };
+};
+
+/**
+ * Linearly interpolates longitude, latitude, and optionally altitude.
+ * The `ratio` may fall outside [0, 1]; callers are responsible for clamping if needed.
+ */
+export const lerpSpriteLocation = (
+  from: SpriteLocation,
+  to: SpriteLocation,
+  ratio: number
+): SpriteLocation => {
+  const zFrom = from.z ?? 0;
+  const zTo = to.z ?? 0;
+  const hasZ = from.z !== undefined || to.z !== undefined;
+
+  const result: SpriteLocation = {
+    lng: from.lng + (to.lng - from.lng) * ratio,
+    lat: from.lat + (to.lat - from.lat) * ratio,
+  };
+
+  if (hasZ) {
+    result.z = zFrom + (zTo - zFrom) * ratio;
+  }
+
+  return result;
+};
+
+/**
+ * Compares two locations. Treats altitude as equal when either side is undefined.
+ */
+export const spriteLocationsEqual = (
+  a: SpriteLocation,
+  b: SpriteLocation
+): boolean => {
+  const zA = a.z ?? null;
+  const zB = b.z ?? null;
+  return a.lng === b.lng && a.lat === b.lat && zA === zB;
+};
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Multiplies a 4x4 matrix with a 4-component vector using row-major indexing.
@@ -278,6 +333,8 @@ export const resolveScalingOptions = (
   };
 };
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Computes a linear scale factor based on zoom level.
  * @param {number} zoom - Current zoom level from MapLibre's camera.
@@ -322,6 +379,8 @@ export const calculateMetersPerPixelAtLatitude = (
   return (cosLatitude * circumference) / (TILE_SIZE * scale);
 };
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Checks whether a value is finite and not `NaN`.
  * @param {number} value - Value to validate.
@@ -338,6 +397,8 @@ export const isFiniteNumber = (value: number): boolean =>
 const ensureFinite = (value: number): number =>
   // Normalize infinite/NaN inputs so downstream multiplication results stay bounded.
   Number.isFinite(value) ? value : 0;
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Calculates the distance and bearing between two points in meters.

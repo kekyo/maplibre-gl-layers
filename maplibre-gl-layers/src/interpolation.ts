@@ -12,9 +12,12 @@ import type {
 } from './types';
 import type { SpriteInterpolationState } from './internalTypes';
 
-import { cloneSpriteLocation, lerpSpriteLocation } from './location';
 import { resolveEasing } from './easing';
-import { spriteLocationsEqual } from './location';
+import {
+  cloneSpriteLocation,
+  lerpSpriteLocation,
+  spriteLocationsEqual,
+} from './math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
