@@ -15,14 +15,6 @@ export default defineConfig({
       'maplibre-gl-layers': resolve(__dirname, '../maplibre-gl-layers/src'),
     },
   },
-  optimizeDeps: {
-    exclude: ['maplibre-gl-layers'],
-  },
-  build: {
-    rollupOptions: {
-      external: ['maplibre-gl-layers'],
-    },
-  },
   plugins: [
     prettierMax(), // Use default settings
     screwUp({
