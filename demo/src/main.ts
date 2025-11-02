@@ -931,6 +931,7 @@ const createHud = () => {
             }
           </button>
         </div>
+        <!-- Orbit interpolation feedforward mode is ignored because it does not update values continuous.
         <div>
           <button
             type="button"
@@ -955,6 +956,7 @@ const createHud = () => {
             Feedforward
           </button>
         </div>
+        -->
         <div class="secondary-interpolation-group">
           <button
             type="button"
@@ -971,6 +973,7 @@ const createHud = () => {
             }
           </button>
         </div>
+        <!-- Orbit interpolation feedforward mode is ignored because it does not update values continuous.
         <div>
           <button
             type="button"
@@ -995,6 +998,7 @@ const createHud = () => {
             Feedforward
           </button>
         </div>
+        -->
       </div>
       <div class="control-group" data-testid="group-arrow-shape">
         <h1>Arrow Shape</h1>
