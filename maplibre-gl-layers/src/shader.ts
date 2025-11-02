@@ -11,7 +11,7 @@
  * buffers, and helper utilities for compiling and linking WebGL shader programs.
  */
 
-import type { SpriteAnchor } from './types';
+import type { SpriteAnchor, SpriteScreenPoint } from './types';
 import { DEG2RAD, UV_CORNERS } from './math';
 
 /** Number of components per vertex (clipPosition.xyzw + uv.xy). */
@@ -168,18 +168,16 @@ export const SURFACE_BASE_CORNERS: ReadonlyArray<readonly [number, number]> = [
 ] as const;
 
 export const computeBillboardCornersShaderModel = ({
-  centerX,
-  centerY,
+  center,
   halfWidth,
   halfHeight,
   anchor,
   rotationDeg,
 }: {
-  centerX: number;
-  centerY: number;
+  center: Readonly<SpriteScreenPoint>;
   halfWidth: number;
   halfHeight: number;
-  anchor?: SpriteAnchor;
+  anchor?: Readonly<SpriteAnchor>;
   rotationDeg: number;
 }): Array<{ x: number; y: number; u: number; v: number }> => {
   const anchorX = anchor?.x ?? 0;
@@ -197,8 +195,8 @@ export const computeBillboardCornersShaderModel = ({
     const rotatedY = shiftedX * sinR + shiftedY * cosR;
     const [u, v] = UV_CORNERS[index]!;
     return {
-      x: centerX + rotatedX,
-      y: centerY - rotatedY,
+      x: center.x + rotatedX,
+      y: center.y - rotatedY,
       u,
       v,
     };

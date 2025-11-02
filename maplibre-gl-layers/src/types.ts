@@ -426,17 +426,22 @@ export interface SpriteMutateCallbacks<
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Represents a point in screen space.
+ * Represents a point on anonymous-unit space.
  *
- * @property {number} x - Horizontal screen coordinate in pixels.
- * @property {number} y - Vertical screen coordinate in pixels.
+ * @property {number} x - Horizontal (X axis) coordinate.
+ * @property {number} y - Vertical (Y axis) coordinate.
  */
-export interface SpriteScreenPoint {
-  /** Horizontal screen coordinate in pixels. */
+export interface SpritePoint {
+  /** Horizontal (X axis) coordinate. */
   readonly x: number;
-  /** Vertical screen coordinate in pixels. */
+  /** Vertical (Y axis) coordinate. */
   readonly y: number;
 }
+
+/**
+ * Represents a point in screen space.
+ */
+export type SpriteScreenPoint = SpritePoint;
 
 /**
  * Event dispatched when a sprite is clicked or tapped.

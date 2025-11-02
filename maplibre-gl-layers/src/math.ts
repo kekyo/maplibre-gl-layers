@@ -8,7 +8,9 @@ import type {
   SpriteAnchor,
   SpriteImageOffset,
   SpriteLocation,
+  SpritePoint,
   SpriteScalingOptions,
+  SpriteScreenPoint,
 } from './types';
 import type { MatrixInput } from './internalTypes';
 import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './const';
@@ -484,7 +486,7 @@ export const calculateBillboardPixelDimensions = (
  * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
  * @param {number} effectivePixelsPerMeter - Conversion factor from meters to pixels.
  * @param {number} [sizeScaleAdjustment=1] - Additional scale factor applied when sprite size is clamped.
- * @returns {{ x: number; y: number }} Screen-space offset relative to the billboard center.
+ * @returns {SpriteScreenPoint} Screen-space offset relative to the billboard center.
  */
 export const calculateBillboardOffsetPixels = (
   offset: SpriteImageOffset | undefined,
@@ -492,7 +494,7 @@ export const calculateBillboardOffsetPixels = (
   zoomScaleFactor: number,
   effectivePixelsPerMeter: number,
   sizeScaleAdjustment = 1
-): { x: number; y: number } => {
+): SpriteScreenPoint => {
   const offsetMeters =
     (offset?.offsetMeters ?? 0) * imageScale * zoomScaleFactor;
   const offsetPixels =
@@ -510,14 +512,14 @@ export const calculateBillboardOffsetPixels = (
  * @param {number} halfHeight - Half of the sprite height in pixels.
  * @param {SpriteAnchor | undefined} anchor - Anchor definition normalized to [-1, 1] range.
  * @param {number} totalRotateDeg - Rotation applied to the sprite, combining user and bearing rotations.
- * @returns {{ x: number; y: number }} Pixel delta required to bring the anchor back to the requested origin.
+ * @returns {SpritePoint} Pixel delta required to bring the anchor back to the requested origin.
  */
 export const calculateBillboardAnchorShiftPixels = (
   halfWidth: number,
   halfHeight: number,
   anchor: SpriteAnchor | undefined,
   totalRotateDeg: number
-): { x: number; y: number } => {
+): SpritePoint => {
   // If we have no spatial extent, rotation/anchor math loses meaning, so skip adjustments.
   if (halfWidth <= 0 || halfHeight <= 0) {
     return { x: 0, y: 0 };
@@ -614,14 +616,14 @@ export const calculateSurfaceWorldDimensions = (
  * @param {number} halfHeightMeters - Half of the world-space height.
  * @param {SpriteAnchor | undefined} anchor - Anchor definition normalized to [-1, 1] range.
  * @param {number} totalRotateDeg - Rotation angle applied to the surface.
- * @returns {{ east: number; north: number }} Displacement in meters required to apply the anchor.
+ * @returns {SurfaceCorner} Displacement in meters required to apply the anchor.
  */
 export const calculateSurfaceAnchorShiftMeters = (
   halfWidthMeters: number,
   halfHeightMeters: number,
   anchor: SpriteAnchor | undefined,
   totalRotateDeg: number
-): { east: number; north: number } => {
+): SurfaceCorner => {
   // Degenerate dimensions mean the quad collapses; skip anchor adjustments.
   if (halfWidthMeters <= 0 || halfHeightMeters <= 0) {
     return { east: 0, north: 0 };
@@ -646,14 +648,14 @@ export const calculateSurfaceAnchorShiftMeters = (
  * @param {number} imageScale - User-provided scale multiplier applied to the offset distance.
  * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
  * @param {number} [sizeScaleAdjustment=1] - Additional scale factor applied when sprite size is clamped.
- * @returns {{ east: number; north: number }} Offset vector in meters.
+ * @returns {SurfaceCorner} Offset vector in meters.
  */
 export const calculateSurfaceOffsetMeters = (
   offset: SpriteImageOffset | undefined,
   imageScale: number,
   zoomScaleFactor: number,
   sizeScaleAdjustment = 1
-): { east: number; north: number } => {
+): SurfaceCorner => {
   const offsetMeters =
     (offset?.offsetMeters ?? 0) * imageScale * zoomScaleFactor;
   // Short-circuit when no displacement is requested to avoid redundant trig.
@@ -675,46 +677,43 @@ const MIN_COS_LAT = 1e-6;
 
 /**
  * Adds east/north distances (meters) to a longitude/latitude pair.
- * @param {number} baseLng - Base longitude in degrees.
- * @param {number} baseLat - Base latitude in degrees.
+ * @param {number} location - Base location in degrees.
  * @param {number} east - Eastward displacement in meters.
  * @param {number} north - Northward displacement in meters.
  * @returns {SpriteLocation} New geographic position after applying the displacement.
  */
 export const applySurfaceDisplacement = (
-  baseLng: number,
-  baseLat: number,
-  east: number,
-  north: number
+  location: SpriteLocation,
+  corner: SurfaceCorner
 ): SpriteLocation => {
-  const deltaLat = (north / EARTH_RADIUS_METERS) * RAD2DEG;
-  const cosLat = Math.cos(baseLat * DEG2RAD);
+  const deltaLat = (corner.north / EARTH_RADIUS_METERS) * RAD2DEG;
+  const cosLat = Math.cos(location.lat * DEG2RAD);
   const deltaLng =
-    (east / (EARTH_RADIUS_METERS * Math.max(cosLat, MIN_COS_LAT))) * RAD2DEG;
+    (corner.east / (EARTH_RADIUS_METERS * Math.max(cosLat, MIN_COS_LAT))) *
+    RAD2DEG;
   return {
-    lng: baseLng + deltaLng,
-    lat: baseLat + deltaLat,
+    lng: location.lng + deltaLng,
+    lat: location.lat + deltaLat,
+    z: location.z,
   };
 };
 
 /**
  * Converts screen coordinates to clip space.
- * @param {number} x - Screen-space x coordinate in CSS pixels.
- * @param {number} y - Screen-space y coordinate in CSS pixels.
+ * @param {number} point - Screen-space coordinate in CSS pixels.
  * @param {number} drawingBufferWidth - WebGL drawing buffer width in device pixels.
  * @param {number} drawingBufferHeight - WebGL drawing buffer height in device pixels.
  * @param {number} pixelRatio - Device pixel ratio used to scale CSS pixels to device pixels.
  * @returns {[number, number]} Clip-space coordinates in the range [-1, 1].
  */
 export const screenToClip = (
-  x: number,
-  y: number,
+  point: SpriteScreenPoint,
   drawingBufferWidth: number,
   drawingBufferHeight: number,
   pixelRatio: number
 ): [number, number] => {
-  const deviceX = x * pixelRatio;
-  const deviceY = y * pixelRatio;
+  const deviceX = point.x * pixelRatio;
+  const deviceY = point.y * pixelRatio;
   const clipX = (deviceX / drawingBufferWidth) * 2 - 1;
   const clipY = 1 - (deviceY / drawingBufferHeight) * 2;
   return [clipX, clipY];
@@ -726,14 +725,14 @@ export const screenToClip = (
  * @param {number} drawingBufferWidth - WebGL drawing buffer width in device pixels.
  * @param {number} drawingBufferHeight - WebGL drawing buffer height in device pixels.
  * @param {number} pixelRatio - Device pixel ratio relating CSS pixels to device pixels.
- * @returns {{ x: number; y: number } | null} Screen-space coordinates or `null` when invalid.
+ * @returns {SpriteScreenPoint | null} Screen-space coordinates or `null` when invalid.
  */
 export const clipToScreen = (
   clipPosition: readonly [number, number, number, number],
   drawingBufferWidth: number,
   drawingBufferHeight: number,
   pixelRatio: number
-): { x: number; y: number } | null => {
+): SpriteScreenPoint | null => {
   const [clipX, clipY, , clipW] = clipPosition;
   if (!Number.isFinite(clipW) || clipW === 0) {
     return null;
@@ -801,39 +800,33 @@ export const calculateEffectivePixelsPerMeter = (
 /**
  * Projects a geographic coordinate and elevation into homogeneous clip space.
  * @typedef ProjectToClipSpaceFn
- * @param {number} lng - Longitude in degrees.
- * @param {number} lat - Latitude in degrees.
- * @param {number} elevationMeters - Elevation offset in meters.
+ * @param {number} location - Location in degrees.
  * @returns {[number, number, number, number] | null} Homogeneous clip coordinates or `null` when outside the view.
  */
 export type ProjectToClipSpaceFn = (
-  lng: number,
-  lat: number,
-  elevationMeters: number
+  location: Readonly<SpriteLocation>
 ) => [number, number, number, number] | null;
 
 /**
  * Unprojects a screen-space point back to longitude/latitude.
  * @typedef UnprojectPointFn
- * @param {{ x: number; y: number }} point - Screen-space coordinates in pixels.
+ * @param {SpriteScreenPoint} point - Screen-space coordinates in pixels.
  * @returns {SpriteLocation | null} Geographic location or `null` when unprojection fails.
  */
-export type UnprojectPointFn = (point: {
-  x: number;
-  y: number;
-}) => SpriteLocation | null;
+export type UnprojectPointFn = (
+  point: Readonly<SpriteScreenPoint>
+) => SpriteLocation | null;
 
 /**
  * Resolves a depth key for billboards by sampling the clip-space Z at the sprite center.
- * @param {{ x: number; y: number }} center - Screen-space center of the billboard in pixels.
+ * @param {SpriteScreenPoint} center - Screen-space center of the billboard in pixels.
  * @param {SpriteLocation} spriteLocation - Geographic location including optional altitude.
  * @param {UnprojectPointFn} unproject - Function for converting screen coordinates to geographic coordinates.
  * @param {ProjectToClipSpaceFn} projectToClipSpace - Function that projects a geographic coordinate to clip space.
  * @returns {number | null} Negative normalized device coordinate Z used for depth sorting, or `null` when unavailable.
  */
 export const calculateBillboardDepthKey = (
-  center: { x: number; y: number },
-  spriteLocation: SpriteLocation,
+  center: Readonly<SpriteScreenPoint>,
   unproject: UnprojectPointFn,
   projectToClipSpace: ProjectToClipSpaceFn
 ): number | null => {
@@ -842,11 +835,7 @@ export const calculateBillboardDepthKey = (
   if (!lngLat) {
     return null;
   }
-  const clipPosition = projectToClipSpace(
-    lngLat.lng,
-    lngLat.lat,
-    spriteLocation.z ?? 0
-  );
+  const clipPosition = projectToClipSpace(lngLat);
   // Projection failures indicate the sprite is outside the camera frustum.
   if (!clipPosition) {
     return null;
@@ -873,15 +862,13 @@ export type SurfaceDepthBiasFn = (params: {
  * Computes a depth key for surface quads by projecting each corner and tracking the deepest point.
  * @param {SpriteLocation} baseLngLat - Base longitude/latitude of the quad center.
  * @param {readonly SurfaceCorner[]} displacements - Corner offsets in meters from the center.
- * @param {SpriteLocation} spriteLocation - Sprite world location including optional altitude.
  * @param {ProjectToClipSpaceFn} projectToClipSpace - Projection function used to reach clip space.
  * @param {{ readonly indices?: readonly number[]; readonly biasFn?: SurfaceDepthBiasFn }} [options] - Optional overrides.
  * @returns {number | null} Depth key suitable for sorting, or `null` when any corner cannot be projected.
  */
 export const calculateSurfaceDepthKey = (
-  baseLngLat: SpriteLocation,
+  baseLngLat: Readonly<SpriteLocation>,
   displacements: readonly SurfaceCorner[],
-  spriteLocation: SpriteLocation,
   projectToClipSpace: ProjectToClipSpaceFn,
   options?: {
     readonly indices?: readonly number[];
@@ -899,18 +886,9 @@ export const calculateSurfaceDepthKey = (
       continue;
     }
 
-    const displaced = applySurfaceDisplacement(
-      baseLngLat.lng,
-      baseLngLat.lat,
-      displacement.east,
-      displacement.north
-    );
+    const displaced = applySurfaceDisplacement(baseLngLat, displacement);
 
-    const clipPosition = projectToClipSpace(
-      displaced.lng,
-      displaced.lat,
-      spriteLocation.z ?? 0
-    );
+    const clipPosition = projectToClipSpace(displaced);
     // Any unprojectable corner invalidates the depth key for the entire surface.
     if (!clipPosition) {
       return null;
@@ -939,16 +917,16 @@ export const calculateSurfaceDepthKey = (
  * Projects a longitude/latitude pair to screen-space pixels.
  * @typedef ProjectLngLatFn
  * @param {SpriteLocation} lngLat - Geographic coordinate to project.
- * @returns {{ x: number; y: number } | null} Screen coordinates or `null` when projection fails.
+ * @returns {SpriteScreenPoint | null} Screen coordinates or `null` when projection fails.
  */
 export type ProjectLngLatFn = (
-  lngLat: SpriteLocation
-) => { x: number; y: number } | null;
+  lngLat: Readonly<SpriteLocation>
+) => SpriteScreenPoint | null;
 
 /**
  * Parameters required to resolve a billboard center position.
  * @typedef BillboardCenterParams
- * @property {{ x: number; y: number }} base - Reference screen-space position (usually anchor point).
+ * @property {SpriteScreenPoint} base - Reference screen-space position (usually anchor point).
  * @property {number} [imageWidth] - Source bitmap width in pixels.
  * @property {number} [imageHeight] - Source bitmap height in pixels.
  * @property {number} baseMetersPerPixel - Meters represented by a pixel at the sprite latitude.
@@ -961,8 +939,8 @@ export type ProjectLngLatFn = (
  * @property {SpriteAnchor} [anchor] - Anchor definition normalized between -1 and 1.
  * @property {SpriteImageOffset} [offset] - Offset definition applied in meters/deg.
  */
-export type BillboardCenterParams = {
-  base: { x: number; y: number };
+export interface BillboardCenterParams {
+  base: Readonly<SpriteScreenPoint>;
   imageWidth?: number;
   imageHeight?: number;
   baseMetersPerPixel: number;
@@ -972,32 +950,30 @@ export type BillboardCenterParams = {
   spriteMinPixel: number;
   spriteMaxPixel: number;
   totalRotateDeg: number;
-  anchor?: SpriteAnchor;
-  offset?: SpriteImageOffset;
-};
+  anchor?: Readonly<SpriteAnchor>;
+  offset?: Readonly<SpriteImageOffset>;
+}
 
 /**
  * Resolved properties describing the billboard center and derived dimensions.
  * @typedef BillboardCenterResult
- * @property {number} centerX - Screen-space x coordinate after offset adjustments.
- * @property {number} centerY - Screen-space y coordinate after offset adjustments.
+ * @property {SpriteScreenPoint} center - Screen-space coordinate after offset adjustments.
  * @property {number} halfWidth - Half of the clamped pixel width.
  * @property {number} halfHeight - Half of the clamped pixel height.
  * @property {number} pixelWidth - Full pixel width after scaling and clamping.
  * @property {number} pixelHeight - Full pixel height after scaling and clamping.
- * @property {{ x: number; y: number }} anchorShift - Pixel delta caused by anchor rotation.
- * @property {{ x: number; y: number }} offsetShift - Pixel delta caused by radial offset.
+ * @property {SpritePoint} anchorShift - Pixel delta caused by anchor rotation.
+ * @property {SpritePoint} offsetShift - Pixel delta caused by radial offset.
  */
-export type BillboardCenterResult = {
-  centerX: number;
-  centerY: number;
+export interface BillboardCenterResult {
+  center: SpriteScreenPoint;
   halfWidth: number;
   halfHeight: number;
   pixelWidth: number;
   pixelHeight: number;
-  anchorShift: { x: number; y: number };
-  offsetShift: { x: number; y: number };
-};
+  anchorShift: SpritePoint;
+  offsetShift: SpritePoint;
+}
 
 /**
  * Calculates the final billboard center position, applying scaling, anchor, and offset adjustments.
@@ -1052,12 +1028,13 @@ export const calculateBillboardCenterPosition = (
   // centerX/Y represent the image origin in screen space after anchor handling.
   // calculateBillboardCornerScreenPositions treats the anchor as its origin,
   // so this function applies only the offset and leaves anchor adjustments to the caller.
-  const centerX = base.x + offsetShift.x;
-  const centerY = base.y - offsetShift.y;
+  const center: SpriteScreenPoint = {
+    x: base.x + offsetShift.x,
+    y: base.y - offsetShift.y,
+  };
 
   return {
-    centerX,
-    centerY,
+    center,
     halfWidth,
     halfHeight,
     pixelWidth: pixelDims.width,
@@ -1070,36 +1047,30 @@ export const calculateBillboardCenterPosition = (
 /**
  * Parameters controlling how billboard corners are computed in screen space.
  * @typedef BillboardCornerParams
- * @property {number} centerX - Screen-space x coordinate for the billboard center after offsets.
- * @property {number} centerY - Screen-space y coordinate for the billboard center after offsets.
+ * @property {SpriteScreenPoint} center - Screen-space coordinate for the billboard center after offsets.
  * @property {number} halfWidth - Half of the billboard width in pixels.
  * @property {number} halfHeight - Half of the billboard height in pixels.
  * @property {SpriteAnchor} [anchor] - Optional anchor definition normalized between -1 and 1.
  * @property {number} totalRotateDeg - Total rotation applied to the billboard in degrees.
  */
-export type BillboardCornerParams = {
-  centerX: number;
-  centerY: number;
+export interface BillboardCornerParams {
+  center: Readonly<SpriteScreenPoint>;
   halfWidth: number;
   halfHeight: number;
-  anchor?: SpriteAnchor;
+  anchor?: Readonly<SpriteAnchor>;
   totalRotateDeg: number;
-};
+}
 
 /**
  * Screen-space coordinates combined with UV data for a quad corner.
  * @typedef QuadCorner
- * @property {number} x - Screen-space x coordinate.
- * @property {number} y - Screen-space y coordinate.
  * @property {number} u - Texture u coordinate.
  * @property {number} v - Texture v coordinate.
  */
-export type QuadCorner = {
-  x: number;
-  y: number;
-  u: number;
-  v: number;
-};
+export interface QuadCorner extends SpriteScreenPoint {
+  readonly u: number;
+  readonly v: number;
+}
 
 /**
  * Corner positions for an unrotated, unit-sized billboard.
@@ -1120,12 +1091,11 @@ const BILLBOARD_BASE_CORNERS: ReadonlyArray<readonly [number, number]> = [
 export const calculateBillboardCornerScreenPositions = (
   params: BillboardCornerParams
 ): QuadCorner[] => {
-  const { centerX, centerY, halfWidth, halfHeight, anchor, totalRotateDeg } =
-    params;
+  const { center, halfWidth, halfHeight, anchor, totalRotateDeg } = params;
 
   // When the sprite has no area, fall back to placing all corners at the center to avoid invalid math.
   if (halfWidth <= 0 || halfHeight <= 0) {
-    return UV_CORNERS.map(([u, v]) => ({ x: centerX, y: centerY, u, v }));
+    return UV_CORNERS.map(([u, v]) => ({ x: center.x, y: center.y, u, v }));
   }
 
   const anchorOffsetX = (anchor?.x ?? 0) * halfWidth;
@@ -1148,8 +1118,8 @@ export const calculateBillboardCornerScreenPositions = (
     const rotatedY = shiftedX * sinR + shiftedY * cosR;
 
     corners.push({
-      x: centerX + rotatedX,
-      y: centerY - rotatedY,
+      x: center.x + rotatedX,
+      y: center.y - rotatedY,
       u,
       v,
     });
@@ -1157,14 +1127,14 @@ export const calculateBillboardCornerScreenPositions = (
   return corners;
 };
 
-export type SurfaceShaderModelParams = {
-  baseLngLat: SpriteLocation;
+export interface SurfaceShaderModelParams {
+  baseLngLat: Readonly<SpriteLocation>;
   worldWidthMeters: number;
   worldHeightMeters: number;
-  anchor: SpriteAnchor;
+  anchor: Readonly<SpriteAnchor>;
   totalRotateDeg: number;
-  offsetMeters: { east: number; north: number };
-};
+  offsetMeters: Readonly<SurfaceCorner>;
+}
 
 export type SurfaceShaderCornerModel = SurfaceCorner & SpriteLocation;
 
@@ -1250,19 +1220,18 @@ export const computeSurfaceCornerShaderModel = (
  * @property {number} [drawingBufferWidth] - WebGL drawing buffer width in device pixels.
  * @property {number} [drawingBufferHeight] - WebGL drawing buffer height in device pixels.
  * @property {number} [pixelRatio] - Device pixel ratio relating CSS pixels to device pixels.
- * @property {number} [altitudeMeters] - Altitude used when projecting points into clip space.
  * @property {boolean} [resolveAnchorless] - When true, also computes the anchorless center.
  */
-export type SurfaceCenterParams = {
-  baseLngLat: SpriteLocation;
+export interface SurfaceCenterParams {
+  baseLngLat: Readonly<SpriteLocation>;
   imageWidth?: number;
   imageHeight?: number;
   baseMetersPerPixel: number;
   imageScale: number;
   zoomScaleFactor: number;
   totalRotateDeg: number;
-  anchor?: SpriteAnchor;
-  offset?: SpriteImageOffset;
+  anchor?: Readonly<SpriteAnchor>;
+  offset?: Readonly<SpriteImageOffset>;
   effectivePixelsPerMeter?: number;
   spriteMinPixel?: number;
   spriteMaxPixel?: number;
@@ -1271,30 +1240,33 @@ export type SurfaceCenterParams = {
   drawingBufferWidth?: number;
   drawingBufferHeight?: number;
   pixelRatio?: number;
-  altitudeMeters?: number;
   resolveAnchorless?: boolean;
-};
+}
 
 /**
  * Output describing the resolved surface center and displacement details.
  * @typedef SurfaceCenterResult
- * @property {{ x: number; y: number } | null} center - Projected screen coordinates or `null` when projection fails.
+ * @property {SpriteScreenPoint | null} center - Projected screen coordinates or `null` when projection fails.
  * @property {{ width: number; height: number; scaleAdjustment: number }} worldDimensions - Sprite dimensions in world meters.
- * @property {{ east: number; north: number }} totalDisplacement - Combined anchor and offset displacement in meters.
+ * @property {SurfaceCorner} totalDisplacement - Combined anchor and offset displacement in meters.
  * @property {SpriteLocation} displacedLngLat - Geographic coordinates after applying displacement.
- * @property {{ x: number; y: number } | null | undefined} [anchorlessCenter] - Anchorless screen coordinates when requested.
- * @property {{ east: number; north: number } | undefined} [anchorlessDisplacement] - Offset-only displacement when requested.
+ * @property {SpriteScreenPoint | null | undefined} [anchorlessCenter] - Anchorless screen coordinates when requested.
+ * @property {SurfaceCorner | undefined} [anchorlessDisplacement] - Offset-only displacement when requested.
  * @property {SpriteLocation | undefined} [anchorlessLngLat] - Anchorless geographic coordinate when requested.
  */
-export type SurfaceCenterResult = {
-  center: { x: number; y: number } | null;
-  worldDimensions: { width: number; height: number; scaleAdjustment: number };
-  totalDisplacement: { east: number; north: number };
-  displacedLngLat: SpriteLocation;
-  anchorlessCenter?: { x: number; y: number } | null;
-  anchorlessDisplacement?: { east: number; north: number };
-  anchorlessLngLat?: SpriteLocation;
-};
+export interface SurfaceCenterResult {
+  center: Readonly<SpriteScreenPoint> | null;
+  worldDimensions: Readonly<{
+    width: number;
+    height: number;
+    scaleAdjustment: number;
+  }>;
+  totalDisplacement: Readonly<SurfaceCorner>;
+  displacedLngLat: Readonly<SpriteLocation>;
+  anchorlessCenter?: Readonly<SpriteScreenPoint> | null;
+  anchorlessDisplacement?: Readonly<SurfaceCorner>;
+  anchorlessLngLat?: Readonly<SpriteLocation>;
+}
 
 /**
  * Calculates the projected center of a surface sprite and derives related world-space displacements.
@@ -1322,13 +1294,8 @@ export const calculateSurfaceCenterPosition = (
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
-    altitudeMeters,
     resolveAnchorless = false,
   } = params;
-
-  const baseAltitude = Number.isFinite(altitudeMeters)
-    ? altitudeMeters!
-    : (baseLngLat.z ?? 0);
 
   const hasClipProjection =
     typeof drawingBufferWidth === 'number' &&
@@ -1341,14 +1308,10 @@ export const calculateSurfaceCenterPosition = (
     typeof projectToClipSpace === 'function';
 
   const projectPoint = (
-    lngLat: SpriteLocation
-  ): { x: number; y: number } | null => {
+    lngLat: Readonly<SpriteLocation>
+  ): SpriteScreenPoint | null => {
     if (hasClipProjection && projectToClipSpace) {
-      const clip = projectToClipSpace(
-        lngLat.lng,
-        lngLat.lat,
-        lngLat.z ?? baseAltitude
-      );
+      const clip = projectToClipSpace(lngLat);
       if (clip) {
         const screen = clipToScreen(
           clip,
@@ -1392,32 +1355,24 @@ export const calculateSurfaceCenterPosition = (
     worldDims.scaleAdjustment
   );
 
-  const totalEast = anchorShiftMeters.east + offsetMeters.east;
-  const totalNorth = anchorShiftMeters.north + offsetMeters.north;
+  const totalDisplacement: SurfaceCorner = {
+    east: anchorShiftMeters.east + offsetMeters.east,
+    north: anchorShiftMeters.north + offsetMeters.north,
+  };
 
-  const displaced = applySurfaceDisplacement(
-    baseLngLat.lng,
-    baseLngLat.lat,
-    totalEast,
-    totalNorth
-  );
+  const displaced = applySurfaceDisplacement(baseLngLat, totalDisplacement);
 
   const center = projectPoint(displaced);
 
-  let anchorlessCenter: { x: number; y: number } | null | undefined;
-  let anchorlessDisplacement: { east: number; north: number } | undefined;
-  let anchorlessLngLat: SpriteLocation | undefined;
+  let anchorlessCenter: Readonly<SpriteScreenPoint> | null | undefined;
+  let anchorlessDisplacement: Readonly<SurfaceCorner> | undefined;
+  let anchorlessLngLat: Readonly<SpriteLocation> | undefined;
 
   if (resolveAnchorless) {
-    anchorlessDisplacement = {
-      east: offsetMeters.east,
-      north: offsetMeters.north,
-    };
+    anchorlessDisplacement = offsetMeters;
     anchorlessLngLat = applySurfaceDisplacement(
-      baseLngLat.lng,
-      baseLngLat.lat,
-      anchorlessDisplacement.east,
-      anchorlessDisplacement.north
+      baseLngLat,
+      anchorlessDisplacement
     );
     anchorlessCenter = projectPoint(anchorlessLngLat) ?? null;
   }
@@ -1425,7 +1380,7 @@ export const calculateSurfaceCenterPosition = (
   return {
     center,
     worldDimensions: worldDims,
-    totalDisplacement: { east: totalEast, north: totalNorth },
+    totalDisplacement,
     displacedLngLat: displaced,
     anchorlessCenter,
     anchorlessDisplacement,
@@ -1440,15 +1395,15 @@ export const calculateSurfaceCenterPosition = (
  * @property {number} worldHeightMeters - Height of the sprite footprint in meters.
  * @property {SpriteAnchor} anchor - Anchor definition normalized between -1 and 1.
  * @property {number} totalRotateDeg - Rotation applied to the surface in degrees.
- * @property {{ east: number; north: number }} offsetMeters - Additional displacement applied uniformly to all corners.
+ * @property {SurfaceCorner} offsetMeters - Additional displacement applied uniformly to all corners.
  */
-export type SurfaceCornerParams = {
+export interface SurfaceCornerParams {
   worldWidthMeters: number;
   worldHeightMeters: number;
-  anchor: SpriteAnchor;
+  anchor: Readonly<SpriteAnchor>;
   totalRotateDeg: number;
-  offsetMeters: { east: number; north: number };
-};
+  offsetMeters: Readonly<SurfaceCorner>;
+}
 
 /**
  * East/north displacement for an individual surface corner.
@@ -1456,10 +1411,10 @@ export type SurfaceCornerParams = {
  * @property {number} east - Eastward offset in meters relative to the base center.
  * @property {number} north - Northward offset in meters relative to the base center.
  */
-export type SurfaceCorner = {
-  east: number;
-  north: number;
-};
+export interface SurfaceCorner {
+  readonly east: number;
+  readonly north: number;
+}
 
 /**
  * Corner list for a unit, axis-aligned surface quad before rotation and scaling.
@@ -1490,10 +1445,7 @@ export const calculateSurfaceCornerDisplacements = (
 
   // Degenerate quads fallback to offset-only displacements so rendering can continue safely.
   if (worldWidthMeters <= 0 || worldHeightMeters <= 0) {
-    return SURFACE_BASE_CORNERS.map(() => ({
-      east: offsetMeters.east,
-      north: offsetMeters.north,
-    }));
+    return SURFACE_BASE_CORNERS.map(() => offsetMeters);
   }
 
   const halfWidth = worldWidthMeters / 2;
@@ -1504,7 +1456,7 @@ export const calculateSurfaceCornerDisplacements = (
   const cosR = Math.cos(rad);
   const sinR = Math.sin(rad);
 
-  const corners: SurfaceCorner[] = [];
+  const corners: Readonly<SurfaceCorner>[] = [];
   // Iterate over normalized unit corners to rotate and translate them into world space.
   for (const [eastNorm, northNorm] of SURFACE_BASE_CORNERS) {
     const cornerEast = eastNorm * halfWidth;

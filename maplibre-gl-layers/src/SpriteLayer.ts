@@ -119,11 +119,11 @@ import {
   createShaderProgram,
 } from './shader';
 import {
-  prepareSpriteImageDraw,
   calculatePerspectiveRatio,
   type ImageCenterCache,
   type PrepareSpriteImageDrawResult,
   collectDepthSortedItems,
+  prepareSpriteEachImageDraw,
 } from './calculation';
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -1374,18 +1374,14 @@ export const createSpriteLayer = <T = any>(
       return null;
     }
 
-    const cornerNE = applySurfaceDisplacement(
-      base.lng,
-      base.lat,
-      radiusMeters,
-      radiusMeters
-    );
-    const cornerSW = applySurfaceDisplacement(
-      base.lng,
-      base.lat,
-      -radiusMeters,
-      -radiusMeters
-    );
+    const cornerNE = applySurfaceDisplacement(base, {
+      east: radiusMeters,
+      north: radiusMeters,
+    });
+    const cornerSW = applySurfaceDisplacement(base, {
+      east: -radiusMeters,
+      north: -radiusMeters,
+    });
 
     return rectFromLngLatPoints([cornerNE, cornerSW]);
   };
@@ -1483,12 +1479,7 @@ export const createSpriteLayer = <T = any>(
     });
 
     const corners = cornerDisplacements.map((corner) =>
-      applySurfaceDisplacement(
-        baseLocation.lng,
-        baseLocation.lat,
-        corner.east,
-        corner.north
-      )
+      applySurfaceDisplacement(baseLocation, corner)
     );
     return rectFromLngLatPoints(corners);
   };
@@ -3278,8 +3269,8 @@ export const createSpriteLayer = <T = any>(
         if (uniformBillboardCenterLocation) {
           glContext.uniform2f(
             uniformBillboardCenterLocation,
-            uniforms.centerX,
-            uniforms.centerY
+            uniforms.center.x,
+            uniforms.center.y
           );
         }
         if (uniformBillboardHalfSizeLocation) {
@@ -3292,8 +3283,8 @@ export const createSpriteLayer = <T = any>(
         if (uniformBillboardAnchorLocation) {
           glContext.uniform2f(
             uniformBillboardAnchorLocation,
-            uniforms.anchorX,
-            uniforms.anchorY
+            uniforms.anchor.x,
+            uniforms.anchor.y
           );
         }
         if (uniformBillboardSinCosLocation) {
@@ -3371,49 +3362,41 @@ export const createSpriteLayer = <T = any>(
         minClipZEpsilon: MIN_CLIP_Z_EPSILON,
       });
 
-      const preparedItems: PrepareSpriteImageDrawResult<T>[] = [];
-      for (const item of itemsWithDepth) {
-        const prepared = prepareSpriteImageDraw({
-          spriteEntry: item.sprite,
-          imageEntry: item.image,
-          imageResource: item.resource,
-          originCenterCache,
-          mapInstance,
-          images,
-          spriteMercator: resolveSpriteMercator(item.sprite),
-          zoom,
-          zoomScaleFactor,
-          baseMetersPerPixel,
-          spriteMinPixel,
-          spriteMaxPixel,
-          drawingBufferWidth,
-          drawingBufferHeight,
-          pixelRatio,
-          clipContext,
-          identityScaleX,
-          identityScaleY,
-          identityOffsetX,
-          identityOffsetY,
-          screenToClipScaleX,
-          screenToClipScaleY,
-          screenToClipOffsetX,
-          screenToClipOffsetY,
-          defaultAnchor: DEFAULT_ANCHOR,
-          defaultImageOffset: DEFAULT_IMAGE_OFFSET,
-          useShaderSurfaceGeometry: USE_SHADER_SURFACE_GEOMETRY,
-          useShaderBillboardGeometry: USE_SHADER_BILLBOARD_GEOMETRY,
-          enableNdcBiasSurface: ENABLE_NDC_BIAS_SURFACE,
-          orderMax: ORDER_MAX,
-          orderBucket: ORDER_BUCKET,
-          epsNdc: EPS_NDC,
-          minClipZEpsilon: MIN_CLIP_Z_EPSILON,
-          slDebug: SL_DEBUG,
-          ensureHitTestCorners,
-        });
-        if (prepared) {
-          preparedItems.push(prepared);
-        }
-      }
+      const preparedItems = prepareSpriteEachImageDraw<T>({
+        items: itemsWithDepth,
+        originCenterCache,
+        mapInstance,
+        images,
+        zoom,
+        zoomScaleFactor,
+        baseMetersPerPixel,
+        spriteMinPixel,
+        spriteMaxPixel,
+        drawingBufferWidth,
+        drawingBufferHeight,
+        pixelRatio,
+        clipContext,
+        identityScaleX,
+        identityScaleY,
+        identityOffsetX,
+        identityOffsetY,
+        screenToClipScaleX,
+        screenToClipScaleY,
+        screenToClipOffsetX,
+        screenToClipOffsetY,
+        defaultAnchor: DEFAULT_ANCHOR,
+        defaultImageOffset: DEFAULT_IMAGE_OFFSET,
+        useShaderSurfaceGeometry: USE_SHADER_SURFACE_GEOMETRY,
+        useShaderBillboardGeometry: USE_SHADER_BILLBOARD_GEOMETRY,
+        enableNdcBiasSurface: ENABLE_NDC_BIAS_SURFACE,
+        orderMax: ORDER_MAX,
+        orderBucket: ORDER_BUCKET,
+        epsNdc: EPS_NDC,
+        minClipZEpsilon: MIN_CLIP_Z_EPSILON,
+        slDebug: SL_DEBUG,
+        ensureHitTestCorners,
+        resolveSpriteMercator,
+      });
 
       for (const prepared of preparedItems) {
         issueSpriteDraw(prepared);

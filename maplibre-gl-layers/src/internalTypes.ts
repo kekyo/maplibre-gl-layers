@@ -21,41 +21,64 @@ import type {
   SpriteTextureMinFilter,
   SpriteInterpolationMode,
   EasingFunction,
+  SpriteScreenPoint,
 } from './types';
+import type { SurfaceCorner } from './math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Corner model describing world displacements and resulting geographic coordinates for shader validation.
  */
-export interface SurfaceShaderCornerState {
-  east: number;
-  north: number;
-  lng: number;
-  lat: number;
-}
+export interface SurfaceShaderCornerState
+  extends SpriteLocation,
+    SurfaceCorner {}
 
 /**
  * Aggregated inputs required to reproduce surface geometry on the GPU.
  */
 export interface SurfaceShaderInputs {
-  mercatorCenter: { x: number; y: number; z: number };
-  worldToMercatorScale: { east: number; north: number };
-  halfSizeMeters: { east: number; north: number };
-  anchor: SpriteAnchor;
-  offsetMeters: { east: number; north: number };
-  sinCos: { sin: number; cos: number };
-  totalRotateDeg: number;
-  depthBiasNdc: number;
-  centerDisplacement: { east: number; north: number };
-  baseLngLat: SpriteLocation;
-  displacedCenter: SpriteLocation;
-  scaleAdjustment: number;
-  corners: SurfaceShaderCornerState[];
-  clipCenter: { x: number; y: number; z: number; w: number };
-  clipBasisEast: { x: number; y: number; z: number; w: number };
-  clipBasisNorth: { x: number; y: number; z: number; w: number };
-  clipCorners: Array<{ x: number; y: number; z: number; w: number }>;
+  readonly mercatorCenter: {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+  };
+  readonly worldToMercatorScale: Readonly<SurfaceCorner>;
+  readonly halfSizeMeters: Readonly<SurfaceCorner>;
+  readonly anchor: Readonly<SpriteAnchor>;
+  readonly offsetMeters: Readonly<SurfaceCorner>;
+  readonly sinCos: { readonly sin: number; readonly cos: number };
+  readonly totalRotateDeg: number;
+  readonly depthBiasNdc: number;
+  readonly centerDisplacement: Readonly<SurfaceCorner>;
+  readonly baseLngLat: Readonly<SpriteLocation>;
+  readonly displacedCenter: Readonly<SpriteLocation>;
+  readonly scaleAdjustment: number;
+  readonly corners: readonly Readonly<SurfaceShaderCornerState>[];
+  clipCenter: {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+    readonly w: number;
+  };
+  clipBasisEast: {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+    readonly w: number;
+  };
+  clipBasisNorth: {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+    readonly w: number;
+  };
+  clipCorners: ReadonlyArray<{
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+    readonly w: number;
+  }>;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -128,10 +151,10 @@ export interface ResolvedTextureFilteringOptions {
  * Image metadata ready for use as a WebGL texture.
  */
 export interface RegisteredImage {
-  id: string;
-  width: number;
-  height: number;
-  bitmap: ImageBitmap;
+  readonly id: string;
+  readonly width: number;
+  readonly height: number;
+  readonly bitmap: ImageBitmap;
   texture: WebGLTexture | undefined;
 }
 
@@ -180,7 +203,7 @@ export interface ResolvedTextGlyphOptions {
 /**
  * Mutable point reused when computing hit-test corners.
  */
-export interface MutableSpriteScreenPoint {
+export interface MutableSpriteScreenPoint extends SpriteScreenPoint {
   x: number;
   y: number;
 }
@@ -193,9 +216,9 @@ export type MatrixInput = ArrayLike<number>;
 /**
  * Cached clip-space context containing the mercator matrix required to project coordinates.
  */
-export type ClipContext = {
+export interface ClipContext {
   readonly mercatorMatrix: MatrixInput;
-};
+}
 
 /**
  * 2D canvas rendering context accepted by the glyph renderer.
@@ -221,22 +244,22 @@ export interface InternalSpriteImageState {
   mode: SpriteMode;
   opacity: number;
   scale: number;
-  anchor: SpriteAnchor;
+  anchor: Readonly<SpriteAnchor>;
   offset: SpriteImageOffset;
   rotateDeg: number;
   displayedRotateDeg: number;
   autoRotation: boolean;
   autoRotationMinDistanceMeters: number;
   resolvedBaseRotateDeg: number;
-  originLocation?: SpriteImageOriginLocation;
-  rotationInterpolationState: DegreeInterpolationState | null;
-  rotationInterpolationOptions: SpriteInterpolationOptions | null;
-  offsetDegInterpolationState: DegreeInterpolationState | null;
-  offsetMetersInterpolationState: DistanceInterpolationState | null;
+  originLocation?: Readonly<SpriteImageOriginLocation>;
+  rotationInterpolationState: Readonly<DegreeInterpolationState> | null;
+  rotationInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
+  offsetDegInterpolationState: Readonly<DegreeInterpolationState> | null;
+  offsetMetersInterpolationState: Readonly<DistanceInterpolationState> | null;
   lastCommandRotateDeg: number;
   lastCommandOffsetDeg: number;
   lastCommandOffsetMeters: number;
-  surfaceShaderInputs?: SurfaceShaderInputs;
+  surfaceShaderInputs?: Readonly<SurfaceShaderInputs>;
   hitTestCorners?: [
     MutableSpriteScreenPoint,
     MutableSpriteScreenPoint,
@@ -251,17 +274,17 @@ export interface InternalSpriteImageState {
 export interface InternalSpriteCurrentState<TTag> {
   spriteId: string;
   isEnabled: boolean;
-  currentLocation: SpriteLocation;
-  fromLocation?: SpriteLocation;
-  toLocation?: SpriteLocation;
+  currentLocation: Readonly<SpriteLocation>;
+  fromLocation?: Readonly<SpriteLocation>;
+  toLocation?: Readonly<SpriteLocation>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
   interpolationState: InternalSpriteInterpolationState | null;
   pendingInterpolationOptions: SpriteInterpolationOptions | null;
-  lastCommandLocation: SpriteLocation;
-  lastAutoRotationLocation: SpriteLocation;
+  lastCommandLocation: Readonly<SpriteLocation>;
+  lastAutoRotationLocation: Readonly<SpriteLocation>;
   lastAutoRotationAngleDeg: number;
-  cachedMercator: MercatorCoordinate;
+  cachedMercator: Readonly<MercatorCoordinate>;
   cachedMercatorLng: number;
   cachedMercatorLat: number;
   cachedMercatorZ: number;
