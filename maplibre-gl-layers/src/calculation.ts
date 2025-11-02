@@ -556,10 +556,7 @@ export const computeImageCenterXY = <T>(
     drawingBufferHeight,
     pixelRatio,
     resolveAnchorless: true,
-    project:
-      projectToClipSpace === undefined
-        ? (lngLat) => mapInstance.project(lngLat)
-        : undefined,
+    project: projectToClipSpace === undefined ? mapInstance.project : undefined,
   });
 
   // If the anchorless placement could not be projected, fall back to the original screen position.
