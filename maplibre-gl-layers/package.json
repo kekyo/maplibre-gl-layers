@@ -31,7 +31,7 @@
   ],
   "scripts": {
     "build": "vite build",
-    "dev": "npm run build",
+    "dev": "echo \"maplibre-gl-layers does not have dev rule.\"",
     "test": "npm run build && vitest run",
     "test:e2e": "npm run build && playwright test",
     "pack": "npm run build && screw-up pack --pack-destination ../artifacts"
