@@ -714,6 +714,11 @@ export interface SpriteTextGlyphOptions {
  */
 export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   /**
+   * Initializes used by the layer.
+   * Safe to call multiple times; subsequent invocations resolve immediately.
+   */
+  readonly initialize: () => Promise<void>;
+  /**
    * Registers an image or glyph so it can be referenced by sprite images.
    *
    * @param {string} imageId - Unique image identifier.

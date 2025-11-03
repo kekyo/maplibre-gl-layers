@@ -30,7 +30,8 @@
     "images/demo2.png"
   ],
   "scripts": {
-    "build": "vite build",
+    "build": "node ./scripts/build-wasm.mjs && vite build",
+    "build:wasm": "node ./scripts/build-wasm.mjs",
     "dev": "echo \"maplibre-gl-layers does not have dev rule.\"",
     "test": "npm run build && vitest run",
     "test:e2e": "npm run build && playwright test",

@@ -34,7 +34,10 @@ pnpm-debug.log*
 
 # Generated files
 src/generated/
+maplibre-gl-layers/src/wasm/projection_host.wasm
 
 artifacts/
 
 test_results/
+
+emsdk/

@@ -1405,6 +1405,8 @@ const main = async () => {
     },
   });
 
+  await spriteLayer.initialize();
+
   const clearSpriteDetails = () => {
     renderSpriteDetails({
       type: 'spritehover',

@@ -103,6 +103,8 @@ const projectToWorldCoordinates = (
   y: mercatorYfromLat(lat) * worldSize,
 });
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 const getMercatorHorizon = (
   cameraToCenterDistance: number,
   pitchDeg: number
@@ -562,8 +564,6 @@ export const createProjectionHost = (
     calculatePerspectiveRatio,
   };
 };
-
-//////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Extract current MapLibre transform parameters into {@link ProjectionHostParams}.

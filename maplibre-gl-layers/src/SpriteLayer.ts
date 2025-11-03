@@ -122,7 +122,10 @@ import {
   DEBUG_OUTLINE_CORNER_ORDER,
   createShaderProgram,
 } from './shader';
-import { createCalculationHost } from './calculation';
+import {
+  createCalculationHost,
+  createWasmCalculationHost,
+} from './calculation';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_IMAGE_OFFSET,
@@ -143,6 +146,10 @@ import {
   createProjectionHost,
   createProjectionHostParamsFromMapLibre,
 } from './projectionHost';
+import {
+  createWasmProjectionHost,
+  initProjectionWasm,
+} from './wasmProjectionHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -311,22 +318,6 @@ const resolveGlMagFilter = (
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
-
-const createProjectionHostForMap = (
-  mapInstance: MapLibreMap
-): ProjectionHost => {
-  const params = createProjectionHostParamsFromMapLibre(mapInstance);
-  return createProjectionHost(params);
-  // return createMapLibreProjectionHost(mapInstance);
-};
-
-const createCalculationHostForMap = <TTag>(
-  mapInstance: MapLibreMap
-): RenderCalculationHost<TTag> => {
-  const params = createProjectionHostParamsFromMapLibre(mapInstance);
-  return createCalculationHost<TTag>(params);
-  // return createMapLibreCalculationHost<TTag>(mapInstance);
-};
 
 /**
  * Applies auto-rotation to all images within a sprite when movement exceeds the configured threshold.
@@ -1096,6 +1087,33 @@ export const createSpriteLayer = <T = any>(
     options?.textureFiltering
   );
   const showDebugBounds = options?.showDebugBounds === true;
+
+  let wasmInitializationSucceeded = false;
+  const initialize = async (): Promise<void> => {
+    wasmInitializationSucceeded = await initProjectionWasm();
+  };
+
+  const createProjectionHostForMap = (
+    mapInstance: MapLibreMap
+  ): ProjectionHost => {
+    const params = createProjectionHostParamsFromMapLibre(mapInstance);
+    if (wasmInitializationSucceeded) {
+      return createWasmProjectionHost(params);
+    }
+    return createProjectionHost(params);
+    // return createMapLibreProjectionHost(mapInstance);
+  };
+
+  const createCalculationHostForMap = <TTag>(
+    mapInstance: MapLibreMap
+  ): RenderCalculationHost<TTag> => {
+    const params = createProjectionHostParamsFromMapLibre(mapInstance);
+    if (wasmInitializationSucceeded) {
+      return createWasmCalculationHost<TTag>(params);
+    }
+    return createCalculationHost<TTag>(params);
+    // return createMapLibreCalculationHost<TTag>(mapInstance);
+  };
 
   /** WebGL context supplied by MapLibre, assigned during onAdd. */
   let gl: WebGLRenderingContext | null = null;
@@ -3944,7 +3962,6 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
 
     const isAdded = addSpriteInternal(projectionHost, spriteId, init);
@@ -3967,7 +3984,6 @@ export const createSpriteLayer = <T = any>(
       return 0;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
 
     let addedCount = 0;
@@ -4213,7 +4229,6 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
 
     // Insert the image definition.
@@ -4397,7 +4412,6 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
 
     // Fail if the sprite cannot be found.
@@ -4675,7 +4689,6 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
 
     // Perform the update.
@@ -4717,7 +4730,6 @@ export const createSpriteLayer = <T = any>(
       return 0;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
 
     let changedCount = 0;
@@ -4875,7 +4887,6 @@ export const createSpriteLayer = <T = any>(
       return 0;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
 
     let updatedCount = 0;
@@ -4988,7 +4999,6 @@ export const createSpriteLayer = <T = any>(
       return;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
 
     sprites.forEach((sprite) => {
@@ -5003,6 +5013,7 @@ export const createSpriteLayer = <T = any>(
     id,
     type: 'custom' as const,
     renderingMode: '2d' as const,
+    initialize,
     onAdd,
     onRemove,
     render,
