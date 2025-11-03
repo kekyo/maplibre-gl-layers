@@ -64,6 +64,7 @@ import type {
   SpriteMercatorCoordinate,
   PreparedDrawSpriteImageParams,
   ImageCenterCache,
+  RenderCalculationHost,
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './loadImage';
 import {
@@ -121,7 +122,7 @@ import {
   DEBUG_OUTLINE_CORNER_ORDER,
   createShaderProgram,
 } from './shader';
-import { createMapLibreCalculationHost } from './calculation';
+import { createCalculationHost } from './calculation';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_IMAGE_OFFSET,
@@ -138,7 +139,10 @@ import {
   MIN_TEXT_GLYPH_FONT_SIZE,
 } from './const';
 import { SL_DEBUG } from './config';
-import { createMapLibreProjectionHost } from './mapLibreProjectionHost';
+import {
+  createProjectionHost,
+  createProjectionHostParamsFromMapLibre,
+} from './projectionHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -198,6 +202,8 @@ const MAG_FILTER_VALUES: readonly SpriteTextureMagFilter[] = [
   'nearest',
   'linear',
 ] as const;
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 /** Minification filters that require mipmaps to produce complete textures. */
 const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> =
@@ -305,6 +311,22 @@ const resolveGlMagFilter = (
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
+
+const createProjectionHostForMap = (
+  mapInstance: MapLibreMap
+): ProjectionHost => {
+  const params = createProjectionHostParamsFromMapLibre(mapInstance);
+  return createProjectionHost(params);
+  // return createMapLibreProjectionHost(mapInstance);
+};
+
+const createCalculationHostForMap = <TTag>(
+  mapInstance: MapLibreMap
+): RenderCalculationHost<TTag> => {
+  const params = createProjectionHostParamsFromMapLibre(mapInstance);
+  return createCalculationHost<TTag>(params);
+  // return createMapLibreCalculationHost<TTag>(mapInstance);
+};
 
 /**
  * Applies auto-rotation to all images within a sprite when movement exceeds the configured threshold.
@@ -2936,7 +2958,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     // Prepare to create projection host (From MapLibre, TODO)
-    const projectionHost = createMapLibreProjectionHost(mapInstance);
+    const projectionHost = createProjectionHostForMap(mapInstance);
 
     // Uniform locations must be resolved before drawing; skip the frame otherwise.
     if (
@@ -3270,7 +3292,7 @@ export const createSpriteLayer = <T = any>(
      * @param {RenderTargetEntry[]} bucket - Sprite/image pairs belonging to a single sub-layer.
      */
     const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
-      const calculationHost = createMapLibreCalculationHost<T>(mapInstance);
+      const calculationHost = createCalculationHostForMap<T>(mapInstance);
 
       const itemsWithDepth = calculationHost.collectDepthSortedItems({
         bucket,
@@ -3923,7 +3945,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     // TODO: Replace to createProjectionHost
-    const projectionHost = createMapLibreProjectionHost(map);
+    const projectionHost = createProjectionHostForMap(map);
 
     const isAdded = addSpriteInternal(projectionHost, spriteId, init);
     if (isAdded) {
@@ -3946,7 +3968,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     // TODO: Replace to createProjectionHost
-    const projectionHost = createMapLibreProjectionHost(map);
+    const projectionHost = createProjectionHostForMap(map);
 
     let addedCount = 0;
     for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
@@ -4192,7 +4214,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     // TODO: Replace to createProjectionHost
-    const projectionHost = createMapLibreProjectionHost(map);
+    const projectionHost = createProjectionHostForMap(map);
 
     // Insert the image definition.
     const result: SpriteImageOperationInternalResult = { isUpdated: false };
@@ -4376,7 +4398,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     // TODO: Replace to createProjectionHost
-    const projectionHost = createMapLibreProjectionHost(map);
+    const projectionHost = createProjectionHostForMap(map);
 
     // Fail if the sprite cannot be found.
     const sprite = sprites.get(spriteId);
@@ -4654,7 +4676,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     // TODO: Replace to createProjectionHost
-    const projectionHost = createMapLibreProjectionHost(map);
+    const projectionHost = createProjectionHostForMap(map);
 
     // Perform the update.
     const result = updateSpriteInternal(projectionHost, spriteId, update);
@@ -4696,7 +4718,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     // TODO: Replace to createProjectionHost
-    const projectionHost = createMapLibreProjectionHost(map);
+    const projectionHost = createProjectionHostForMap(map);
 
     let changedCount = 0;
     let isRequiredRender = false;
@@ -4854,7 +4876,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     // TODO: Replace to createProjectionHost
-    const projectionHost = createMapLibreProjectionHost(map);
+    const projectionHost = createProjectionHostForMap(map);
 
     let updatedCount = 0;
     let isRequiredRender = false;
@@ -4967,7 +4989,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     // TODO: Replace to createProjectionHost
-    const projectionHost = createMapLibreProjectionHost(map);
+    const projectionHost = createProjectionHostForMap(map);
 
     sprites.forEach((sprite) => {
       refreshSpriteHitTestBounds(projectionHost, sprite);

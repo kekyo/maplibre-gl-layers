@@ -29,7 +29,7 @@ import {
   computeSurfaceCornerShaderModel,
   type SurfaceDepthBiasFn,
 } from '../src/math';
-import { SpriteAnchor, SpriteScreenPoint } from '../src/types';
+import type { SpriteAnchor, SpriteScreenPoint } from '../src/types';
 import { EARTH_RADIUS_METERS, UV_CORNERS } from '../src/const';
 
 const deg = (value: number) => (value * Math.PI) / 180;
