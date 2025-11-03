@@ -22,17 +22,15 @@ import {
   screenToClip,
   calculateZoomScaleFactor,
   resolveScalingOptions,
-  EARTH_RADIUS_METERS,
   calculateBillboardCenterPosition,
   calculateBillboardCornerScreenPositions,
   calculateSurfaceCenterPosition,
   calculateSurfaceCornerDisplacements,
   computeSurfaceCornerShaderModel,
   type SurfaceDepthBiasFn,
-  TRIANGLE_INDICES,
-  UV_CORNERS,
 } from '../src/math';
 import { SpriteAnchor, SpriteScreenPoint } from '../src/types';
+import { EARTH_RADIUS_METERS, UV_CORNERS } from '../src/const';
 
 const deg = (value: number) => (value * Math.PI) / 180;
 

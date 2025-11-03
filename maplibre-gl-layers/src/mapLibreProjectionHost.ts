@@ -70,8 +70,7 @@ export const createMapLibreProjectionHost = (
    * @param location Location.
    * @returns Projected point if valid location.
    */
-  const project = (location: SpriteLocation) =>
-    map.project(location);
+  const project = (location: SpriteLocation) => map.project(location);
 
   /**
    * Unproject the location.

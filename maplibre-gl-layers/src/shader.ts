@@ -12,7 +12,7 @@
  */
 
 import type { SpriteAnchor, SpriteScreenPoint } from './types';
-import { DEG2RAD, UV_CORNERS } from './math';
+import { DEG2RAD, UV_CORNERS } from './const';
 
 /** Number of components per vertex (clipPosition.xyzw + uv.xy). */
 export const VERTEX_COMPONENT_COUNT = 6;

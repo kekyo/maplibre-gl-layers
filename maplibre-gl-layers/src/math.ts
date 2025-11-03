@@ -13,34 +13,15 @@ import type {
   SpriteScreenPoint,
 } from './types';
 import type { MatrixInput } from './internalTypes';
+import {
+  DEG2RAD,
+  EARTH_RADIUS_METERS,
+  RAD2DEG,
+  TILE_SIZE,
+  TRIANGLE_INDICES,
+  UV_CORNERS,
+} from './const';
 import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './default';
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-/**
- * WGS84-compatible Earth radius in meters.
- * Used to convert one radian of longitude into meters when scaling sprites.
- * @constant
- */
-export const EARTH_RADIUS_METERS = 6378137;
-
-/**
- * Multiplier for converting degrees to radians.
- * @constant
- */
-export const DEG2RAD = Math.PI / 180;
-
-/**
- * Multiplier for converting radians to degrees.
- * @constant
- */
-export const RAD2DEG = 180 / Math.PI;
-
-/**
- * Default MapLibre tile size used for Web Mercator calculations.
- * @constant
- */
-export const TILE_SIZE = 512;
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -814,23 +795,6 @@ export const clipToScreen = (
     y: deviceY / pixelRatio,
   };
 };
-
-/**
- * Index order used to decompose a quad into two triangles.
- * @constant
- */
-export const TRIANGLE_INDICES = [0, 1, 2, 2, 1, 3] as const;
-
-/**
- * UV coordinates for each corner of a quad following the index order in {@link TRIANGLE_INDICES}.
- * @constant
- */
-export const UV_CORNERS: ReadonlyArray<readonly [number, number]> = [
-  [0.0, 0.0],
-  [1.0, 0.0],
-  [0.0, 1.0],
-  [1.0, 1.0],
-] as const;
 
 /**
  * Calculates the conversion factor between meters and pixels taking perspective into account.

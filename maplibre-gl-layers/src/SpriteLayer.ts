@@ -62,6 +62,8 @@ import type {
   SurfaceShaderInputs,
   ProjectionHost,
   SpriteMercatorCoordinate,
+  PreparedDrawSpriteImageParams,
+  ImageCenterCache,
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './loadImage';
 import {
@@ -119,12 +121,7 @@ import {
   DEBUG_OUTLINE_CORNER_ORDER,
   createShaderProgram,
 } from './shader';
-import {
-  type ImageCenterCache,
-  type PrepareSpriteImageDrawResult,
-  collectDepthSortedItems,
-  prepareSpriteEachImageDraw,
-} from './calculation';
+import { createMapLibreCalculationHost } from './calculation';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_IMAGE_OFFSET,
@@ -3029,8 +3026,6 @@ export const createSpriteLayer = <T = any>(
     const identityOffsetX = 0;
     const identityOffsetY = 0;
 
-    const zoom = projectionHost.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const baseMetersPerPixel = resolvedScaling.metersPerPixel;
     const spriteMinPixel = resolvedScaling.spriteMinPixel;
     const spriteMaxPixel = resolvedScaling.spriteMaxPixel;
@@ -3164,7 +3159,7 @@ export const createSpriteLayer = <T = any>(
     let drawOrderCounter = 0;
 
     const issueSpriteDraw = (
-      prepared: PrepareSpriteImageDrawResult<T>
+      prepared: PreparedDrawSpriteImageParams<T>
     ): void => {
       const { screenToClip } = prepared;
       applyScreenToClipUniforms(
@@ -3275,13 +3270,13 @@ export const createSpriteLayer = <T = any>(
      * @param {RenderTargetEntry[]} bucket - Sprite/image pairs belonging to a single sub-layer.
      */
     const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
-      const itemsWithDepth = collectDepthSortedItems<T>({
+      const calculationHost = createMapLibreCalculationHost<T>(mapInstance);
+
+      const itemsWithDepth = calculationHost.collectDepthSortedItems({
         bucket,
-        projectionHost,
         images,
+        resolvedScaling,
         clipContext,
-        zoom,
-        zoomScaleFactor,
         baseMetersPerPixel,
         spriteMinPixel,
         spriteMaxPixel,
@@ -3292,31 +3287,31 @@ export const createSpriteLayer = <T = any>(
         resolveSpriteMercator,
       });
 
-      const preparedItems = prepareSpriteEachImageDraw<T>({
-        items: itemsWithDepth,
-        originCenterCache,
-        projectionHost,
-        images,
-        zoom,
-        zoomScaleFactor,
-        baseMetersPerPixel,
-        spriteMinPixel,
-        spriteMaxPixel,
-        drawingBufferWidth,
-        drawingBufferHeight,
-        pixelRatio,
-        clipContext,
-        identityScaleX,
-        identityScaleY,
-        identityOffsetX,
-        identityOffsetY,
-        screenToClipScaleX,
-        screenToClipScaleY,
-        screenToClipOffsetX,
-        screenToClipOffsetY,
-        ensureHitTestCorners,
-        resolveSpriteMercator,
-      });
+      const preparedItems = calculationHost.prepareDrawSpriteImages(
+        itemsWithDepth,
+        {
+          originCenterCache,
+          images,
+          resolvedScaling,
+          baseMetersPerPixel,
+          spriteMinPixel,
+          spriteMaxPixel,
+          drawingBufferWidth,
+          drawingBufferHeight,
+          pixelRatio,
+          clipContext,
+          identityScaleX,
+          identityScaleY,
+          identityOffsetX,
+          identityOffsetY,
+          screenToClipScaleX,
+          screenToClipScaleY,
+          screenToClipOffsetX,
+          screenToClipOffsetY,
+          ensureHitTestCorners,
+          resolveSpriteMercator,
+        }
+      );
 
       for (const prepared of preparedItems) {
         issueSpriteDraw(prepared);

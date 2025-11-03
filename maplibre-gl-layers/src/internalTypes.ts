@@ -23,7 +23,7 @@ import type {
   SpriteScreenPoint,
   SpritePoint,
 } from './types';
-import type { SurfaceCorner } from './math';
+import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -83,6 +83,142 @@ export interface ProjectionHost {
     location: Readonly<SpriteLocation>,
     cachedMercator?: SpriteMercatorCoordinate
   ) => number;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Cache entry storing anchor-adjusted and raw centers for a sprite image.
+ */
+export interface ImageCenterCacheEntry {
+  readonly anchorApplied?: SpritePoint;
+  readonly anchorless?: SpritePoint;
+}
+
+/**
+ * Nested cache keyed by sprite ID and image key to avoid recomputing centers each frame.
+ */
+export type ImageCenterCache = Map<string, Map<string, ImageCenterCacheEntry>>;
+
+export type RenderTargetEntryLike<T> = readonly [
+  InternalSpriteCurrentState<T>,
+  InternalSpriteImageState,
+];
+
+export interface DepthSortedItem<T> {
+  readonly sprite: InternalSpriteCurrentState<T>;
+  readonly image: InternalSpriteImageState;
+  readonly resource: Readonly<RegisteredImage>;
+  readonly depthKey: number;
+}
+
+export interface CollectDepthSortedItemsInputs<T> {
+  readonly bucket: readonly Readonly<RenderTargetEntryLike<T>>[];
+  readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
+  readonly resolvedScaling: ResolvedSpriteScalingOptions;
+  readonly zoomScaleFactor?: number;
+  readonly clipContext: Readonly<ClipContext> | null;
+  readonly baseMetersPerPixel: number;
+  readonly spriteMinPixel: number;
+  readonly spriteMaxPixel: number;
+  readonly drawingBufferWidth: number;
+  readonly drawingBufferHeight: number;
+  readonly pixelRatio: number;
+  readonly originCenterCache: ImageCenterCache;
+  readonly resolveSpriteMercator: (
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>
+  ) => SpriteMercatorCoordinate;
+}
+
+/**
+ * Prepares WebGL rendering inputs.
+ */
+export interface PrepareDrawSpriteImageInputs<T> {
+  readonly originCenterCache: ImageCenterCache;
+  readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
+  readonly resolvedScaling: ResolvedSpriteScalingOptions;
+  readonly zoomScaleFactor?: number;
+  readonly baseMetersPerPixel: number;
+  readonly spriteMinPixel: number;
+  readonly spriteMaxPixel: number;
+  readonly drawingBufferWidth: number;
+  readonly drawingBufferHeight: number;
+  readonly pixelRatio: number;
+  readonly clipContext: Readonly<ClipContext> | null;
+  readonly identityScaleX: number;
+  readonly identityScaleY: number;
+  readonly identityOffsetX: number;
+  readonly identityOffsetY: number;
+  readonly screenToClipScaleX: number;
+  readonly screenToClipScaleY: number;
+  readonly screenToClipOffsetX: number;
+  readonly screenToClipOffsetY: number;
+  readonly ensureHitTestCorners: (
+    imageEntry: Readonly<InternalSpriteImageState>
+  ) => [
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+    MutableSpriteScreenPoint,
+  ];
+  readonly resolveSpriteMercator: (
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>
+  ) => SpriteMercatorCoordinate;
+}
+
+/**
+ * Prepared parameters for WebGL rendering.
+ */
+export interface PreparedDrawSpriteImageParams<T> {
+  readonly spriteEntry: InternalSpriteCurrentState<T>;
+  readonly imageEntry: InternalSpriteImageState;
+  readonly imageResource: RegisteredImage;
+  readonly vertexData: Float32Array;
+  readonly opacity: number;
+  readonly hitTestCorners:
+    | readonly [
+        Readonly<SpriteScreenPoint>,
+        Readonly<SpriteScreenPoint>,
+        Readonly<SpriteScreenPoint>,
+        Readonly<SpriteScreenPoint>,
+      ]
+    | null;
+  readonly screenToClip: {
+    readonly scaleX: number;
+    readonly scaleY: number;
+    readonly offsetX: number;
+    readonly offsetY: number;
+  };
+  readonly useShaderSurface: boolean;
+  readonly surfaceShaderInputs: SurfaceShaderInputs | undefined;
+  readonly surfaceClipEnabled: boolean;
+  readonly useShaderBillboard: boolean;
+  readonly billboardUniforms: {
+    readonly center: SpritePoint;
+    readonly halfWidth: number;
+    readonly halfHeight: number;
+    readonly anchor: SpriteAnchor;
+    readonly sin: number;
+    readonly cos: number;
+  } | null;
+}
+
+/**
+ * The render calculation host.
+ * Abstraction that render calculations.
+ * @param TTag Tag type.
+ */
+export interface RenderCalculationHost<TTag> {
+  readonly collectDepthSortedItems: (
+    inputs: CollectDepthSortedItemsInputs<TTag>
+  ) => DepthSortedItem<TTag>[];
+
+  readonly prepareDrawSpriteImages: (
+    items: readonly DepthSortedItem<TTag>[],
+    inputs: PrepareDrawSpriteImageInputs<TTag>
+  ) => PreparedDrawSpriteImageParams<TTag>[];
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
