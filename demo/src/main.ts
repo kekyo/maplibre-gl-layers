@@ -169,7 +169,7 @@ const SECONDARY_IMAGE_SCALE = 0.5;
 /** Distance in meters that secondary images orbit from their primary marker. */
 const SECONDARY_ORBIT_RADIUS_METERS = 180;
 /** Angular increment in degrees applied to the orbiting image during each step. */
-const SECONDARY_ORBIT_STEP_DEG = 20;
+const SECONDARY_ORBIT_STEP_DEG = 45;
 /** Fixed angle (deg) used when the orbit mode is set to Shift. */
 const SECONDARY_SHIFT_ANGLE_DEG = 120;
 

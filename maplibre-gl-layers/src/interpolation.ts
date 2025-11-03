@@ -12,9 +12,12 @@ import type {
 } from './types';
 import type { SpriteInterpolationState } from './internalTypes';
 
-import { cloneSpriteLocation, lerpSpriteLocation } from './location';
 import { resolveEasing } from './easing';
-import { spriteLocationsEqual } from './location';
+import {
+  cloneSpriteLocation,
+  lerpSpriteLocation,
+  spriteLocationsEqual,
+} from './math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -42,11 +45,9 @@ const computeFeedforwardTarget = (
   const target: SpriteLocation = {
     lng: next.lng + (next.lng - previous.lng),
     lat: next.lat + (next.lat - previous.lat),
+    // Only extrapolate altitude when either point includes z; otherwise we maintain the 2D assumption.
+    z: hasZ ? nextZ + (nextZ - prevZ) : undefined,
   };
-  // Only extrapolate altitude when either point includes z; otherwise we maintain the 2D assumption.
-  if (hasZ) {
-    target.z = nextZ + (nextZ - prevZ);
-  }
   return target;
 };
 

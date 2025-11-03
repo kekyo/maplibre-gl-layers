@@ -22,16 +22,15 @@ import {
   screenToClip,
   calculateZoomScaleFactor,
   resolveScalingOptions,
-  EARTH_RADIUS_METERS,
   calculateBillboardCenterPosition,
   calculateBillboardCornerScreenPositions,
   calculateSurfaceCenterPosition,
   calculateSurfaceCornerDisplacements,
   computeSurfaceCornerShaderModel,
   type SurfaceDepthBiasFn,
-  TRIANGLE_INDICES,
-  UV_CORNERS,
 } from '../src/math';
+import type { SpriteAnchor, SpriteScreenPoint } from '../src/types';
+import { EARTH_RADIUS_METERS, UV_CORNERS } from '../src/const';
 
 const deg = (value: number) => (value * Math.PI) / 180;
 
@@ -450,7 +449,10 @@ describe('applySurfaceDisplacement', () => {
   it.each(displacementCases)(
     'matches analytic displacement %#',
     ({ baseLng, baseLat, east, north }) => {
-      const result = applySurfaceDisplacement(baseLng, baseLat, east, north);
+      const result = applySurfaceDisplacement(
+        { lng: baseLng, lat: baseLat },
+        { east, north }
+      );
       const cosLat = Math.cos(deg(baseLat));
       const clampedCos = Math.max(cosLat, 1e-6);
       const expectedLng =
@@ -464,7 +466,10 @@ describe('applySurfaceDisplacement', () => {
 
   it('clamps cosine near the poles', () => {
     const baseLat = 89.9999;
-    const result = applySurfaceDisplacement(45, baseLat, 500, 0);
+    const result = applySurfaceDisplacement(
+      { lng: 45, lat: baseLat },
+      { east: 500, north: 0 }
+    );
     expect(Number.isFinite(result.lng)).toBe(true);
     const clampedCos = Math.max(Math.cos(deg(baseLat)), 1e-6);
     const expectedLng =
@@ -474,8 +479,11 @@ describe('applySurfaceDisplacement', () => {
   });
 
   it('reverses small displacements symmetrically', () => {
-    const forward = applySurfaceDisplacement(10, -20, 30, -15);
-    const back = applySurfaceDisplacement(forward.lng, forward.lat, -30, 15);
+    const forward = applySurfaceDisplacement(
+      { lng: 10, lat: -20 },
+      { east: 30, north: -15 }
+    );
+    const back = applySurfaceDisplacement(forward, { east: -30, north: 15 });
     expect(back.lng).toBeCloseTo(10, 6);
     expect(back.lat).toBeCloseTo(-20, 6);
   });
@@ -525,18 +533,16 @@ const displacementCases = [
 ] as const;
 
 const computeBillboardCornersShaderModel = ({
-  centerX,
-  centerY,
+  center,
   halfWidth,
   halfHeight,
   anchor,
   totalRotateDeg,
 }: {
-  centerX: number;
-  centerY: number;
+  center: SpriteScreenPoint;
   halfWidth: number;
   halfHeight: number;
-  anchor?: { x: number; y: number };
+  anchor?: SpriteAnchor;
   totalRotateDeg: number;
 }): Array<{ x: number; y: number; u: number; v: number }> => {
   const baseCorners: ReadonlyArray<readonly [number, number]> = [
@@ -560,8 +566,8 @@ const computeBillboardCornersShaderModel = ({
     const rotatedY = shiftedX * sinR + shiftedY * cosR;
     const [u, v] = UV_CORNERS[index]!;
     return {
-      x: centerX + rotatedX,
-      y: centerY - rotatedY,
+      x: center.x + rotatedX,
+      y: center.y - rotatedY,
       u,
       v,
     };
@@ -613,8 +619,8 @@ describe('calculateBillboardCenterPosition', () => {
       const anchorNeutralX = placement.anchorShift.x + rotatedAnchorX;
       const anchorNeutralY = placement.anchorShift.y + rotatedAnchorY;
 
-      expect(placement.centerX).toBeCloseTo(base.x + offsetShift.x, 6);
-      expect(placement.centerY).toBeCloseTo(base.y - offsetShift.y, 6);
+      expect(placement.center.x).toBeCloseTo(base.x + offsetShift.x, 6);
+      expect(placement.center.y).toBeCloseTo(base.y - offsetShift.y, 6);
       expect(anchorNeutralX).toBeCloseTo(0, 6);
       expect(anchorNeutralY).toBeCloseTo(0, 6);
     }
@@ -662,7 +668,6 @@ describe('calculateBillboardCenterPosition', () => {
 });
 
 describe('calculateBillboardDepthKey', () => {
-  const spriteLocation = { lng: 139.7, lat: 35.6 };
   const center = { x: 256, y: 512 };
 
   const unproject = ({ x, y }: { x: number; y: number }) => ({
@@ -671,22 +676,14 @@ describe('calculateBillboardDepthKey', () => {
   });
 
   it('returns null when clip projection fails', () => {
-    const depth = calculateBillboardDepthKey(
-      center,
-      spriteLocation,
-      unproject,
-      () => null
-    );
+    const depth = calculateBillboardDepthKey(center, unproject, () => null);
     expect(depth).toBeNull();
   });
 
   it('calculates depth from clip coordinates', () => {
-    const depth = calculateBillboardDepthKey(
-      center,
-      spriteLocation,
-      unproject,
-      () => [0, 0, 0.25, 1]
-    );
+    const depth = calculateBillboardDepthKey(center, unproject, () => [
+      0, 0, 0.25, 1,
+    ]);
     expect(depth).toBeCloseTo(-0.25, 6);
   });
 });
@@ -712,8 +709,7 @@ describe('calculateBillboardCornerScreenPositions', () => {
       });
 
       const corners = calculateBillboardCornerScreenPositions({
-        centerX: placement.centerX,
-        centerY: placement.centerY,
+        center: placement.center,
         halfWidth: placement.halfWidth,
         halfHeight: placement.halfHeight,
         anchor,
@@ -721,8 +717,7 @@ describe('calculateBillboardCornerScreenPositions', () => {
       });
 
       const expected = computeBillboardCornersShaderModel({
-        centerX: placement.centerX,
-        centerY: placement.centerY,
+        center: placement.center,
         halfWidth: placement.halfWidth,
         halfHeight: placement.halfHeight,
         anchor,
@@ -791,10 +786,8 @@ describe('calculateSurfaceCenterPosition', () => {
       );
 
       const expectedLngLat = applySurfaceDisplacement(
-        baseLngLat.lng,
-        baseLngLat.lat,
-        result.totalDisplacement.east,
-        result.totalDisplacement.north
+        baseLngLat,
+        result.totalDisplacement
       );
       const expectedProjected = projectLinear(expectedLngLat);
       expect(result.center.x).toBeCloseTo(expectedProjected.x, 6);
@@ -866,7 +859,6 @@ describe('calculateSurfaceDepthKey', () => {
     const depth = calculateSurfaceDepthKey(
       baseLngLat,
       displacements,
-      spriteLocation,
       () => clips[call++] ?? [0, 0, 0, 1],
       { indices: [0, 1, 2, 3] }
     );
@@ -886,7 +878,6 @@ describe('calculateSurfaceDepthKey', () => {
     const depth = calculateSurfaceDepthKey(
       baseLngLat,
       displacements,
-      spriteLocation,
       () => clips[call++] ?? [0, 0, 0, 1],
       { indices: [0, 1], biasFn }
     );
@@ -995,12 +986,7 @@ describe('computeSurfaceCornerShaderModel', () => {
           const cpuCorner = cpuCorners[index]!;
           expect(corner.east).toBeCloseTo(cpuCorner.east, 6);
           expect(corner.north).toBeCloseTo(cpuCorner.north, 6);
-          const displaced = applySurfaceDisplacement(
-            base.lng,
-            base.lat,
-            cpuCorner.east,
-            cpuCorner.north
-          );
+          const displaced = applySurfaceDisplacement(base, cpuCorner);
           expect(corner.lng).toBeCloseTo(displaced.lng, 6);
           expect(corner.lat).toBeCloseTo(displaced.lat, 6);
         });
@@ -1024,12 +1010,7 @@ describe('computeSurfaceCornerShaderModel', () => {
     shaderCorners.forEach((corner) => {
       expect(corner.east).toBeCloseTo(offsetMeters.east, 6);
       expect(corner.north).toBeCloseTo(offsetMeters.north, 6);
-      const expected = applySurfaceDisplacement(
-        base.lng,
-        base.lat,
-        offsetMeters.east,
-        offsetMeters.north
-      );
+      const expected = applySurfaceDisplacement(base, offsetMeters);
       expect(corner.lng).toBeCloseTo(expected.lng, 6);
       expect(corner.lat).toBeCloseTo(expected.lat, 6);
     });
@@ -1038,7 +1019,7 @@ describe('computeSurfaceCornerShaderModel', () => {
 
 describe('screenToClip', () => {
   it('transforms screen coordinates to clip space', () => {
-    const [x, y] = screenToClip(256, 256, 512, 512, 1);
+    const [x, y] = screenToClip({ x: 256, y: 256 }, 512, 512, 1);
     expect(x).toBe(0);
     expect(y).toBe(0);
   });

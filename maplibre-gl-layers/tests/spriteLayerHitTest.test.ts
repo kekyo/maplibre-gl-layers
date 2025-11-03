@@ -4,7 +4,61 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { MercatorCoordinate } from 'maplibre-gl';
+import type { ProjectionHostParams } from '../src/projectionHost';
+
+vi.mock('../src/projectionHost', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/projectionHost')>();
+  const paramsToMap = new WeakMap<ProjectionHostParams, FakeMap>();
+
+  return {
+    ...actual,
+    createProjectionHostParamsFromMapLibre: (map: FakeMap) => {
+      const params: ProjectionHostParams = {
+        zoom: map.getZoom?.() ?? 0,
+        width: map.getCanvas?.()?.width ?? map.canvas?.width ?? 0,
+        height: map.getCanvas?.()?.height ?? map.canvas?.height ?? 0,
+        center: map.getCenter?.() ?? { lng: 0, lat: 0 },
+      };
+      paramsToMap.set(params, map);
+      return params;
+    },
+    createProjectionHost: (params: ProjectionHostParams) => {
+      const map = paramsToMap.get(params);
+      if (!map) {
+        return actual.createProjectionHost(params);
+      }
+      return {
+        getZoom: () => map.getZoom(),
+        getClipContext: () => {
+          const transform = map.transform;
+          if (!transform) {
+            return null;
+          }
+          const mercatorMatrix =
+            transform.mercatorMatrix ?? transform._mercatorMatrix;
+          return mercatorMatrix ? { mercatorMatrix } : null;
+        },
+        fromLngLat: (location: { lng: number; lat: number; z?: number }) => {
+          const mercator = MercatorCoordinate.fromLngLat(
+            { lng: location.lng, lat: location.lat },
+            location.z ?? 0
+          );
+          return {
+            x: mercator.x,
+            y: mercator.y,
+            z: mercator.z ?? 0,
+          };
+        },
+        project: (location: any) => map.project(location),
+        unproject: (point: any) => map.unproject(point),
+        calculatePerspectiveRatio: () =>
+          map.transform?.cameraToCenterDistance ?? 1,
+      };
+    },
+  };
+});
 
 import { createSpriteLayer } from '../src/SpriteLayer';
 import type { SpriteLayerClickEvent } from '../src/types';
@@ -88,8 +142,10 @@ const identityMatrix = (): number[] => [
   1,
 ];
 
+type CanvasLike = FakeCanvas & HTMLCanvasElement;
+
 class FakeMap {
-  readonly canvas: FakeCanvas;
+  readonly canvas: CanvasLike;
   readonly transform: {
     mercatorMatrix: number[];
     _mercatorMatrix: number[];
@@ -99,9 +155,10 @@ class FakeMap {
   private readonly originY = 256;
   private readonly scale = 10;
   private zoom = 10;
+  private center = { lng: 0, lat: 0 };
 
   constructor(canvas: FakeCanvas) {
-    this.canvas = canvas;
+    this.canvas = canvas as unknown as CanvasLike;
     this.transform = {
       mercatorMatrix: identityMatrix(),
       _mercatorMatrix: identityMatrix(),
@@ -109,12 +166,20 @@ class FakeMap {
     };
   }
 
-  getCanvas(): FakeCanvas {
+  getCanvas(): CanvasLike {
     return this.canvas;
   }
 
   getZoom(): number {
     return this.zoom;
+  }
+
+  getCenter(): { lng: number; lat: number } {
+    return this.center;
+  }
+
+  setCenter(center: { lng: number; lat: number }): void {
+    this.center = { lng: center.lng, lat: center.lat };
   }
 
   setZoom(value: number): void {
