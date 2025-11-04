@@ -51,7 +51,7 @@ export interface ProjectionHostParams {
   readonly farZOverride?: number;
 }
 
-interface PreparedProjectionState {
+export interface PreparedProjectionState {
   readonly zoom: number;
   readonly mercatorMatrix: Mat4 | null;
   readonly pixelMatrix: Mat4 | null;
@@ -241,7 +241,7 @@ const calculateNearFarZ = (
   };
 };
 
-const prepareProjectionState = (
+export const prepareProjectionState = (
   params: ProjectionHostParams
 ): PreparedProjectionState => {
   const width = Math.max(0, params.width);

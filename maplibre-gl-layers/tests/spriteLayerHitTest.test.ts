@@ -55,6 +55,7 @@ vi.mock('../src/projectionHost', async (importOriginal) => {
         unproject: (point: any) => map.unproject(point),
         calculatePerspectiveRatio: () =>
           map.transform?.cameraToCenterDistance ?? 1,
+        release: () => {},
       };
     },
   };
