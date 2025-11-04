@@ -178,12 +178,11 @@ const createFromLngLat = (wasm: ResolvedProjectionWasm) => {
   };
 
   // Buffer releaser
-  const release = () => {
+  fromLngLat.release = () => {
     wasm.free(resultBuffer);
     results = undefined!;
     resultBuffer = 0;
   };
-  fromLngLat.release = release;
 
   return fromLngLat;
 };

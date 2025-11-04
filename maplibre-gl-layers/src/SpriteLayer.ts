@@ -125,7 +125,7 @@ import {
 import {
   createCalculationHost,
   createWasmCalculationHost,
-} from './calculation';
+} from './calculationHost';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_IMAGE_OFFSET,
@@ -2975,9 +2975,6 @@ export const createSpriteLayer = <T = any>(
       return;
     }
 
-    // Prepare to create projection host (From MapLibre, TODO)
-    const projectionHost = createProjectionHostForMap(mapInstance);
-
     // Uniform locations must be resolved before drawing; skip the frame otherwise.
     if (
       !uniformOpacityLocation ||
@@ -3069,368 +3066,381 @@ export const createSpriteLayer = <T = any>(
     const baseMetersPerPixel = resolvedScaling.metersPerPixel;
     const spriteMinPixel = resolvedScaling.spriteMinPixel;
     const spriteMaxPixel = resolvedScaling.spriteMaxPixel;
-    const clipContext = projectionHost.getClipContext();
-    // Without a clip context we cannot project to clip space; skip rendering.
-    if (!clipContext) {
-      return;
-    }
-    // Enable blending and avoid depth-buffer interference.
-    glContext.enable(glContext.BLEND);
-    glContext.blendFunc(glContext.SRC_ALPHA, glContext.ONE_MINUS_SRC_ALPHA);
-    glContext.disable(glContext.DEPTH_TEST);
-    glContext.depthMask(false);
 
-    glContext.useProgram(program);
-    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
-    glContext.enableVertexAttribArray(attribPositionLocation);
-    glContext.vertexAttribPointer(
-      attribPositionLocation,
-      POSITION_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      0
-    );
-    glContext.enableVertexAttribArray(attribUvLocation);
-    glContext.vertexAttribPointer(
-      attribUvLocation,
-      UV_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      UV_OFFSET
-    );
-    glContext.uniform1i(uniformTextureLocation, 0);
-    const screenToClipScaleLocation = uniformScreenToClipScaleLocation!;
-    const screenToClipOffsetLocation = uniformScreenToClipOffsetLocation!;
-
-    let currentScaleX = Number.NaN;
-    let currentScaleY = Number.NaN;
-    let currentOffsetX = Number.NaN;
-    let currentOffsetY = Number.NaN;
-    const applyScreenToClipUniforms = (
-      scaleX: number,
-      scaleY: number,
-      offsetX: number,
-      offsetY: number
-    ): void => {
-      if (
-        scaleX !== currentScaleX ||
-        scaleY !== currentScaleY ||
-        offsetX !== currentOffsetX ||
-        offsetY !== currentOffsetY
-      ) {
-        glContext.uniform2f(screenToClipScaleLocation, scaleX, scaleY);
-        glContext.uniform2f(screenToClipOffsetLocation, offsetX, offsetY);
-        currentScaleX = scaleX;
-        currentScaleY = scaleY;
-        currentOffsetX = offsetX;
-        currentOffsetY = offsetY;
-      }
-    };
-
-    let currentSurfaceMode = Number.NaN;
-    const applySurfaceMode = (enabled: boolean): void => {
-      if (!uniformSurfaceModeLocation) {
-        return;
-      }
-      const value = enabled ? 1 : 0;
-      if (value !== currentSurfaceMode) {
-        glContext.uniform1f(uniformSurfaceModeLocation, value);
-        currentSurfaceMode = value;
-      }
-    };
-
-    let currentSurfaceClipEnabled = Number.NaN;
-    const applySurfaceClipUniforms = (
-      enabled: boolean,
-      inputs: SurfaceShaderInputs | null
-    ): void => {
-      if (
-        !uniformSurfaceClipEnabledLocation ||
-        !uniformSurfaceClipCenterLocation ||
-        !uniformSurfaceClipBasisEastLocation ||
-        !uniformSurfaceClipBasisNorthLocation
-      ) {
-        return;
-      }
-      const value = enabled ? 1 : 0;
-      if (value !== currentSurfaceClipEnabled) {
-        glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
-        currentSurfaceClipEnabled = value;
-      }
-      const clipCenter =
-        enabled && inputs ? inputs.clipCenter : { x: 0, y: 0, z: 0, w: 1 };
-      glContext.uniform4f(
-        uniformSurfaceClipCenterLocation,
-        clipCenter.x,
-        clipCenter.y,
-        clipCenter.z,
-        clipCenter.w
-      );
-      const clipBasisEast =
-        enabled && inputs ? inputs.clipBasisEast : { x: 0, y: 0, z: 0, w: 0 };
-      glContext.uniform4f(
-        uniformSurfaceClipBasisEastLocation,
-        clipBasisEast.x,
-        clipBasisEast.y,
-        clipBasisEast.z,
-        clipBasisEast.w
-      );
-      const clipBasisNorth =
-        enabled && inputs ? inputs.clipBasisNorth : { x: 0, y: 0, z: 0, w: 0 };
-      glContext.uniform4f(
-        uniformSurfaceClipBasisNorthLocation,
-        clipBasisNorth.x,
-        clipBasisNorth.y,
-        clipBasisNorth.z,
-        clipBasisNorth.w
-      );
-    };
-
-    /**
-     * Prepares quad data for a single sprite image before issuing the draw call.
-     * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image being drawn.
-     * @param {InternalSpriteImageState} imageEntry - Image state describing rendering parameters.
-     * @param {RegisteredImage} imageResource - GPU-backed image resource.
-     * @param {ImageCenterCache} originCenterCache - Cache for resolving origin references quickly.
-     * @returns {boolean} `true` when the sprite image is ready to draw; `false` when skipped.
-     */
-    let drawOrderCounter = 0;
-
-    const issueSpriteDraw = (
-      prepared: PreparedDrawSpriteImageParams<T>
-    ): void => {
-      const { screenToClip } = prepared;
-      applyScreenToClipUniforms(
-        screenToClip.scaleX,
-        screenToClip.scaleY,
-        screenToClip.offsetX,
-        screenToClip.offsetY
-      );
-
-      applySurfaceMode(prepared.useShaderSurface);
-
-      const surfaceInputs = prepared.surfaceShaderInputs;
-      if (prepared.useShaderSurface && surfaceInputs) {
-        if (uniformSurfaceDepthBiasLocation) {
-          glContext.uniform1f(
-            uniformSurfaceDepthBiasLocation,
-            surfaceInputs.depthBiasNdc
-          );
-        }
-        applySurfaceClipUniforms(
-          prepared.surfaceClipEnabled,
-          prepared.surfaceClipEnabled ? surfaceInputs : null
-        );
-      } else {
-        if (uniformSurfaceDepthBiasLocation) {
-          glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
-        }
-        applySurfaceClipUniforms(false, null);
-      }
-
-      if (uniformBillboardModeLocation) {
-        glContext.uniform1f(
-          uniformBillboardModeLocation,
-          prepared.useShaderBillboard ? 1 : 0
-        );
-      }
-      if (prepared.useShaderBillboard && prepared.billboardUniforms) {
-        const uniforms = prepared.billboardUniforms;
-        if (uniformBillboardCenterLocation) {
-          glContext.uniform2f(
-            uniformBillboardCenterLocation,
-            uniforms.center.x,
-            uniforms.center.y
-          );
-        }
-        if (uniformBillboardHalfSizeLocation) {
-          glContext.uniform2f(
-            uniformBillboardHalfSizeLocation,
-            uniforms.halfWidth,
-            uniforms.halfHeight
-          );
-        }
-        if (uniformBillboardAnchorLocation) {
-          glContext.uniform2f(
-            uniformBillboardAnchorLocation,
-            uniforms.anchor.x,
-            uniforms.anchor.y
-          );
-        }
-        if (uniformBillboardSinCosLocation) {
-          glContext.uniform2f(
-            uniformBillboardSinCosLocation,
-            uniforms.sin,
-            uniforms.cos
-          );
-        }
-      }
-
-      const texture = prepared.imageResource.texture;
-      if (!texture) {
+    // Prepare to create projection host
+    const projectionHost = createProjectionHostForMap(mapInstance);
+    try {
+      const clipContext = projectionHost.getClipContext();
+      // Without a clip context we cannot project to clip space; skip rendering.
+      if (!clipContext) {
         return;
       }
 
-      glContext.bufferSubData(glContext.ARRAY_BUFFER, 0, prepared.vertexData);
-      glContext.uniform1f(uniformOpacityLocation, prepared.opacity);
-      glContext.activeTexture(glContext.TEXTURE0);
-      glContext.bindTexture(glContext.TEXTURE_2D, texture);
-      glContext.drawArrays(glContext.TRIANGLES, 0, QUAD_VERTEX_COUNT);
-
-      prepared.imageEntry.surfaceShaderInputs = surfaceInputs ?? undefined;
-
-      if (prepared.hitTestCorners && prepared.hitTestCorners.length === 4) {
-        registerHitTestEntry(
-          prepared.spriteEntry,
-          prepared.imageEntry,
-          prepared.hitTestCorners as [
-            SpriteScreenPoint,
-            SpriteScreenPoint,
-            SpriteScreenPoint,
-            SpriteScreenPoint,
-          ],
-          drawOrderCounter
-        );
-      }
-
-      drawOrderCounter += 1;
-    };
-
-    // Render sprite images. The renderTargetEntries list is already filtered to visible items.
-    // Cache of sprite-specific reference origins (center pixel coordinates).
-    const originCenterCache: ImageCenterCache = new Map();
-
-    const sortedSubLayerBuckets =
-      buildSortedSubLayerBuckets(renderTargetEntries);
-
-    /**
-     * Renders every image within the provided sub-layer bucket after calculating depth.
-     * @param {RenderTargetEntry[]} bucket - Sprite/image pairs belonging to a single sub-layer.
-     */
-    const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
-      const calculationHost = createCalculationHostForMap<T>(mapInstance);
-
-      const itemsWithDepth = calculationHost.collectDepthSortedItems({
-        bucket,
-        images,
-        resolvedScaling,
-        clipContext,
-        baseMetersPerPixel,
-        spriteMinPixel,
-        spriteMaxPixel,
-        drawingBufferWidth,
-        drawingBufferHeight,
-        pixelRatio,
-        originCenterCache,
-        resolveSpriteMercator,
-      });
-
-      const preparedItems = calculationHost.prepareDrawSpriteImages(
-        itemsWithDepth,
-        {
-          originCenterCache,
-          images,
-          resolvedScaling,
-          baseMetersPerPixel,
-          spriteMinPixel,
-          spriteMaxPixel,
-          drawingBufferWidth,
-          drawingBufferHeight,
-          pixelRatio,
-          clipContext,
-          identityScaleX,
-          identityScaleY,
-          identityOffsetX,
-          identityOffsetY,
-          screenToClipScaleX,
-          screenToClipScaleY,
-          screenToClipOffsetX,
-          screenToClipOffsetY,
-          ensureHitTestCorners,
-          resolveSpriteMercator,
-        }
-      );
-
-      for (const prepared of preparedItems) {
-        issueSpriteDraw(prepared);
-      }
-    };
-
-    for (const [, bucket] of sortedSubLayerBuckets) {
-      // Process buckets in ascending sub-layer order so draw order respects configuration.
-      renderSortedBucket(bucket);
-    }
-
-    if (
-      showDebugBounds &&
-      debugProgram &&
-      debugVertexBuffer &&
-      debugUniformColorLocation &&
-      debugAttribPositionLocation !== -1
-    ) {
-      glContext.useProgram(debugProgram);
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
-      glContext.enableVertexAttribArray(debugAttribPositionLocation);
-      glContext.vertexAttribPointer(
-        debugAttribPositionLocation,
-        DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
-        glContext.FLOAT,
-        false,
-        DEBUG_OUTLINE_VERTEX_STRIDE,
-        0
-      );
+      // Enable blending and avoid depth-buffer interference.
+      glContext.enable(glContext.BLEND);
+      glContext.blendFunc(glContext.SRC_ALPHA, glContext.ONE_MINUS_SRC_ALPHA);
       glContext.disable(glContext.DEPTH_TEST);
       glContext.depthMask(false);
-      glContext.uniform4f(
-        debugUniformColorLocation,
-        DEBUG_OUTLINE_COLOR[0],
-        DEBUG_OUTLINE_COLOR[1],
-        DEBUG_OUTLINE_COLOR[2],
-        DEBUG_OUTLINE_COLOR[3]
+
+      glContext.useProgram(program);
+      glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+      glContext.enableVertexAttribArray(attribPositionLocation);
+      glContext.vertexAttribPointer(
+        attribPositionLocation,
+        POSITION_COMPONENT_COUNT,
+        glContext.FLOAT,
+        false,
+        VERTEX_STRIDE,
+        0
       );
-      if (
-        debugUniformScreenToClipScaleLocation &&
-        debugUniformScreenToClipOffsetLocation
-      ) {
-        glContext.uniform2f(
-          debugUniformScreenToClipScaleLocation,
-          screenToClipScaleX,
-          screenToClipScaleY
-        );
-        glContext.uniform2f(
-          debugUniformScreenToClipOffsetLocation,
-          screenToClipOffsetX,
-          screenToClipOffsetY
-        );
-      }
+      glContext.enableVertexAttribArray(attribUvLocation);
+      glContext.vertexAttribPointer(
+        attribUvLocation,
+        UV_COMPONENT_COUNT,
+        glContext.FLOAT,
+        false,
+        VERTEX_STRIDE,
+        UV_OFFSET
+      );
+      glContext.uniform1i(uniformTextureLocation, 0);
+      const screenToClipScaleLocation = uniformScreenToClipScaleLocation!;
+      const screenToClipOffsetLocation = uniformScreenToClipOffsetLocation!;
 
-      for (const entry of hitTestEntries) {
-        let writeOffset = 0;
-        for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
-          const corner = entry.corners[cornerIndex]!;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+      let currentScaleX = Number.NaN;
+      let currentScaleY = Number.NaN;
+      let currentOffsetX = Number.NaN;
+      let currentOffsetY = Number.NaN;
+      const applyScreenToClipUniforms = (
+        scaleX: number,
+        scaleY: number,
+        offsetX: number,
+        offsetY: number
+      ): void => {
+        if (
+          scaleX !== currentScaleX ||
+          scaleY !== currentScaleY ||
+          offsetX !== currentOffsetX ||
+          offsetY !== currentOffsetY
+        ) {
+          glContext.uniform2f(screenToClipScaleLocation, scaleX, scaleY);
+          glContext.uniform2f(screenToClipOffsetLocation, offsetX, offsetY);
+          currentScaleX = scaleX;
+          currentScaleY = scaleY;
+          currentOffsetX = offsetX;
+          currentOffsetY = offsetY;
         }
-        glContext.bufferSubData(
-          glContext.ARRAY_BUFFER,
-          0,
-          DEBUG_OUTLINE_VERTEX_SCRATCH
+      };
+
+      let currentSurfaceMode = Number.NaN;
+      const applySurfaceMode = (enabled: boolean): void => {
+        if (!uniformSurfaceModeLocation) {
+          return;
+        }
+        const value = enabled ? 1 : 0;
+        if (value !== currentSurfaceMode) {
+          glContext.uniform1f(uniformSurfaceModeLocation, value);
+          currentSurfaceMode = value;
+        }
+      };
+
+      let currentSurfaceClipEnabled = Number.NaN;
+      const applySurfaceClipUniforms = (
+        enabled: boolean,
+        inputs: SurfaceShaderInputs | null
+      ): void => {
+        if (
+          !uniformSurfaceClipEnabledLocation ||
+          !uniformSurfaceClipCenterLocation ||
+          !uniformSurfaceClipBasisEastLocation ||
+          !uniformSurfaceClipBasisNorthLocation
+        ) {
+          return;
+        }
+        const value = enabled ? 1 : 0;
+        if (value !== currentSurfaceClipEnabled) {
+          glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
+          currentSurfaceClipEnabled = value;
+        }
+        const clipCenter =
+          enabled && inputs ? inputs.clipCenter : { x: 0, y: 0, z: 0, w: 1 };
+        glContext.uniform4f(
+          uniformSurfaceClipCenterLocation,
+          clipCenter.x,
+          clipCenter.y,
+          clipCenter.z,
+          clipCenter.w
         );
-        glContext.drawArrays(
-          glContext.LINE_LOOP,
-          0,
-          DEBUG_OUTLINE_VERTEX_COUNT
+        const clipBasisEast =
+          enabled && inputs ? inputs.clipBasisEast : { x: 0, y: 0, z: 0, w: 0 };
+        glContext.uniform4f(
+          uniformSurfaceClipBasisEastLocation,
+          clipBasisEast.x,
+          clipBasisEast.y,
+          clipBasisEast.z,
+          clipBasisEast.w
         );
+        const clipBasisNorth =
+          enabled && inputs
+            ? inputs.clipBasisNorth
+            : { x: 0, y: 0, z: 0, w: 0 };
+        glContext.uniform4f(
+          uniformSurfaceClipBasisNorthLocation,
+          clipBasisNorth.x,
+          clipBasisNorth.y,
+          clipBasisNorth.z,
+          clipBasisNorth.w
+        );
+      };
+
+      /**
+       * Prepares quad data for a single sprite image before issuing the draw call.
+       * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image being drawn.
+       * @param {InternalSpriteImageState} imageEntry - Image state describing rendering parameters.
+       * @param {RegisteredImage} imageResource - GPU-backed image resource.
+       * @param {ImageCenterCache} originCenterCache - Cache for resolving origin references quickly.
+       * @returns {boolean} `true` when the sprite image is ready to draw; `false` when skipped.
+       */
+      let drawOrderCounter = 0;
+
+      const issueSpriteDraw = (
+        prepared: PreparedDrawSpriteImageParams<T>
+      ): void => {
+        const { screenToClip } = prepared;
+        applyScreenToClipUniforms(
+          screenToClip.scaleX,
+          screenToClip.scaleY,
+          screenToClip.offsetX,
+          screenToClip.offsetY
+        );
+
+        applySurfaceMode(prepared.useShaderSurface);
+
+        const surfaceInputs = prepared.surfaceShaderInputs;
+        if (prepared.useShaderSurface && surfaceInputs) {
+          if (uniformSurfaceDepthBiasLocation) {
+            glContext.uniform1f(
+              uniformSurfaceDepthBiasLocation,
+              surfaceInputs.depthBiasNdc
+            );
+          }
+          applySurfaceClipUniforms(
+            prepared.surfaceClipEnabled,
+            prepared.surfaceClipEnabled ? surfaceInputs : null
+          );
+        } else {
+          if (uniformSurfaceDepthBiasLocation) {
+            glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
+          }
+          applySurfaceClipUniforms(false, null);
+        }
+
+        if (uniformBillboardModeLocation) {
+          glContext.uniform1f(
+            uniformBillboardModeLocation,
+            prepared.useShaderBillboard ? 1 : 0
+          );
+        }
+        if (prepared.useShaderBillboard && prepared.billboardUniforms) {
+          const uniforms = prepared.billboardUniforms;
+          if (uniformBillboardCenterLocation) {
+            glContext.uniform2f(
+              uniformBillboardCenterLocation,
+              uniforms.center.x,
+              uniforms.center.y
+            );
+          }
+          if (uniformBillboardHalfSizeLocation) {
+            glContext.uniform2f(
+              uniformBillboardHalfSizeLocation,
+              uniforms.halfWidth,
+              uniforms.halfHeight
+            );
+          }
+          if (uniformBillboardAnchorLocation) {
+            glContext.uniform2f(
+              uniformBillboardAnchorLocation,
+              uniforms.anchor.x,
+              uniforms.anchor.y
+            );
+          }
+          if (uniformBillboardSinCosLocation) {
+            glContext.uniform2f(
+              uniformBillboardSinCosLocation,
+              uniforms.sin,
+              uniforms.cos
+            );
+          }
+        }
+
+        const texture = prepared.imageResource.texture;
+        if (!texture) {
+          return;
+        }
+
+        glContext.bufferSubData(glContext.ARRAY_BUFFER, 0, prepared.vertexData);
+        glContext.uniform1f(uniformOpacityLocation, prepared.opacity);
+        glContext.activeTexture(glContext.TEXTURE0);
+        glContext.bindTexture(glContext.TEXTURE_2D, texture);
+        glContext.drawArrays(glContext.TRIANGLES, 0, QUAD_VERTEX_COUNT);
+
+        prepared.imageEntry.surfaceShaderInputs = surfaceInputs ?? undefined;
+
+        if (prepared.hitTestCorners && prepared.hitTestCorners.length === 4) {
+          registerHitTestEntry(
+            prepared.spriteEntry,
+            prepared.imageEntry,
+            prepared.hitTestCorners as [
+              SpriteScreenPoint,
+              SpriteScreenPoint,
+              SpriteScreenPoint,
+              SpriteScreenPoint,
+            ],
+            drawOrderCounter
+          );
+        }
+
+        drawOrderCounter += 1;
+      };
+
+      // Render sprite images. The renderTargetEntries list is already filtered to visible items.
+      // Cache of sprite-specific reference origins (center pixel coordinates).
+      const originCenterCache: ImageCenterCache = new Map();
+
+      const sortedSubLayerBuckets =
+        buildSortedSubLayerBuckets(renderTargetEntries);
+
+      /**
+       * Renders every image within the provided sub-layer bucket after calculating depth.
+       * @param {RenderTargetEntry[]} bucket - Sprite/image pairs belonging to a single sub-layer.
+       */
+      const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
+        const calculationHost = createCalculationHostForMap<T>(mapInstance);
+        try {
+          const itemsWithDepth = calculationHost.collectDepthSortedItems({
+            bucket,
+            images,
+            resolvedScaling,
+            clipContext,
+            baseMetersPerPixel,
+            spriteMinPixel,
+            spriteMaxPixel,
+            drawingBufferWidth,
+            drawingBufferHeight,
+            pixelRatio,
+            originCenterCache,
+            resolveSpriteMercator,
+          });
+
+          const preparedItems = calculationHost.prepareDrawSpriteImages(
+            itemsWithDepth,
+            {
+              originCenterCache,
+              images,
+              resolvedScaling,
+              baseMetersPerPixel,
+              spriteMinPixel,
+              spriteMaxPixel,
+              drawingBufferWidth,
+              drawingBufferHeight,
+              pixelRatio,
+              clipContext,
+              identityScaleX,
+              identityScaleY,
+              identityOffsetX,
+              identityOffsetY,
+              screenToClipScaleX,
+              screenToClipScaleY,
+              screenToClipOffsetX,
+              screenToClipOffsetY,
+              ensureHitTestCorners,
+              resolveSpriteMercator,
+            }
+          );
+
+          for (const prepared of preparedItems) {
+            issueSpriteDraw(prepared);
+          }
+        } finally {
+          calculationHost.release();
+        }
+      };
+
+      for (const [, bucket] of sortedSubLayerBuckets) {
+        // Process buckets in ascending sub-layer order so draw order respects configuration.
+        renderSortedBucket(bucket);
       }
 
-      glContext.depthMask(true);
-      glContext.enable(glContext.DEPTH_TEST);
-      glContext.disableVertexAttribArray(debugAttribPositionLocation);
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+      if (
+        showDebugBounds &&
+        debugProgram &&
+        debugVertexBuffer &&
+        debugUniformColorLocation &&
+        debugAttribPositionLocation !== -1
+      ) {
+        glContext.useProgram(debugProgram);
+        glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
+        glContext.enableVertexAttribArray(debugAttribPositionLocation);
+        glContext.vertexAttribPointer(
+          debugAttribPositionLocation,
+          DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
+          glContext.FLOAT,
+          false,
+          DEBUG_OUTLINE_VERTEX_STRIDE,
+          0
+        );
+        glContext.disable(glContext.DEPTH_TEST);
+        glContext.depthMask(false);
+        glContext.uniform4f(
+          debugUniformColorLocation,
+          DEBUG_OUTLINE_COLOR[0],
+          DEBUG_OUTLINE_COLOR[1],
+          DEBUG_OUTLINE_COLOR[2],
+          DEBUG_OUTLINE_COLOR[3]
+        );
+        if (
+          debugUniformScreenToClipScaleLocation &&
+          debugUniformScreenToClipOffsetLocation
+        ) {
+          glContext.uniform2f(
+            debugUniformScreenToClipScaleLocation,
+            screenToClipScaleX,
+            screenToClipScaleY
+          );
+          glContext.uniform2f(
+            debugUniformScreenToClipOffsetLocation,
+            screenToClipOffsetX,
+            screenToClipOffsetY
+          );
+        }
+
+        for (const entry of hitTestEntries) {
+          let writeOffset = 0;
+          for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
+            const corner = entry.corners[cornerIndex]!;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+          }
+          glContext.bufferSubData(
+            glContext.ARRAY_BUFFER,
+            0,
+            DEBUG_OUTLINE_VERTEX_SCRATCH
+          );
+          glContext.drawArrays(
+            glContext.LINE_LOOP,
+            0,
+            DEBUG_OUTLINE_VERTEX_COUNT
+          );
+        }
+
+        glContext.depthMask(true);
+        glContext.enable(glContext.DEPTH_TEST);
+        glContext.disableVertexAttribArray(debugAttribPositionLocation);
+        glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+      }
+    } finally {
+      projectionHost.release();
     }
 
     glContext.depthMask(true);
@@ -3963,15 +3973,18 @@ export const createSpriteLayer = <T = any>(
     }
 
     const projectionHost = createProjectionHostForMap(map);
-
-    const isAdded = addSpriteInternal(projectionHost, spriteId, init);
-    if (isAdded) {
-      // Rebuild render target entries.
-      ensureRenderTargetEntries();
-      // Request a redraw so the new sprite appears immediately.
-      scheduleRender();
+    try {
+      const isAdded = addSpriteInternal(projectionHost, spriteId, init);
+      if (isAdded) {
+        // Rebuild render target entries.
+        ensureRenderTargetEntries();
+        // Request a redraw so the new sprite appears immediately.
+        scheduleRender();
+      }
+      return isAdded;
+    } finally {
+      projectionHost.release();
     }
-    return isAdded;
   };
 
   /**
@@ -3985,22 +3998,25 @@ export const createSpriteLayer = <T = any>(
     }
 
     const projectionHost = createProjectionHostForMap(map);
-
-    let addedCount = 0;
-    for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
-      collection
-    )) {
-      if (addSpriteInternal(projectionHost, spriteId, spriteInit)) {
-        addedCount++;
+    try {
+      let addedCount = 0;
+      for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
+        collection
+      )) {
+        if (addSpriteInternal(projectionHost, spriteId, spriteInit)) {
+          addedCount++;
+        }
       }
+      if (addedCount > 0) {
+        // Rebuild render target entries.
+        ensureRenderTargetEntries();
+        // Request a redraw so the new sprite appears immediately.
+        scheduleRender();
+      }
+      return addedCount;
+    } finally {
+      projectionHost.release();
     }
-    if (addedCount > 0) {
-      // Rebuild render target entries.
-      ensureRenderTargetEntries();
-      // Request a redraw so the new sprite appears immediately.
-      scheduleRender();
-    }
-    return addedCount;
   };
 
   /**
@@ -4230,27 +4246,30 @@ export const createSpriteLayer = <T = any>(
     }
 
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      // Insert the image definition.
+      const result: SpriteImageOperationInternalResult = { isUpdated: false };
+      addSpriteImageInternal(
+        projectionHost,
+        sprite,
+        subLayer,
+        order,
+        imageInit,
+        result
+      );
+      if (!result.isUpdated) {
+        return false;
+      }
 
-    // Insert the image definition.
-    const result: SpriteImageOperationInternalResult = { isUpdated: false };
-    addSpriteImageInternal(
-      projectionHost,
-      sprite,
-      subLayer,
-      order,
-      imageInit,
-      result
-    );
-    if (!result.isUpdated) {
-      return false;
+      // Refresh render targets.
+      ensureRenderTargetEntries();
+      // Request a redraw so the new image appears immediately.
+      scheduleRender();
+
+      return true;
+    } finally {
+      projectionHost.release();
     }
-
-    // Refresh render targets.
-    ensureRenderTargetEntries();
-    // Request a redraw so the new image appears immediately.
-    scheduleRender();
-
-    return true;
   };
 
   /**
@@ -4413,33 +4432,36 @@ export const createSpriteLayer = <T = any>(
     }
 
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      // Fail if the sprite cannot be found.
+      const sprite = sprites.get(spriteId);
+      if (!sprite) {
+        return false;
+      }
 
-    // Fail if the sprite cannot be found.
-    const sprite = sprites.get(spriteId);
-    if (!sprite) {
-      return false;
+      // Apply the image update.
+      const result: SpriteImageOperationInternalResult = { isUpdated: false };
+      updateSpriteImageInternal(
+        projectionHost,
+        sprite,
+        subLayer,
+        order,
+        imageUpdate,
+        result
+      );
+      if (!result.isUpdated) {
+        return false;
+      }
+
+      // Refresh render targets.
+      ensureRenderTargetEntries();
+      // Request a redraw so the updated image is displayed immediately.
+      scheduleRender();
+
+      return true;
+    } finally {
+      projectionHost.release();
     }
-
-    // Apply the image update.
-    const result: SpriteImageOperationInternalResult = { isUpdated: false };
-    updateSpriteImageInternal(
-      projectionHost,
-      sprite,
-      subLayer,
-      order,
-      imageUpdate,
-      result
-    );
-    if (!result.isUpdated) {
-      return false;
-    }
-
-    // Refresh render targets.
-    ensureRenderTargetEntries();
-    // Request a redraw so the updated image is displayed immediately.
-    scheduleRender();
-
-    return true;
   };
 
   /**
@@ -4690,25 +4712,28 @@ export const createSpriteLayer = <T = any>(
     }
 
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      // Perform the update.
+      const result = updateSpriteInternal(projectionHost, spriteId, update);
 
-    // Perform the update.
-    const result = updateSpriteInternal(projectionHost, spriteId, update);
-
-    switch (result) {
-      case 'notfound':
-        // Sprite missing; report no change to the caller.
-        return false;
-      case 'ignored':
-        // Update produced no state difference, so nothing to propagate.
-        return false;
-      case 'updated':
-        // State changed but no redraw is required (e.g., metadata change).
-        return true;
-      case 'isRequiredRender':
-        // State changed in a way that affects rendering; refresh buffers and request repaint.
-        ensureRenderTargetEntries();
-        scheduleRender();
-        return true;
+      switch (result) {
+        case 'notfound':
+          // Sprite missing; report no change to the caller.
+          return false;
+        case 'ignored':
+          // Update produced no state difference, so nothing to propagate.
+          return false;
+        case 'updated':
+          // State changed but no redraw is required (e.g., metadata change).
+          return true;
+        case 'isRequiredRender':
+          // State changed in a way that affects rendering; refresh buffers and request repaint.
+          ensureRenderTargetEntries();
+          scheduleRender();
+          return true;
+      }
+    } finally {
+      projectionHost.release();
     }
   };
   /**
@@ -4731,146 +4756,149 @@ export const createSpriteLayer = <T = any>(
     }
 
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      let changedCount = 0;
+      let isRequiredRender = false;
 
-    let changedCount = 0;
-    let isRequiredRender = false;
+      // Reuse mutable helpers for efficiency.
+      let currentSprite: InternalSpriteCurrentState<T> = undefined!;
+      let didMutateImages = false;
+      const operationResult: SpriteImageOperationInternalResult = {
+        isUpdated: false,
+      };
+      const updateObject: SpriteUpdaterEntry<T> = {
+        isEnabled: undefined,
+        location: undefined,
+        interpolation: undefined,
+        tag: undefined,
+        getImageIndexMap: () => {
+          const map = new Map<number, Set<number>>();
+          currentSprite.images.forEach((inner, subLayer) => {
+            map.set(subLayer, new Set(inner.keys()));
+          });
+          return map;
+        },
+        addImage: (subLayer, order, imageInit) => {
+          const added = addSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageInit,
+            operationResult
+          );
+          if (added) {
+            didMutateImages = true;
+          }
+          return added;
+        },
+        updateImage: (subLayer, order, imageUpdate) => {
+          const updated = updateSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageUpdate,
+            operationResult
+          );
+          if (updated) {
+            didMutateImages = true;
+          }
+          return updated;
+        },
+        removeImage: (subLayer, order) => {
+          const removed = removeSpriteImageInternal(
+            currentSprite,
+            subLayer,
+            order,
+            operationResult
+          );
+          if (removed) {
+            didMutateImages = true;
+          }
+          return removed;
+        },
+      } as SpriteUpdaterEntry<T>;
 
-    // Reuse mutable helpers for efficiency.
-    let currentSprite: InternalSpriteCurrentState<T> = undefined!;
-    let didMutateImages = false;
-    const operationResult: SpriteImageOperationInternalResult = {
-      isUpdated: false,
-    };
-    const updateObject: SpriteUpdaterEntry<T> = {
-      isEnabled: undefined,
-      location: undefined,
-      interpolation: undefined,
-      tag: undefined,
-      getImageIndexMap: () => {
-        const map = new Map<number, Set<number>>();
-        currentSprite.images.forEach((inner, subLayer) => {
-          map.set(subLayer, new Set(inner.keys()));
-        });
-        return map;
-      },
-      addImage: (subLayer, order, imageInit) => {
-        const added = addSpriteImageInternal(
-          projectionHost,
-          currentSprite,
-          subLayer,
-          order,
-          imageInit,
-          operationResult
-        );
-        if (added) {
-          didMutateImages = true;
-        }
-        return added;
-      },
-      updateImage: (subLayer, order, imageUpdate) => {
-        const updated = updateSpriteImageInternal(
-          projectionHost,
-          currentSprite,
-          subLayer,
-          order,
-          imageUpdate,
-          operationResult
-        );
-        if (updated) {
-          didMutateImages = true;
-        }
-        return updated;
-      },
-      removeImage: (subLayer, order) => {
-        const removed = removeSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          operationResult
-        );
-        if (removed) {
-          didMutateImages = true;
-        }
-        return removed;
-      },
-    } as SpriteUpdaterEntry<T>;
+      for (const sourceItem of sourceItems) {
+        const spriteId = sourceItem.spriteId;
+        const sprite = sprites.get(spriteId);
 
-    for (const sourceItem of sourceItems) {
-      const spriteId = sourceItem.spriteId;
-      const sprite = sprites.get(spriteId);
-
-      if (!sprite) {
-        const init = mutator.add(sourceItem);
-        if (!init) {
+        if (!sprite) {
+          const init = mutator.add(sourceItem);
+          if (!init) {
+            continue;
+          }
+          if (addSpriteInternal(projectionHost, spriteId, init)) {
+            changedCount++;
+            isRequiredRender = true;
+          }
           continue;
         }
-        if (addSpriteInternal(projectionHost, spriteId, init)) {
-          changedCount++;
-          isRequiredRender = true;
-        }
-        continue;
-      }
 
-      currentSprite = sprite;
-      operationResult.isUpdated = false;
-      didMutateImages = false;
+        currentSprite = sprite;
+        operationResult.isUpdated = false;
+        didMutateImages = false;
 
-      const decision = mutator.modify(
-        sourceItem,
-        sprite as SpriteCurrentState<T>,
-        updateObject
-      );
-
-      if (decision === 'remove') {
-        if (removeSpriteInternal(spriteId)) {
-          changedCount++;
-          isRequiredRender = true;
-        }
-      } else {
-        const updateResult = updateSpriteInternal(
-          projectionHost,
-          spriteId,
+        const decision = mutator.modify(
+          sourceItem,
+          sprite as SpriteCurrentState<T>,
           updateObject
         );
-        let spriteChanged = false;
 
-        switch (updateResult) {
-          case 'updated':
-            spriteChanged = true;
-            break;
-          case 'isRequiredRender':
+        if (decision === 'remove') {
+          if (removeSpriteInternal(spriteId)) {
+            changedCount++;
+            isRequiredRender = true;
+          }
+        } else {
+          const updateResult = updateSpriteInternal(
+            projectionHost,
+            spriteId,
+            updateObject
+          );
+          let spriteChanged = false;
+
+          switch (updateResult) {
+            case 'updated':
+              spriteChanged = true;
+              break;
+            case 'isRequiredRender':
+              spriteChanged = true;
+              isRequiredRender = true;
+              break;
+          }
+
+          if (didMutateImages) {
             spriteChanged = true;
             isRequiredRender = true;
-            break;
+          }
+
+          if (spriteChanged) {
+            changedCount++;
+          }
         }
 
-        if (didMutateImages) {
-          spriteChanged = true;
-          isRequiredRender = true;
-        }
-
-        if (spriteChanged) {
-          changedCount++;
-        }
+        // Reset reusable fields on the shared update object.
+        updateObject.isEnabled = undefined;
+        updateObject.location = undefined;
+        updateObject.interpolation = undefined;
+        updateObject.tag = undefined;
+        operationResult.isUpdated = false;
+        didMutateImages = false;
       }
 
-      // Reset reusable fields on the shared update object.
-      updateObject.isEnabled = undefined;
-      updateObject.location = undefined;
-      updateObject.interpolation = undefined;
-      updateObject.tag = undefined;
-      operationResult.isUpdated = false;
-      didMutateImages = false;
-    }
+      // Request rendering
+      if (isRequiredRender) {
+        // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
+        ensureRenderTargetEntries();
+        scheduleRender();
+      }
 
-    // Request rendering
-    if (isRequiredRender) {
-      // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
-      ensureRenderTargetEntries();
-      scheduleRender();
+      return changedCount;
+    } finally {
+      projectionHost.release();
     }
-
-    return changedCount;
   };
   /**
    * Iterates over every sprite and attempts to update it via the provided callback.
@@ -4888,96 +4916,99 @@ export const createSpriteLayer = <T = any>(
     }
 
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      let updatedCount = 0;
+      let isRequiredRender = false;
 
-    let updatedCount = 0;
-    let isRequiredRender = false;
+      // Reuse allocation-heavy objects.
+      let currentSprite: InternalSpriteCurrentState<T> = undefined!;
+      const operationResult: SpriteImageOperationInternalResult = {
+        isUpdated: false,
+      };
+      const updateObject: SpriteUpdaterEntry<T> = {
+        getImageIndexMap: () => {
+          const map = new Map<number, Set<number>>();
+          currentSprite.images.forEach((inner, subLayer) => {
+            map.set(subLayer, new Set(inner.keys()));
+          });
+          return map;
+        },
+        addImage: (subLayer, order, imageInit) =>
+          addSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageInit,
+            operationResult
+          ),
+        updateImage: (subLayer, order, imageUpdate) =>
+          updateSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageUpdate,
+            operationResult
+          ),
+        removeImage: (subLayer, order) =>
+          removeSpriteImageInternal(
+            currentSprite,
+            subLayer,
+            order,
+            operationResult
+          ),
+      } as SpriteUpdaterEntry<T>;
 
-    // Reuse allocation-heavy objects.
-    let currentSprite: InternalSpriteCurrentState<T> = undefined!;
-    const operationResult: SpriteImageOperationInternalResult = {
-      isUpdated: false,
-    };
-    const updateObject: SpriteUpdaterEntry<T> = {
-      getImageIndexMap: () => {
-        const map = new Map<number, Set<number>>();
-        currentSprite.images.forEach((inner, subLayer) => {
-          map.set(subLayer, new Set(inner.keys()));
-        });
-        return map;
-      },
-      addImage: (subLayer, order, imageInit) =>
-        addSpriteImageInternal(
+      // Process every sprite.
+      sprites.forEach((sprite) => {
+        currentSprite = sprite;
+
+        // Invoke the user-supplied updater to populate updateObject.
+        updater(sprite as SpriteCurrentState<T>, updateObject);
+
+        // Apply the update.
+        const result = updateSpriteInternal(
           projectionHost,
-          currentSprite,
-          subLayer,
-          order,
-          imageInit,
-          operationResult
-        ),
-      updateImage: (subLayer, order, imageUpdate) =>
-        updateSpriteImageInternal(
-          projectionHost,
-          currentSprite,
-          subLayer,
-          order,
-          imageUpdate,
-          operationResult
-        ),
-      removeImage: (subLayer, order) =>
-        removeSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          operationResult
-        ),
-    } as SpriteUpdaterEntry<T>;
+          sprite.spriteId,
+          updateObject
+        );
 
-    // Process every sprite.
-    sprites.forEach((sprite) => {
-      currentSprite = sprite;
+        switch (result) {
+          case 'notfound':
+            // Sprite vanished during iteration; skip it.
+            break;
+          case 'ignored':
+            // Updater made no net changes.
+            break;
+          case 'updated':
+            updatedCount++;
+            break;
+          case 'isRequiredRender':
+            // Changes require a redraw after iteration completes.
+            isRequiredRender = true;
+            updatedCount++;
+            break;
+        }
 
-      // Invoke the user-supplied updater to populate updateObject.
-      updater(sprite as SpriteCurrentState<T>, updateObject);
+        // Reset reusable fields on the shared update object.
+        updateObject.isEnabled = undefined;
+        updateObject.location = undefined;
+        updateObject.interpolation = undefined;
+        updateObject.tag = undefined;
+      });
 
-      // Apply the update.
-      const result = updateSpriteInternal(
-        projectionHost,
-        sprite.spriteId,
-        updateObject
-      );
-
-      switch (result) {
-        case 'notfound':
-          // Sprite vanished during iteration; skip it.
-          break;
-        case 'ignored':
-          // Updater made no net changes.
-          break;
-        case 'updated':
-          updatedCount++;
-          break;
-        case 'isRequiredRender':
-          // Changes require a redraw after iteration completes.
-          isRequiredRender = true;
-          updatedCount++;
-          break;
+      // Request rendering if any sprite or image changed.
+      if (isRequiredRender || operationResult.isUpdated) {
+        // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
+        ensureRenderTargetEntries();
+        scheduleRender();
       }
 
-      // Reset reusable fields on the shared update object.
-      updateObject.isEnabled = undefined;
-      updateObject.location = undefined;
-      updateObject.interpolation = undefined;
-      updateObject.tag = undefined;
-    });
-
-    // Request rendering if any sprite or image changed.
-    if (isRequiredRender || operationResult.isUpdated) {
-      // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
-      ensureRenderTargetEntries();
-      scheduleRender();
+      return updatedCount;
+    } finally {
+      projectionHost.release();
     }
-
-    return updatedCount;
   };
 
   const setHitTestEnabled = (enabled: boolean) => {
@@ -5000,10 +5031,13 @@ export const createSpriteLayer = <T = any>(
     }
 
     const projectionHost = createProjectionHostForMap(map);
-
-    sprites.forEach((sprite) => {
-      refreshSpriteHitTestBounds(projectionHost, sprite);
-    });
+    try {
+      sprites.forEach((sprite) => {
+        refreshSpriteHitTestBounds(projectionHost, sprite);
+      });
+    } finally {
+      projectionHost.release();
+    }
   };
 
   /**

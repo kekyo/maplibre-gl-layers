@@ -214,7 +214,7 @@ export interface PreparedDrawSpriteImageParams<T> {
  * Abstraction that render calculations.
  * @param TTag Tag type.
  */
-export interface RenderCalculationHost<TTag> {
+export interface RenderCalculationHost<TTag> extends Releaseable {
   readonly collectDepthSortedItems: (
     inputs: CollectDepthSortedItemsInputs<TTag>
   ) => DepthSortedItem<TTag>[];

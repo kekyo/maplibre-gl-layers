@@ -1335,6 +1335,7 @@ export const createMapLibreCalculationHost = <TTag>(
       collectDepthSortedItemsInternal(projectionHost, inputs),
     prepareDrawSpriteImages: (items, inputs) =>
       prepareDrawSpriteImagesInternal(projectionHost, items, inputs),
+    release: projectionHost.release,
   };
 };
 
@@ -1353,6 +1354,7 @@ export const createCalculationHost = <TTag>(
       collectDepthSortedItemsInternal(projectionHost, inputs),
     prepareDrawSpriteImages: (items, inputs) =>
       prepareDrawSpriteImagesInternal(projectionHost, items, inputs),
+    release: projectionHost.release,
   };
 };
 
@@ -1371,5 +1373,6 @@ export const createWasmCalculationHost = <TTag>(
       collectDepthSortedItemsInternal(projectionHost, inputs),
     prepareDrawSpriteImages: (items, inputs) =>
       prepareDrawSpriteImagesInternal(projectionHost, items, inputs),
+    release: projectionHost.release,
   };
 };
