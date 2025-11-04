@@ -30,12 +30,21 @@ type WasmProject = (
   outPtr: number
 ) => void;
 
+type WasmUnproject = (
+  x: number,
+  y: number,
+  contextPtr: number,
+  outPtr: number
+) => void;
+
 interface RawProjectionWasmExports {
   readonly memory?: WebAssembly.Memory;
   readonly _fromLngLat?: WasmFromLngLat;
   readonly fromLngLat?: WasmFromLngLat;
   readonly _project?: WasmProject;
   readonly project?: WasmProject;
+  readonly _unproject?: WasmUnproject;
+  readonly unproject?: WasmUnproject;
   readonly _malloc?: (size: number) => number;
   readonly malloc?: (size: number) => number;
   readonly _free?: (ptr: number) => void;
@@ -47,6 +56,7 @@ interface ResolvedProjectionWasm {
   readonly memory: WebAssembly.Memory;
   readonly fromLngLat: WasmFromLngLat;
   readonly project: WasmProject;
+  readonly unproject: WasmUnproject;
   readonly malloc: (size: number) => number;
   readonly free: (ptr: number) => void;
 }
@@ -137,6 +147,9 @@ const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
   const project =
     (exports._project as WasmProject | undefined) ??
     (exports.project as WasmProject | undefined);
+  const unproject =
+    (exports._unproject as WasmUnproject | undefined) ??
+    (exports.unproject as WasmUnproject | undefined);
   const malloc =
     (exports._malloc as ((size: number) => number) | undefined) ??
     (exports.malloc as ((size: number) => number) | undefined);
@@ -144,7 +157,7 @@ const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
     (exports._free as ((ptr: number) => void) | undefined) ??
     (exports.free as ((ptr: number) => void) | undefined);
 
-  if (!memory || !fromLngLat || !project || !malloc || !free) {
+  if (!memory || !fromLngLat || !project || !unproject || !malloc || !free) {
     throw new Error('Projection host WASM exports are incomplete.');
   }
 
@@ -152,6 +165,7 @@ const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
     memory,
     fromLngLat,
     project,
+    unproject,
     malloc,
     free,
   };
@@ -320,6 +334,69 @@ const createProject = (
   return project;
 };
 
+//////////////////////////////////////////////////////////////////////////////////////
+
+const WASM_Unproject_CONTEXT_ELEMENT_COUNT = 1 + 16;
+const WASM_Unproject_RESULT_ELEMENT_COUNT = 2;
+
+/**
+ * Create `unproject` delegator.
+ * @param wasm Wasm hosted reference.
+ * @param preparedState Prepared projection state.
+ * @returns unproject function object.
+ */
+const createUnproject = (
+  wasm: ResolvedProjectionWasm,
+  preparedState: PreparedProjectionState
+) => {
+  // Allocate a context buffer.
+  const contextHolder = createTypedBuffer(
+    wasm,
+    Float64Array,
+    WASM_Unproject_CONTEXT_ELEMENT_COUNT
+  );
+
+  // Store context data into the buffer.
+  (() => {
+    const { buffer: context } = contextHolder.prepare();
+    context[0] = preparedState.worldSize;
+    for (let index = 0; index < 16; index++) {
+      context[index + 1] = preparedState.pixelMatrixInverse?.[index] ?? 0;
+    }
+  })();
+
+  // Allocate a result buffer.
+  const resultHolder = createTypedBuffer(
+    wasm,
+    Float64Array,
+    WASM_Unproject_RESULT_ELEMENT_COUNT
+  );
+
+  // `unproject` delegation body
+  const unproject = (point: Readonly<SpritePoint>): SpriteLocation | null => {
+    const { ptr: contextPtr } = contextHolder.prepare();
+    const { ptr: resultPtr, buffer: result } = resultHolder.prepare();
+
+    wasm.unproject(point.x, point.y, contextPtr, resultPtr);
+
+    const lng = result[0]!;
+    const lat = result[1]!;
+
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+      return null;
+    }
+
+    return { lng, lat };
+  };
+
+  unproject.release = () => {
+    contextHolder.release();
+    resultHolder.release();
+  };
+
+  return unproject;
+};
+
 // TODO: Other ProjectionHost members
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -360,8 +437,8 @@ export const createWasmProjectionHost = (
     );
   }
 
-  // TODO: Fallback pure implementation, finally remove this.
-  const fallbackHost = createProjectionHost(params);
+  // TODO: Base (will be overrided) pure implementation, finally remove this.
+  const baseHost = createProjectionHost(params);
 
   // Prepare parameters.
   const preparedState = prepareProjectionState(params);
@@ -374,7 +451,8 @@ export const createWasmProjectionHost = (
   // Member: project
   const project = createProject(projectionWasmResolved, preparedState);
 
-  // TODO: Other ProjectionHost members
+  // Member: unproject
+  const unproject = createUnproject(projectionWasmResolved, preparedState);
 
   //----------------------------------------------------------
 
@@ -382,13 +460,15 @@ export const createWasmProjectionHost = (
   const release = () => {
     fromLngLat.release();
     project.release();
-    fallbackHost.release();
+    unproject.release();
+    baseHost.release();
   };
 
   return {
-    ...fallbackHost,
+    ...baseHost,
     fromLngLat, // Overrided
     project, // Overrided
+    unproject, // Overrided
     release,
   };
 };

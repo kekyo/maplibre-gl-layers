@@ -47,6 +47,34 @@ inline double mercatorZfromAltitude(double altitude, double latDeg) {
   return altitude / circumference;
 }
 
+inline double lngFromMercatorX(double x) {
+  return x * 360.0 - 180.0;
+}
+
+inline double latFromMercatorY(double y) {
+  const double y2 = 180.0 - y * 360.0;
+  return (360.0 / PI) * std::atan(std::exp((y2 * PI) / 180.0)) - 90.0;
+}
+
+inline void multiplyMatrixAndVector(const double* matrix,
+                                    double x,
+                                    double y,
+                                    double z,
+                                    double w,
+                                    double& outX,
+                                    double& outY,
+                                    double& outZ,
+                                    double& outW) {
+  outX =
+      matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12] * w;
+  outY =
+      matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13] * w;
+  outZ =
+      matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14] * w;
+  outW =
+      matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15] * w;
+}
+
 }  // namespace
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -139,6 +167,100 @@ EMSCRIPTEN_KEEPALIVE void project(double lng,
   out[0] = projectedX;
   out[1] = projectedY;
   out[2] = clipW;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+EMSCRIPTEN_KEEPALIVE void unproject(double pointX,
+                                    double pointY,
+                                    const double* context,
+                                    double* out) {
+  if (context == nullptr || out == nullptr) {
+    return;
+  }
+
+  const double worldSize = context[0];
+  const double* matrix = context + 1;
+
+  if (!std::isfinite(worldSize) || worldSize <= 0.0) {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    out[0] = nan;
+    out[1] = nan;
+    return;
+  }
+
+  const double finiteX = toFiniteOr(pointX, 0.0);
+  const double finiteY = toFiniteOr(pointY, 0.0);
+
+  double coord0X = 0.0, coord0Y = 0.0, coord0Z = 0.0, coord0W = 0.0;
+  multiplyMatrixAndVector(
+      matrix, finiteX, finiteY, 0.0, 1.0, coord0X, coord0Y, coord0Z, coord0W);
+
+  double coord1X = 0.0, coord1Y = 0.0, coord1Z = 0.0, coord1W = 0.0;
+  multiplyMatrixAndVector(
+      matrix, finiteX, finiteY, 1.0, 1.0, coord1X, coord1Y, coord1Z, coord1W);
+
+  if (!std::isfinite(coord0W) || !std::isfinite(coord1W) || coord0W == 0.0 ||
+      coord1W == 0.0) {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    out[0] = nan;
+    out[1] = nan;
+    return;
+  }
+
+  const double world0X = coord0X / coord0W;
+  const double world0Y = coord0Y / coord0W;
+  const double world0Z = coord0Z / coord0W;
+  const double world1X = coord1X / coord1W;
+  const double world1Y = coord1Y / coord1W;
+  const double world1Z = coord1Z / coord1W;
+
+  if (!std::isfinite(world0X) || !std::isfinite(world0Y) ||
+      !std::isfinite(world0Z) || !std::isfinite(world1X) ||
+      !std::isfinite(world1Y) || !std::isfinite(world1Z)) {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    out[0] = nan;
+    out[1] = nan;
+    return;
+  }
+
+  const double denominator = world1Z - world0Z;
+  const double t =
+      denominator == 0.0 ? 0.0 : (0.0 - world0Z) / denominator;
+
+  const double worldX = world0X + (world1X - world0X) * t;
+  const double worldY = world0Y + (world1Y - world0Y) * t;
+
+  if (!std::isfinite(worldX) || !std::isfinite(worldY)) {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    out[0] = nan;
+    out[1] = nan;
+    return;
+  }
+
+  const double mercatorX = worldX / worldSize;
+  const double mercatorY = worldY / worldSize;
+
+  if (!std::isfinite(mercatorX) || !std::isfinite(mercatorY)) {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    out[0] = nan;
+    out[1] = nan;
+    return;
+  }
+
+  const double lng = lngFromMercatorX(mercatorX);
+  const double lat = clamp(
+      latFromMercatorY(mercatorY), -MAX_MERCATOR_LATITUDE, MAX_MERCATOR_LATITUDE);
+
+  if (!std::isfinite(lng) || !std::isfinite(lat)) {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    out[0] = nan;
+    out[1] = nan;
+    return;
+  }
+
+  out[0] = lng;
+  out[1] = lat;
 }
 
 }  // extern "C"
