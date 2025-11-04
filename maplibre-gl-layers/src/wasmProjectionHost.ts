@@ -14,9 +14,6 @@ import type { SpriteLocation } from './types';
 //////////////////////////////////////////////////////////////////////////////////////
 
 const WASM_FromLngLat_RESULT_ELEMENT_COUNT = 3;
-const WASM_FromLngLat_RESULT_BYTES =
-  Float64Array.BYTES_PER_ELEMENT * WASM_FromLngLat_RESULT_ELEMENT_COUNT;
-
 type WasmFromLngLat = (
   lng: number,
   lat: number,
@@ -146,8 +143,53 @@ const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-//const toFiniteOr = (value: number | undefined, fallback: number): number =>
-//  Number.isFinite(value) ? (value as number) : fallback;
+interface BufferHolder<TArray extends ArrayBufferView> {
+  readonly prepare: () => { ptr: number; buffer: TArray };
+  readonly release: () => void;
+}
+
+type TypedArrayConstructor<TArray extends ArrayBufferView> = {
+  readonly BYTES_PER_ELEMENT: number;
+  new (buffer: ArrayBuffer, byteOffset: number, length: number): TArray;
+};
+
+const createTypedBuffer = <TArray extends ArrayBufferView>(
+  wasm: ResolvedProjectionWasm,
+  ArrayType: TypedArrayConstructor<TArray>,
+  elementCount: number
+): BufferHolder<TArray> => {
+  const byteLength = elementCount * ArrayType.BYTES_PER_ELEMENT;
+  let ptr = wasm.malloc(byteLength);
+  let buffer: TArray | null = new ArrayType(
+    wasm.memory.buffer,
+    ptr,
+    elementCount
+  );
+  const prepare = () => {
+    if (ptr === 0) {
+      throw new Error('Buffer already freed.');
+    }
+    if (!buffer) {
+      buffer = new ArrayType(wasm.memory.buffer, ptr, elementCount);
+    } else if (buffer.buffer !== wasm.memory.buffer) {
+      buffer = new ArrayType(wasm.memory.buffer, ptr, elementCount);
+    }
+    return { ptr, buffer: buffer! };
+  };
+  const release = () => {
+    if (ptr !== 0) {
+      wasm.free(ptr);
+      ptr = 0;
+      buffer = null;
+    }
+  };
+  return {
+    prepare,
+    release,
+  };
+};
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Create `fromLngLat` delegator.
@@ -155,10 +197,10 @@ const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
  * @returns fromLngLat function object.
  */
 const createFromLngLat = (wasm: ResolvedProjectionWasm) => {
-  let resultBuffer = wasm.malloc(WASM_FromLngLat_RESULT_BYTES);
-  let results = new Float64Array(
-    wasm.memory.buffer,
-    resultBuffer,
+  // Create a buffer.
+  const holder = createTypedBuffer(
+    wasm,
+    Float64Array,
     WASM_FromLngLat_RESULT_ELEMENT_COUNT
   );
 
@@ -166,23 +208,22 @@ const createFromLngLat = (wasm: ResolvedProjectionWasm) => {
   const fromLngLat = (
     location: Readonly<SpriteLocation>
   ): SpriteMercatorCoordinate => {
+    // Prepare the buffer.
+    const { ptr, buffer } = holder.prepare();
+
     // Call wasm entry point.
-    wasm.fromLngLat(location.lng, location.lat, location.z ?? 0, resultBuffer);
+    wasm.fromLngLat(location.lng, location.lat, location.z ?? 0, ptr);
 
     // Extract results from the wasm buffer.
-    const x = results[0]!;
-    const y = results[1]!;
-    const z = results[2]!;
+    const x = buffer[0]!;
+    const y = buffer[1]!;
+    const z = buffer[2]!;
 
     return { x, y, z };
   };
 
   // Buffer releaser
-  fromLngLat.release = () => {
-    wasm.free(resultBuffer);
-    results = undefined!;
-    resultBuffer = 0;
-  };
+  fromLngLat.release = holder.release;
 
   return fromLngLat;
 };
