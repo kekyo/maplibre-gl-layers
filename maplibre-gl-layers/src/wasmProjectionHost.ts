@@ -42,8 +42,10 @@ interface ResolvedProjectionWasm {
   readonly free: (ptr: number) => void;
 }
 
-const toFiniteOr = (value: number | undefined, fallback: number): number =>
-  Number.isFinite(value) ? (value as number) : fallback;
+//////////////////////////////////////////////////////////////////////////////////////
+
+type NodeFsPromisesModule = typeof import('fs/promises');
+type NodeUrlModule = typeof import('url');
 
 const isNodeEnvironment = (() => {
   const globalProcess = (
@@ -53,9 +55,6 @@ const isNodeEnvironment = (() => {
   ).process;
   return !!globalProcess?.versions?.node;
 })();
-
-type NodeFsPromisesModule = typeof import('fs/promises');
-type NodeUrlModule = typeof import('url');
 
 const importNodeModule = async <T>(specifier: string): Promise<T> =>
   (await import(/* @vite-ignore */ specifier)) as T;
@@ -145,44 +144,55 @@ const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
   };
 };
 
-const buildWasmProjectionHost = (
-  baseHost: ProjectionHost,
-  wasm: ResolvedProjectionWasm
-): ProjectionHost => {
-  const overrideFromLngLat = (
+//////////////////////////////////////////////////////////////////////////////////////
+
+//const toFiniteOr = (value: number | undefined, fallback: number): number =>
+//  Number.isFinite(value) ? (value as number) : fallback;
+
+/**
+ * Create `fromLngLat` delegator.
+ * @param wasm Wasm hosted reference.
+ * @returns fromLngLat function object.
+ */
+const createFromLngLat = (wasm: ResolvedProjectionWasm) => {
+  let resultBuffer = wasm.malloc(WASM_FromLngLat_RESULT_BYTES);
+  let results = new Float64Array(
+    wasm.memory.buffer,
+    resultBuffer,
+    WASM_FromLngLat_RESULT_ELEMENT_COUNT
+  );
+
+  // fromLngLat delegation body
+  const fromLngLat = (
     location: Readonly<SpriteLocation>
   ): SpriteMercatorCoordinate => {
-    const pointer = wasm.malloc(WASM_FromLngLat_RESULT_BYTES);
+    // Call wasm entry point.
+    wasm.fromLngLat(location.lng, location.lat, location.z ?? 0, resultBuffer);
 
-    try {
-      const lng = toFiniteOr(location.lng, 0);
-      const lat = toFiniteOr(location.lat, 0);
-      const altitude = toFiniteOr(location.z, 0);
+    // Extract results from the wasm buffer.
+    const x = results[0]!;
+    const y = results[1]!;
+    const z = results[2]!;
 
-      wasm.fromLngLat(lng, lat, altitude, pointer);
-      const result = new Float64Array(
-        wasm.memory.buffer,
-        pointer,
-        WASM_FromLngLat_RESULT_ELEMENT_COUNT
-      );
-      const x = result[0]!;
-      const y = result[1]!;
-      const z = result[2]!;
-
-      return { x, y, z };
-    } finally {
-      wasm.free(pointer);
-    }
+    return { x, y, z };
   };
 
-  return {
-    ...baseHost,
-    fromLngLat: overrideFromLngLat,
+  // Buffer releaser
+  const release = () => {
+    wasm.free(resultBuffer);
+    results = undefined!;
+    resultBuffer = 0;
   };
+  fromLngLat.release = release;
+
+  return fromLngLat;
 };
+
+// TODO: Other ProjectionHost members
 
 //////////////////////////////////////////////////////////////////////////////////////
 
+/** Resolved projection_wasm.cpp */
 let projectionWasmResolved: ResolvedProjectionWasm | null | undefined;
 
 /**
@@ -218,6 +228,22 @@ export const createWasmProjectionHost = (
     );
   }
 
-  const baseHost = createProjectionHost(params);
-  return buildWasmProjectionHost(baseHost, projectionWasmResolved);
+  // TODO: Fallback pure implementation, finally remove this.
+  const fallbackHost = createProjectionHost(params);
+
+  // Member: fromLngLat
+  const fromLngLat = createFromLngLat(projectionWasmResolved);
+
+  // TODO: Other ProjectionHost members
+
+  // The projection host disposer
+  const release = () => {
+    fromLngLat.release();
+  };
+
+  return {
+    ...fallbackHost,
+    fromLngLat, // Overrided
+    release,
+  };
 };

@@ -388,7 +388,7 @@ const prepareProjectionState = (
 export const createProjectionHost = (
   params: ProjectionHostParams
 ): ProjectionHost => {
-  const state = prepareProjectionState(params);
+  let state = prepareProjectionState(params);
 
   /**
    * Get current zoom level.
@@ -555,6 +555,10 @@ export const createProjectionHost = (
     }
   };
 
+  const release = () => {
+    state = undefined!;
+  };
+
   return {
     getZoom,
     getClipContext,
@@ -562,6 +566,7 @@ export const createProjectionHost = (
     project,
     unproject,
     calculatePerspectiveRatio,
+    release,
   };
 };
 

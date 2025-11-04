@@ -24,15 +24,17 @@ import type {
 export const createMapLibreProjectionHost = (
   map: MapLibreMap
 ): ProjectionHost => {
+  let mapLibreMap = map;
+
   /**
    * Get current zoom level.
    * @returns Zoom level.
    */
-  const getZoom = () => map.getZoom();
+  const getZoom = () => mapLibreMap.getZoom();
 
   // Internal function for get mercator matrix from MapLibre.
   const getMercatorMatrix = (): ReadonlyMat4 | null => {
-    const transform = map.transform;
+    const transform = mapLibreMap.transform;
     if (!transform) {
       return null;
     }
@@ -70,7 +72,7 @@ export const createMapLibreProjectionHost = (
    * @param location Location.
    * @returns Projected point if valid location.
    */
-  const project = (location: SpriteLocation) => map.project(location);
+  const project = (location: SpriteLocation) => mapLibreMap.project(location);
 
   /**
    * Unproject the location.
@@ -78,7 +80,7 @@ export const createMapLibreProjectionHost = (
    * @returns Location if valid point.
    */
   const unproject = (point: Readonly<SpritePoint>): SpriteLocation | null =>
-    map.unproject([point.x, point.y]);
+    mapLibreMap.unproject([point.x, point.y]);
 
   /**
    * Calculate perspective ratio.
@@ -95,7 +97,7 @@ export const createMapLibreProjectionHost = (
       return 1.0;
     }
 
-    const transform = map.transform;
+    const transform = mapLibreMap.transform;
     if (!transform) {
       return 1.0;
     }
@@ -130,6 +132,10 @@ export const createMapLibreProjectionHost = (
     }
   };
 
+  const release = () => {
+    mapLibreMap = undefined!;
+  };
+
   return {
     getZoom,
     getClipContext,
@@ -137,5 +143,6 @@ export const createMapLibreProjectionHost = (
     project,
     unproject,
     calculatePerspectiveRatio,
+    release,
   };
 };

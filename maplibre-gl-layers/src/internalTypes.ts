@@ -39,10 +39,14 @@ export interface SpriteMercatorCoordinate {
   readonly z: number;
 }
 
+export interface Releaseable {
+  readonly release: () => void;
+}
+
 /**
  * Abstraction that exposes projection-related helpers.
  */
-export interface ProjectionHost {
+export interface ProjectionHost extends Releaseable {
   /**
    * Get current zoom level.
    * @returns Zoom level.
