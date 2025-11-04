@@ -76,7 +76,7 @@ static inline void multiplyMatrixAndVector(const double* matrix,
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-static inline bool _fromLngLat(double lng,
+static inline bool __fromLngLat(double lng,
                         double lat,
                         double altitude,
                         double* out) {
@@ -95,7 +95,7 @@ static inline bool _fromLngLat(double lng,
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-static inline bool _project(double lng,
+static inline bool __project(double lng,
                      double lat,
                      double altitude,
                      double worldSize,
@@ -145,7 +145,7 @@ static inline bool _project(double lng,
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-static inline bool _unproject(double pointX,
+static inline bool __unproject(double pointX,
                        double pointY,
                        double worldSize,
                        const double* matrix,
@@ -212,7 +212,7 @@ static inline bool _unproject(double pointX,
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-static inline bool _calculatePerspectiveRatio(double lng,
+static inline bool __calculatePerspectiveRatio(double lng,
                                        double lat,
                                        double altitude,
                                        const double* cachedMercator,
@@ -224,7 +224,7 @@ static inline bool _calculatePerspectiveRatio(double lng,
   if (cachedMercator) {
     mercator = cachedMercator;
   } else {
-    if (!_fromLngLat(lng, lat, altitude, _mercator)) {
+    if (!__fromLngLat(lng, lat, altitude, _mercator)) {
       return false;
     }
     mercator = _mercator;

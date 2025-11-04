@@ -16,7 +16,7 @@ EMSCRIPTEN_KEEPALIVE bool fromLngLat(double lng,
   }
 
   // Invoke main body
-  return _fromLngLat(lng, lat, altitude, out);
+  return __fromLngLat(lng, lat, altitude, out);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -36,7 +36,7 @@ EMSCRIPTEN_KEEPALIVE bool project(double lng,
   }
 
   // Invoke main body
-  return _project(lng, lat, altitude, worldSize, matrix, out);
+  return __project(lng, lat, altitude, worldSize, matrix, out);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -55,7 +55,7 @@ EMSCRIPTEN_KEEPALIVE bool unproject(double pointX,
   }
 
   // Invoke main body
-  return _unproject(pointX, pointY, worldSize, matrix, out);
+  return __unproject(pointX, pointY, worldSize, matrix, out);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -73,7 +73,7 @@ EMSCRIPTEN_KEEPALIVE bool calculatePerspectiveRatio(double lng,
   }
 
   // Invoke main body
-  return _calculatePerspectiveRatio(lng,
+  return __calculatePerspectiveRatio(lng,
                              lat,
                              altitude,
                              cachedMercator,

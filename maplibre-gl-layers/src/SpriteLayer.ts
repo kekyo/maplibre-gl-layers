@@ -122,10 +122,14 @@ import {
   DEBUG_OUTLINE_CORNER_ORDER,
   createShaderProgram,
 } from './shader';
+import { createCalculationHost } from './calculationHost';
 import {
-  createCalculationHost,
-  createWasmCalculationHost,
-} from './calculationHost';
+  createProjectionHost,
+  createProjectionHostParamsFromMapLibre,
+} from './projectionHost';
+import { initializeWasmHost } from './wasmHost';
+import { createWasmProjectionHost } from './wasmProjectionHost';
+import { createWasmCalculationHost } from './wasmCalculationHost';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_IMAGE_OFFSET,
@@ -142,14 +146,6 @@ import {
   MIN_TEXT_GLYPH_FONT_SIZE,
 } from './const';
 import { SL_DEBUG } from './config';
-import {
-  createProjectionHost,
-  createProjectionHostParamsFromMapLibre,
-} from './projectionHost';
-import {
-  createWasmProjectionHost,
-  initProjectionWasm,
-} from './wasmProjectionHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -1090,7 +1086,7 @@ export const createSpriteLayer = <T = any>(
 
   let wasmInitializationSucceeded = false;
   const initialize = async (): Promise<void> => {
-    wasmInitializationSucceeded = await initProjectionWasm();
+    wasmInitializationSucceeded = await initializeWasmHost();
   };
 
   const createProjectionHostForMap = (

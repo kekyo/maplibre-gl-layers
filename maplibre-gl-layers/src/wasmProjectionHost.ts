@@ -5,202 +5,13 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import {
-  createProjectionHost,
   prepareProjectionState,
   type PreparedProjectionState,
   type ProjectionHostParams,
 } from './projectionHost';
 import type { ProjectionHost, SpriteMercatorCoordinate } from './internalTypes';
 import type { SpriteLocation, SpritePoint } from './types';
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-type WasmFromLngLat = (
-  lng: number,
-  lat: number,
-  altitude: number,
-  outPtr: number
-) => boolean;
-
-type WasmProject = (
-  lng: number,
-  lat: number,
-  altitude: number,
-  worldSize: number,
-  matrixPtr: number,
-  outPtr: number
-) => boolean;
-
-type WasmUnproject = (
-  x: number,
-  y: number,
-  worldSize: number,
-  matrixPtr: number,
-  outPtr: number
-) => boolean;
-
-type WasmCalculatePerspectiveRatio = (
-  lng: number,
-  lat: number,
-  altitude: number,
-  cachedMercatorPtr: number,
-  cameraToCenterDistance: number,
-  matrixPtr: number,
-  outPtr: number
-) => boolean;
-
-interface RawProjectionWasmExports {
-  readonly memory?: WebAssembly.Memory;
-  readonly _fromLngLat?: WasmFromLngLat;
-  readonly fromLngLat?: WasmFromLngLat;
-  readonly _project?: WasmProject;
-  readonly project?: WasmProject;
-  readonly _calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
-  readonly calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
-  readonly _unproject?: WasmUnproject;
-  readonly unproject?: WasmUnproject;
-  readonly _malloc?: (size: number) => number;
-  readonly malloc?: (size: number) => number;
-  readonly _free?: (ptr: number) => void;
-  readonly free?: (ptr: number) => void;
-  readonly __wasm_call_ctors?: () => void;
-}
-
-interface ResolvedProjectionWasm {
-  readonly memory: WebAssembly.Memory;
-  readonly fromLngLat: WasmFromLngLat;
-  readonly project: WasmProject;
-  readonly calculatePerspectiveRatio: WasmCalculatePerspectiveRatio;
-  readonly unproject: WasmUnproject;
-  readonly malloc: (size: number) => number;
-  readonly free: (ptr: number) => void;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-type NodeFsPromisesModule = typeof import('fs/promises');
-type NodeUrlModule = typeof import('url');
-
-const isNodeEnvironment = (() => {
-  const globalProcess = (
-    globalThis as {
-      process?: { versions?: { node?: string } };
-    }
-  ).process;
-  return !!globalProcess?.versions?.node;
-})();
-
-const importNodeModule = async <T>(specifier: string): Promise<T> =>
-  (await import(/* @vite-ignore */ specifier)) as T;
-
-const createImportFunctionStub = (): Record<
-  string,
-  (...args: unknown[]) => number
-> => {
-  const noop = () => 0;
-  return new Proxy(
-    {},
-    {
-      get: () => noop,
-    }
-  ) as Record<string, (...args: unknown[]) => number>;
-};
-
-const loadWasmBinary = async (): Promise<ArrayBuffer> => {
-  const wasmUrl = new URL('./wasm/projection_host.wasm', import.meta.url);
-
-  if (typeof fetch === 'function') {
-    try {
-      const response = await fetch(wasmUrl);
-      if (response.ok) {
-        return await response.arrayBuffer();
-      }
-    } catch {
-      // Ignore and fall back to Node resolution.
-    }
-  }
-
-  if (isNodeEnvironment && wasmUrl.protocol === 'file:') {
-    const [{ readFile }, { fileURLToPath }] = await Promise.all([
-      importNodeModule<NodeFsPromisesModule>('node:fs/promises'),
-      importNodeModule<NodeUrlModule>('node:url'),
-    ]);
-    const filePath = fileURLToPath(wasmUrl);
-    const fileBuffer = await readFile(filePath);
-    const arrayBuffer = fileBuffer.buffer as ArrayBuffer;
-    return arrayBuffer.slice(
-      fileBuffer.byteOffset,
-      fileBuffer.byteOffset + fileBuffer.byteLength
-    );
-  }
-
-  const response = await fetch(wasmUrl);
-  if (!response.ok) {
-    throw new Error(`Failed to load projection host WASM: ${wasmUrl.href}`);
-  }
-  return await response.arrayBuffer();
-};
-
-const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
-  const binary = await loadWasmBinary();
-  const imports: WebAssembly.Imports = {};
-  const functionStub = createImportFunctionStub();
-  const importTargets = imports as Record<string, unknown>;
-  importTargets.wasi_snapshot_preview1 = functionStub;
-  importTargets.env = functionStub;
-  const { instance } = await WebAssembly.instantiate(binary, imports);
-  const exports = instance.exports as RawProjectionWasmExports;
-
-  if (typeof exports.__wasm_call_ctors === 'function') {
-    exports.__wasm_call_ctors();
-  }
-
-  const memory = exports.memory;
-  const fromLngLat =
-    (exports._fromLngLat as WasmFromLngLat | undefined) ??
-    (exports.fromLngLat as WasmFromLngLat | undefined);
-  const project =
-    (exports._project as WasmProject | undefined) ??
-    (exports.project as WasmProject | undefined);
-  const calculatePerspectiveRatio =
-    (exports._calculatePerspectiveRatio as
-      | WasmCalculatePerspectiveRatio
-      | undefined) ??
-    (exports.calculatePerspectiveRatio as
-      | WasmCalculatePerspectiveRatio
-      | undefined);
-  const unproject =
-    (exports._unproject as WasmUnproject | undefined) ??
-    (exports.unproject as WasmUnproject | undefined);
-  const malloc =
-    (exports._malloc as ((size: number) => number) | undefined) ??
-    (exports.malloc as ((size: number) => number) | undefined);
-  const free =
-    (exports._free as ((ptr: number) => void) | undefined) ??
-    (exports.free as ((ptr: number) => void) | undefined);
-
-  if (
-    !memory ||
-    !fromLngLat ||
-    !project ||
-    !calculatePerspectiveRatio ||
-    !unproject ||
-    !malloc ||
-    !free
-  ) {
-    throw new Error('Projection host WASM exports are incomplete.');
-  }
-
-  return {
-    memory,
-    fromLngLat,
-    project,
-    calculatePerspectiveRatio,
-    unproject,
-    malloc,
-    free,
-  };
-};
+import { prepareWasmHost, type WasmHost } from './wasmHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -215,7 +26,7 @@ type TypedArrayConstructor<TArray extends ArrayBufferView> = {
 };
 
 const createTypedBuffer = <TArray extends ArrayBufferView>(
-  wasm: ResolvedProjectionWasm,
+  wasm: WasmHost,
   ArrayType: TypedArrayConstructor<TArray>,
   elementCount: number
 ): BufferHolder<TArray> => {
@@ -259,7 +70,7 @@ const WASM_FromLngLat_RESULT_ELEMENT_COUNT = 3;
  * @param wasm Wasm hosted reference.
  * @returns fromLngLat function object.
  */
-const createFromLngLat = (wasm: ResolvedProjectionWasm) => {
+const createFromLngLat = (wasm: WasmHost) => {
   // Allocate a result buffer.
   const resultHolder = createTypedBuffer(
     wasm,
@@ -302,7 +113,7 @@ const WASM_Project_RESULT_ELEMENT_COUNT = 2;
  * @returns project function object.
  */
 const createProject = (
-  wasm: ResolvedProjectionWasm,
+  wasm: WasmHost,
   preparedState: PreparedProjectionState
 ) => {
   // Allocate a matrix buffer.
@@ -375,7 +186,7 @@ const WASM_Unproject_RESULT_ELEMENT_COUNT = 2;
  * @returns unproject function object.
  */
 const createUnproject = (
-  wasm: ResolvedProjectionWasm,
+  wasm: WasmHost,
   preparedState: PreparedProjectionState
 ) => {
   // Allocate a matrix buffer.
@@ -445,7 +256,7 @@ const WASM_CalculatePerspectiveRatio_RESULT_ELEMENT_COUNT = 1;
  * @returns calculatePerspectiveRatio function object.
  */
 const createCalculatePerspectiveRatio = (
-  wasm: ResolvedProjectionWasm,
+  wasm: WasmHost,
   preparedState: PreparedProjectionState
 ) => {
   const matrixHolder = createTypedBuffer(
@@ -545,27 +356,6 @@ const createCalculatePerspectiveRatio = (
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-/** Resolved projection_wasm.cpp */
-let projectionWasmResolved: ResolvedProjectionWasm | null | undefined;
-
-/**
- * Intiialize wasm host.
- * @returns True if initialized, otherwise (include failing) false.
- */
-export const initProjectionWasm = async (): Promise<boolean> => {
-  if (projectionWasmResolved === undefined) {
-    try {
-      projectionWasmResolved = await instantiateProjectionWasm();
-      console.log('maplibre-gl-layers: Initialized wasm module.');
-    } catch (e: unknown) {
-      console.log(e);
-      projectionWasmResolved = null;
-      return false;
-    }
-  }
-  return projectionWasmResolved !== null;
-};
-
 /**
  * Create wasm-based calculation projection host.
  * @param params Projection parameters
@@ -575,14 +365,8 @@ export const initProjectionWasm = async (): Promise<boolean> => {
 export const createWasmProjectionHost = (
   params: ProjectionHostParams
 ): ProjectionHost => {
-  if (!projectionWasmResolved) {
-    throw new Error(
-      'Could not use WasmProjectionHost, needs before initialization.'
-    );
-  }
-
-  // TODO: Base (will be overrided) pure implementation, finally remove this.
-  const baseHost = createProjectionHost(params);
+  // Get wasm host.
+  const wasm = prepareWasmHost();
 
   // Prepare parameters.
   const preparedState = prepareProjectionState(params);
@@ -590,17 +374,17 @@ export const createWasmProjectionHost = (
   //----------------------------------------------------------
 
   // Member: fromLngLat
-  const fromLngLat = createFromLngLat(projectionWasmResolved);
+  const fromLngLat = createFromLngLat(wasm);
 
   // Member: project
-  const project = createProject(projectionWasmResolved, preparedState);
+  const project = createProject(wasm, preparedState);
 
   // Member: unproject
-  const unproject = createUnproject(projectionWasmResolved, preparedState);
+  const unproject = createUnproject(wasm, preparedState);
 
   // Member: calculatePerspectiveRatio
   const calculatePerspectiveRatio = createCalculatePerspectiveRatio(
-    projectionWasmResolved,
+    wasm,
     preparedState
   );
 
@@ -612,11 +396,15 @@ export const createWasmProjectionHost = (
     project.release();
     unproject.release();
     calculatePerspectiveRatio.release();
-    baseHost.release();
   };
 
   return {
-    ...baseHost,
+    getZoom: () => {
+      return preparedState.zoom;
+    },
+    getClipContext: () => {
+      return preparedState.clipContext;
+    },
     fromLngLat, // Overrided
     project, // Overrided
     unproject, // Overrided

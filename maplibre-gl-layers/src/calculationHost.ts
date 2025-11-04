@@ -80,7 +80,6 @@ import {
   USE_SHADER_BILLBOARD_GEOMETRY,
   USE_SHADER_SURFACE_GEOMETRY,
 } from './config';
-import { createWasmProjectionHost } from './wasmProjectionHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -1349,25 +1348,6 @@ export const createCalculationHost = <TTag>(
   params: ProjectionHostParams
 ): RenderCalculationHost<TTag> => {
   const projectionHost = createProjectionHost(params);
-  return {
-    collectDepthSortedItems: (inputs) =>
-      collectDepthSortedItemsInternal(projectionHost, inputs),
-    prepareDrawSpriteImages: (items, inputs) =>
-      prepareDrawSpriteImagesInternal(projectionHost, items, inputs),
-    release: projectionHost.release,
-  };
-};
-
-/**
- * Create calculation host that wasm implementation.
- * @param TTag Tag type.
- * @param params Projection host params.
- * @returns Calculation host.
- */
-export const createWasmCalculationHost = <TTag>(
-  params: ProjectionHostParams
-): RenderCalculationHost<TTag> => {
-  const projectionHost = createWasmProjectionHost(params);
   return {
     collectDepthSortedItems: (inputs) =>
       collectDepthSortedItemsInternal(projectionHost, inputs),
