@@ -20,31 +20,34 @@ type WasmFromLngLat = (
   lat: number,
   altitude: number,
   outPtr: number
-) => void;
+) => boolean;
 
 type WasmProject = (
   lng: number,
   lat: number,
   altitude: number,
-  contextPtr: number,
+  worldSize: number,
+  matrixPtr: number,
   outPtr: number
-) => void;
+) => boolean;
 
 type WasmUnproject = (
   x: number,
   y: number,
-  contextPtr: number,
+  worldSize: number,
+  matrixPtr: number,
   outPtr: number
-) => void;
+) => boolean;
 
 type WasmCalculatePerspectiveRatio = (
   lng: number,
   lat: number,
   altitude: number,
   cachedMercatorPtr: number,
-  contextPtr: number,
+  cameraToCenterDistance: number,
+  matrixPtr: number,
   outPtr: number
-) => void;
+) => boolean;
 
 interface RawProjectionWasmExports {
   readonly memory?: WebAssembly.Memory;
@@ -290,8 +293,8 @@ const createFromLngLat = (wasm: ResolvedProjectionWasm) => {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-const WASM_Project_CONTEXT_ELEMENT_COUNT = 1 + 16;
-const WASM_Project_RESULT_ELEMENT_COUNT = 3;
+const WASM_Project_CONTEXT_ELEMENT_COUNT = 16;
+const WASM_Project_RESULT_ELEMENT_COUNT = 2;
 
 /**
  * Create `project` delegator.
@@ -302,19 +305,18 @@ const createProject = (
   wasm: ResolvedProjectionWasm,
   preparedState: PreparedProjectionState
 ) => {
-  // Allocate a context buffer.
-  const contextHolder = createTypedBuffer(
+  // Allocate a matrix buffer.
+  const matrixHolder = createTypedBuffer(
     wasm,
     Float64Array,
     WASM_Project_CONTEXT_ELEMENT_COUNT
   );
 
-  // Store context data into the buffer.
+  // Store matrix data into the buffer.
   (() => {
-    const { buffer: context } = contextHolder.prepare();
-    context[0] = preparedState.worldSize;
+    const { buffer: matrix } = matrixHolder.prepare();
     for (let index = 0; index < 16; index++) {
-      context[index + 1] = preparedState.pixelMatrix?.[index] ?? 0;
+      matrix[index] = preparedState.pixelMatrix?.[index] ?? 0;
     }
   })();
 
@@ -327,35 +329,34 @@ const createProject = (
 
   // `project` delegation body
   const project = (location: Readonly<SpriteLocation>): SpritePoint | null => {
-    // Prepare the context buffer.
-    const { ptr: contextPtr } = contextHolder.prepare();
+    // Prepare the matrix buffer.
+    const { ptr: matrixPtr } = matrixHolder.prepare();
     // Prepare the result buffer.
     const { ptr: resultPtr, buffer: result } = resultHolder.prepare();
 
     // Call wasm entry point.
-    wasm.project(
-      location.lng,
-      location.lat,
-      location.z ?? 0,
-      contextPtr,
-      resultPtr
-    );
+    if (
+      wasm.project(
+        location.lng,
+        location.lat,
+        location.z ?? 0,
+        preparedState.worldSize,
+        matrixPtr,
+        resultPtr
+      )
+    ) {
+      // Extract results from the wasm buffer.
+      const x = result[0]!;
+      const y = result[1]!;
 
-    // Extract results from the wasm buffer.
-    const w = result[2]!;
-
-    if (!Number.isFinite(w) || w <= 0) {
+      return { x, y };
+    } else {
       return null;
     }
-
-    const x = result[0]!;
-    const y = result[1]!;
-
-    return { x, y };
   };
 
   project.release = () => {
-    contextHolder.release();
+    matrixHolder.release();
     resultHolder.release();
   };
 
@@ -364,7 +365,7 @@ const createProject = (
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-const WASM_Unproject_CONTEXT_ELEMENT_COUNT = 1 + 16;
+const WASM_Unproject_CONTEXT_ELEMENT_COUNT = 16;
 const WASM_Unproject_RESULT_ELEMENT_COUNT = 2;
 
 /**
@@ -377,8 +378,8 @@ const createUnproject = (
   wasm: ResolvedProjectionWasm,
   preparedState: PreparedProjectionState
 ) => {
-  // Allocate a context buffer.
-  const contextHolder = createTypedBuffer(
+  // Allocate a matrix buffer.
+  const matrixHolder = createTypedBuffer(
     wasm,
     Float64Array,
     WASM_Unproject_CONTEXT_ELEMENT_COUNT
@@ -386,10 +387,9 @@ const createUnproject = (
 
   // Store context data into the buffer.
   (() => {
-    const { buffer: context } = contextHolder.prepare();
-    context[0] = preparedState.worldSize;
+    const { buffer: matrix } = matrixHolder.prepare();
     for (let index = 0; index < 16; index++) {
-      context[index + 1] = preparedState.pixelMatrixInverse?.[index] ?? 0;
+      matrix[index] = preparedState.pixelMatrixInverse?.[index] ?? 0;
     }
   })();
 
@@ -402,23 +402,29 @@ const createUnproject = (
 
   // `unproject` delegation body
   const unproject = (point: Readonly<SpritePoint>): SpriteLocation | null => {
-    const { ptr: contextPtr } = contextHolder.prepare();
+    const { ptr: matrixPtr } = matrixHolder.prepare();
     const { ptr: resultPtr, buffer: result } = resultHolder.prepare();
 
-    wasm.unproject(point.x, point.y, contextPtr, resultPtr);
+    if (
+      wasm.unproject(
+        point.x,
+        point.y,
+        preparedState.worldSize,
+        matrixPtr,
+        resultPtr
+      )
+    ) {
+      const lng = result[0]!;
+      const lat = result[1]!;
 
-    const lng = result[0]!;
-    const lat = result[1]!;
-
-    if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+      return { lng, lat };
+    } else {
       return null;
     }
-
-    return { lng, lat };
   };
 
   unproject.release = () => {
-    contextHolder.release();
+    matrixHolder.release();
     resultHolder.release();
   };
 
@@ -427,7 +433,7 @@ const createUnproject = (
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-const WASM_CalculatePerspectiveRatio_CONTEXT_ELEMENT_COUNT = 1 + 16;
+const WASM_CalculatePerspectiveRatio_CONTEXT_ELEMENT_COUNT = 16;
 const WASM_CalculatePerspectiveRatio_CACHED_MERCATOR_ELEMENT_COUNT = 3;
 const WASM_CalculatePerspectiveRatio_RESULT_ELEMENT_COUNT = 1;
 
@@ -442,17 +448,16 @@ const createCalculatePerspectiveRatio = (
   wasm: ResolvedProjectionWasm,
   preparedState: PreparedProjectionState
 ) => {
-  const contextHolder = createTypedBuffer(
+  const matrixHolder = createTypedBuffer(
     wasm,
     Float64Array,
     WASM_CalculatePerspectiveRatio_CONTEXT_ELEMENT_COUNT
   );
 
   (() => {
-    const { buffer: context } = contextHolder.prepare();
-    context[0] = preparedState.cameraToCenterDistance;
+    const { buffer: matrix } = matrixHolder.prepare();
     for (let index = 0; index < 16; index++) {
-      context[index + 1] = preparedState.mercatorMatrix?.[index] ?? 0;
+      matrix[index] = preparedState.mercatorMatrix?.[index] ?? 0;
     }
   })();
 
@@ -480,7 +485,7 @@ const createCalculatePerspectiveRatio = (
     }
 
     if (cachedMercator) {
-      const { ptr: contextPtr } = contextHolder.prepare();
+      const { ptr: matrixPtr } = matrixHolder.prepare();
       const { ptr: cachedMercatorPtr, buffer: cachedMercatorBuffer } =
         cachedMercatorHolder.prepare();
       const { ptr: resultPtr, buffer: result } = resultHolder.prepare();
@@ -489,37 +494,47 @@ const createCalculatePerspectiveRatio = (
       cachedMercatorBuffer[1] = cachedMercator.y;
       cachedMercatorBuffer[2] = cachedMercator.z;
 
-      wasm.calculatePerspectiveRatio(
-        location.lng,
-        location.lat,
-        location.z ?? 0,
-        cachedMercatorPtr,
-        contextPtr,
-        resultPtr
-      );
-
-      const ratio = result[0]!;
-      return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+      if (
+        wasm.calculatePerspectiveRatio(
+          location.lng,
+          location.lat,
+          location.z ?? 0,
+          cachedMercatorPtr,
+          preparedState.cameraToCenterDistance,
+          matrixPtr,
+          resultPtr
+        )
+      ) {
+        const ratio = result[0]!;
+        return ratio;
+      } else {
+        return 1;
+      }
     } else {
-      const { ptr: contextPtr } = contextHolder.prepare();
+      const { ptr: matrixPtr } = matrixHolder.prepare();
       const { ptr: resultPtr, buffer: result } = resultHolder.prepare();
 
-      wasm.calculatePerspectiveRatio(
-        location.lng,
-        location.lat,
-        location.z ?? 0,
-        0,
-        contextPtr,
-        resultPtr
-      );
-
-      const ratio = result[0]!;
-      return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+      if (
+        wasm.calculatePerspectiveRatio(
+          location.lng,
+          location.lat,
+          location.z ?? 0,
+          0,
+          preparedState.cameraToCenterDistance,
+          matrixPtr,
+          resultPtr
+        )
+      ) {
+        const ratio = result[0]!;
+        return ratio;
+      } else {
+        return 1;
+      }
     }
   };
 
   calculatePerspectiveRatio.release = () => {
-    contextHolder.release();
+    matrixHolder.release();
     resultHolder.release();
   };
 
