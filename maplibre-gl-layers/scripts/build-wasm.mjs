@@ -73,7 +73,7 @@ const args = [
   '-s',
   'ENVIRONMENT=web,webview,worker,node',
   '-s',
-  'EXPORTED_FUNCTIONS=["_fromLngLat","_project","_unproject","_malloc","_free"]',
+  'EXPORTED_FUNCTIONS=["_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_malloc","_free"]',
   '-s',
   'ALLOW_MEMORY_GROWTH=1',
   '-s',

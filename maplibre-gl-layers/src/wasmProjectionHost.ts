@@ -37,12 +37,23 @@ type WasmUnproject = (
   outPtr: number
 ) => void;
 
+type WasmCalculatePerspectiveRatio = (
+  lng: number,
+  lat: number,
+  altitude: number,
+  cachedMercatorPtr: number,
+  contextPtr: number,
+  outPtr: number
+) => void;
+
 interface RawProjectionWasmExports {
   readonly memory?: WebAssembly.Memory;
   readonly _fromLngLat?: WasmFromLngLat;
   readonly fromLngLat?: WasmFromLngLat;
   readonly _project?: WasmProject;
   readonly project?: WasmProject;
+  readonly _calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
+  readonly calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
   readonly _unproject?: WasmUnproject;
   readonly unproject?: WasmUnproject;
   readonly _malloc?: (size: number) => number;
@@ -56,6 +67,7 @@ interface ResolvedProjectionWasm {
   readonly memory: WebAssembly.Memory;
   readonly fromLngLat: WasmFromLngLat;
   readonly project: WasmProject;
+  readonly calculatePerspectiveRatio: WasmCalculatePerspectiveRatio;
   readonly unproject: WasmUnproject;
   readonly malloc: (size: number) => number;
   readonly free: (ptr: number) => void;
@@ -147,6 +159,13 @@ const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
   const project =
     (exports._project as WasmProject | undefined) ??
     (exports.project as WasmProject | undefined);
+  const calculatePerspectiveRatio =
+    (exports._calculatePerspectiveRatio as
+      | WasmCalculatePerspectiveRatio
+      | undefined) ??
+    (exports.calculatePerspectiveRatio as
+      | WasmCalculatePerspectiveRatio
+      | undefined);
   const unproject =
     (exports._unproject as WasmUnproject | undefined) ??
     (exports.unproject as WasmUnproject | undefined);
@@ -157,7 +176,15 @@ const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
     (exports._free as ((ptr: number) => void) | undefined) ??
     (exports.free as ((ptr: number) => void) | undefined);
 
-  if (!memory || !fromLngLat || !project || !unproject || !malloc || !free) {
+  if (
+    !memory ||
+    !fromLngLat ||
+    !project ||
+    !calculatePerspectiveRatio ||
+    !unproject ||
+    !malloc ||
+    !free
+  ) {
     throw new Error('Projection host WASM exports are incomplete.');
   }
 
@@ -165,6 +192,7 @@ const instantiateProjectionWasm = async (): Promise<ResolvedProjectionWasm> => {
     memory,
     fromLngLat,
     project,
+    calculatePerspectiveRatio,
     unproject,
     malloc,
     free,
@@ -397,6 +425,107 @@ const createUnproject = (
   return unproject;
 };
 
+//////////////////////////////////////////////////////////////////////////////////////
+
+const WASM_CalculatePerspectiveRatio_CONTEXT_ELEMENT_COUNT = 1 + 16;
+const WASM_CalculatePerspectiveRatio_CACHED_MERCATOR_ELEMENT_COUNT = 3;
+const WASM_CalculatePerspectiveRatio_RESULT_ELEMENT_COUNT = 1;
+
+/**
+ * Create `calculatePerspectiveRatio` delegator.
+ * @param wasm Wasm hosted reference.
+ * @param preparedState Prepared projection state.
+ * @param fromLngLat Wasm-backed fromLngLat delegator.
+ * @returns calculatePerspectiveRatio function object.
+ */
+const createCalculatePerspectiveRatio = (
+  wasm: ResolvedProjectionWasm,
+  preparedState: PreparedProjectionState
+) => {
+  const contextHolder = createTypedBuffer(
+    wasm,
+    Float64Array,
+    WASM_CalculatePerspectiveRatio_CONTEXT_ELEMENT_COUNT
+  );
+
+  (() => {
+    const { buffer: context } = contextHolder.prepare();
+    context[0] = preparedState.cameraToCenterDistance;
+    for (let index = 0; index < 16; index++) {
+      context[index + 1] = preparedState.mercatorMatrix?.[index] ?? 0;
+    }
+  })();
+
+  const isInvalidState =
+    !preparedState.mercatorMatrix || preparedState.cameraToCenterDistance <= 0;
+
+  const cachedMercatorHolder = createTypedBuffer(
+    wasm,
+    Float64Array,
+    WASM_CalculatePerspectiveRatio_CACHED_MERCATOR_ELEMENT_COUNT
+  );
+
+  const resultHolder = createTypedBuffer(
+    wasm,
+    Float64Array,
+    WASM_CalculatePerspectiveRatio_RESULT_ELEMENT_COUNT
+  );
+
+  const calculatePerspectiveRatio = (
+    location: Readonly<SpriteLocation>,
+    cachedMercator?: SpriteMercatorCoordinate
+  ): number => {
+    if (isInvalidState) {
+      return 1;
+    }
+
+    if (cachedMercator) {
+      const { ptr: contextPtr } = contextHolder.prepare();
+      const { ptr: cachedMercatorPtr, buffer: cachedMercatorBuffer } =
+        cachedMercatorHolder.prepare();
+      const { ptr: resultPtr, buffer: result } = resultHolder.prepare();
+
+      cachedMercatorBuffer[0] = cachedMercator.x;
+      cachedMercatorBuffer[1] = cachedMercator.y;
+      cachedMercatorBuffer[2] = cachedMercator.z;
+
+      wasm.calculatePerspectiveRatio(
+        location.lng,
+        location.lat,
+        location.z ?? 0,
+        cachedMercatorPtr,
+        contextPtr,
+        resultPtr
+      );
+
+      const ratio = result[0]!;
+      return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+    } else {
+      const { ptr: contextPtr } = contextHolder.prepare();
+      const { ptr: resultPtr, buffer: result } = resultHolder.prepare();
+
+      wasm.calculatePerspectiveRatio(
+        location.lng,
+        location.lat,
+        location.z ?? 0,
+        0,
+        contextPtr,
+        resultPtr
+      );
+
+      const ratio = result[0]!;
+      return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+    }
+  };
+
+  calculatePerspectiveRatio.release = () => {
+    contextHolder.release();
+    resultHolder.release();
+  };
+
+  return calculatePerspectiveRatio;
+};
+
 // TODO: Other ProjectionHost members
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -454,6 +583,12 @@ export const createWasmProjectionHost = (
   // Member: unproject
   const unproject = createUnproject(projectionWasmResolved, preparedState);
 
+  // Member: calculatePerspectiveRatio
+  const calculatePerspectiveRatio = createCalculatePerspectiveRatio(
+    projectionWasmResolved,
+    preparedState
+  );
+
   //----------------------------------------------------------
 
   // The projection host disposer
@@ -461,6 +596,7 @@ export const createWasmProjectionHost = (
     fromLngLat.release();
     project.release();
     unproject.release();
+    calculatePerspectiveRatio.release();
     baseHost.release();
   };
 
@@ -469,6 +605,7 @@ export const createWasmProjectionHost = (
     fromLngLat, // Overrided
     project, // Overrided
     unproject, // Overrided
+    calculatePerspectiveRatio, // Overrided
     release,
   };
 };

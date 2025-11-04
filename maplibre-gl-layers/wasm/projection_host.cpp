@@ -13,19 +13,19 @@ constexpr double MAX_MERCATOR_LATITUDE = 85.051129;
 constexpr double DEG2RAD = PI / 180.0;
 constexpr double EARTH_RADIUS_METERS = 6378137.0;
 
-inline double toFiniteOr(double value, double fallback) {
+static inline double toFiniteOr(double value, double fallback) {
   return std::isfinite(value) ? value : fallback;
 }
 
-inline double clamp(double value, double min, double max) {
+static inline double clamp(double value, double min, double max) {
   return std::fmax(std::fmin(value, max), min);
 }
 
-inline double mercatorXfromLng(double lng) {
+static inline double mercatorXfromLng(double lng) {
   return (180.0 + lng) / 360.0;
 }
 
-inline double mercatorYfromLat(double lat) {
+static inline double mercatorYfromLat(double lat) {
   const double constrained =
       clamp(lat, -MAX_MERCATOR_LATITUDE, MAX_MERCATOR_LATITUDE);
   const double radians = constrained * DEG2RAD;
@@ -34,12 +34,12 @@ inline double mercatorYfromLat(double lat) {
       360.0;
 }
 
-inline double circumferenceAtLatitude(double latitudeDeg) {
+static inline double circumferenceAtLatitude(double latitudeDeg) {
   return 2.0 * PI * EARTH_RADIUS_METERS *
     std::cos(latitudeDeg * DEG2RAD);
 }
 
-inline double mercatorZfromAltitude(double altitude, double latDeg) {
+static inline double mercatorZfromAltitude(double altitude, double latDeg) {
   const double circumference = circumferenceAtLatitude(latDeg);
   if (circumference == 0.0) {
     return 0.0;
@@ -47,16 +47,16 @@ inline double mercatorZfromAltitude(double altitude, double latDeg) {
   return altitude / circumference;
 }
 
-inline double lngFromMercatorX(double x) {
+static inline double lngFromMercatorX(double x) {
   return x * 360.0 - 180.0;
 }
 
-inline double latFromMercatorY(double y) {
+static inline double latFromMercatorY(double y) {
   const double y2 = 180.0 - y * 360.0;
   return (360.0 / PI) * std::atan(std::exp((y2 * PI) / 180.0)) - 90.0;
 }
 
-inline void multiplyMatrixAndVector(const double* matrix,
+static inline void multiplyMatrixAndVector(const double* matrix,
                                     double x,
                                     double y,
                                     double z,
@@ -81,14 +81,10 @@ inline void multiplyMatrixAndVector(const double* matrix,
 
 extern "C" {
 
-EMSCRIPTEN_KEEPALIVE void fromLngLat(double lng,
-                                     double lat,
-                                     double altitude,
-                                     double* out) {
-  if (out == nullptr) {
-    return;
-  }
-
+static inline void _fromLngLat(double lng,
+                        double lat,
+                        double altitude,
+                        double* out) {
   const double finiteLng = toFiniteOr(lng, 0.0);
   const double finiteLat = toFiniteOr(lat, 0.0);
   const double constrainedLat =
@@ -100,28 +96,27 @@ EMSCRIPTEN_KEEPALIVE void fromLngLat(double lng,
   out[2] = mercatorZfromAltitude(finiteAltitude, constrainedLat);
 }
 
+EMSCRIPTEN_KEEPALIVE void fromLngLat(double lng,
+                                     double lat,
+                                     double altitude,
+                                     double* out) {
+  // Input guards
+  if (out == nullptr) {
+    return;
+  }
+
+  // Invoke main body
+  _fromLngLat(lng, lat, altitude, out);
+}
+
 //////////////////////////////////////////////////////////////////////////////////////
 
-EMSCRIPTEN_KEEPALIVE void project(double lng,
-                                  double lat,
-                                  double altitude,
-                                  const double* context,
-                                  double* out) {
-  if (context == nullptr || out == nullptr) {
-    return;
-  }
-
-  const double worldSize = context[0];
-  if (!std::isfinite(worldSize) || worldSize <= 0.0) {
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    out[0] = nan;
-    out[1] = nan;
-    out[2] = nan;
-    return;
-  }
-
-  const double* matrix = context + 1;
-
+static inline void _project(double lng,
+                     double lat,
+                     double altitude,
+                     double worldSize,
+                     const double* matrix,
+                     double* out) {
   const double finiteLng = toFiniteOr(lng, 0.0);
   const double finiteLat = toFiniteOr(lat, 0.0);
   const double constrainedLat =
@@ -169,26 +164,36 @@ EMSCRIPTEN_KEEPALIVE void project(double lng,
   out[2] = clipW;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////
-
-EMSCRIPTEN_KEEPALIVE void unproject(double pointX,
-                                    double pointY,
-                                    const double* context,
-                                    double* out) {
+EMSCRIPTEN_KEEPALIVE void project(double lng,
+                                  double lat,
+                                  double altitude,
+                                  const double* context,
+                                  double* out) {
+  // Input guards
   if (context == nullptr || out == nullptr) {
     return;
   }
-
   const double worldSize = context[0];
-  const double* matrix = context + 1;
-
   if (!std::isfinite(worldSize) || worldSize <= 0.0) {
     const double nan = std::numeric_limits<double>::quiet_NaN();
     out[0] = nan;
     out[1] = nan;
+    out[2] = nan;
     return;
   }
+  const double* matrix = context + 1;
 
+  // Invoke main body
+  _project(lng, lat, altitude, worldSize, matrix, out);
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+static inline void _unproject(double pointX,
+                       double pointY,
+                       double worldSize,
+                       const double* matrix,
+                       double* out) {
   const double finiteX = toFiniteOr(pointX, 0.0);
   const double finiteY = toFiniteOr(pointY, 0.0);
 
@@ -261,6 +266,92 @@ EMSCRIPTEN_KEEPALIVE void unproject(double pointX,
 
   out[0] = lng;
   out[1] = lat;
+}
+
+EMSCRIPTEN_KEEPALIVE void unproject(double pointX,
+                                    double pointY,
+                                    const double* context,
+                                    double* out) {
+  // Input guards
+  if (context == nullptr || out == nullptr) {
+    return;
+  }
+  const double worldSize = context[0];
+  if (!std::isfinite(worldSize) || worldSize <= 0.0) {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    out[0] = nan;
+    out[1] = nan;
+    return;
+  }
+  const double* matrix = context + 1;
+
+  // Invoke main body
+  _unproject(pointX, pointY, worldSize, matrix, out);
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+static void _calculatePerspectiveRatio(double lng,
+                                       double lat,
+                                       double altitude,
+                                       const double* cachedMercator,
+                                       double cameraToCenterDistance,
+                                       const double* matrix,
+                                       double* out) {
+  const double* mercator;
+  double _mercator[3];
+  if (cachedMercator) {
+    mercator = cachedMercator;
+  } else {
+    _fromLngLat(lng, lat, altitude, _mercator);
+    mercator = _mercator;
+  }
+
+  double clipX;
+  double clipY;
+  double clipZ;
+  double clipW = 0.0;
+  multiplyMatrixAndVector(matrix,
+                          mercator[0],
+                          mercator[1],
+                          mercator[2],
+                          1.0,
+                          clipX,
+                          clipY,
+                          clipZ,
+                          clipW);
+
+  if (!std::isfinite(clipW) || clipW <= 0.0) {
+    out[0] = 1.0;
+    return;
+  }
+
+  const double ratio = cameraToCenterDistance / clipW;
+  out[0] =
+      (std::isfinite(ratio) && ratio > 0.0) ? ratio : 1.0;
+}
+
+EMSCRIPTEN_KEEPALIVE void calculatePerspectiveRatio(double lng,
+                                                    double lat,
+                                                    double altitude,
+                                                    const double* cachedMercator,
+                                                    const double* context,
+                                                    double* out) {
+  // Input guard
+  if (context == nullptr || cachedMercator == nullptr || out == nullptr) {
+    return;
+  }
+  const double cameraToCenterDistance = context[0];
+  const double* matrix = context + 1;
+
+  // Invoke main body
+  _calculatePerspectiveRatio(lng,
+                             lat,
+                             altitude,
+                             cachedMercator,
+                             cameraToCenterDistance,
+                             matrix,
+                             out);
 }
 
 }  // extern "C"
