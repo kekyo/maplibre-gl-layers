@@ -11,55 +11,7 @@ import {
 } from './projectionHost';
 import type { ProjectionHost, SpriteMercatorCoordinate } from './internalTypes';
 import type { SpriteLocation, SpritePoint } from './types';
-import { prepareWasmHost, type WasmHost } from './wasmHost';
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-interface BufferHolder<TArray extends ArrayBufferView> {
-  readonly prepare: () => { ptr: number; buffer: TArray };
-  readonly release: () => void;
-}
-
-type TypedArrayConstructor<TArray extends ArrayBufferView> = {
-  readonly BYTES_PER_ELEMENT: number;
-  new (buffer: ArrayBuffer, byteOffset: number, length: number): TArray;
-};
-
-const createTypedBuffer = <TArray extends ArrayBufferView>(
-  wasm: WasmHost,
-  ArrayType: TypedArrayConstructor<TArray>,
-  elementCount: number
-): BufferHolder<TArray> => {
-  const byteLength = elementCount * ArrayType.BYTES_PER_ELEMENT;
-  let ptr = wasm.malloc(byteLength);
-  let buffer: TArray | null = new ArrayType(
-    wasm.memory.buffer,
-    ptr,
-    elementCount
-  );
-  const prepare = () => {
-    if (ptr === 0) {
-      throw new Error('Buffer already freed.');
-    }
-    if (!buffer) {
-      buffer = new ArrayType(wasm.memory.buffer, ptr, elementCount);
-    } else if (buffer.buffer !== wasm.memory.buffer) {
-      buffer = new ArrayType(wasm.memory.buffer, ptr, elementCount);
-    }
-    return { ptr, buffer: buffer! };
-  };
-  const release = () => {
-    if (ptr !== 0) {
-      wasm.free(ptr);
-      ptr = 0;
-      buffer = null;
-    }
-  };
-  return {
-    prepare,
-    release,
-  };
-};
+import { createTypedBuffer, prepareWasmHost, type WasmHost } from './wasmHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -96,7 +48,7 @@ const createFromLngLat = (wasm: WasmHost) => {
     return { x, y, z };
   };
 
-  // Buffer releaser
+  // Attach releaser
   fromLngLat.release = resultHolder.release;
 
   return fromLngLat;
@@ -116,20 +68,25 @@ const createProject = (
   wasm: WasmHost,
   preparedState: PreparedProjectionState
 ) => {
+  // Short-circuit.
+  if (
+    !preparedState.pixelMatrix ||
+    preparedState.pixelMatrix.length !== WASM_Project_CONTEXT_ELEMENT_COUNT
+  ) {
+    const d = (
+      _location: Readonly<SpriteLocation>,
+      _cachedMercator?: SpriteMercatorCoordinate
+    ) => null;
+    d.release = () => {};
+    return d;
+  }
+
   // Allocate a matrix buffer.
   const matrixHolder = createTypedBuffer(
     wasm,
     Float64Array,
-    WASM_Project_CONTEXT_ELEMENT_COUNT
+    preparedState.pixelMatrix
   );
-
-  // Store matrix data into the buffer.
-  (() => {
-    const { buffer: matrix } = matrixHolder.prepare();
-    for (let index = 0; index < 16; index++) {
-      matrix[index] = preparedState.pixelMatrix?.[index] ?? 0;
-    }
-  })();
 
   // Allocate a result buffer.
   const resultHolder = createTypedBuffer(
@@ -166,6 +123,7 @@ const createProject = (
     }
   };
 
+  // Attach releaser
   project.release = () => {
     matrixHolder.release();
     resultHolder.release();
@@ -189,20 +147,23 @@ const createUnproject = (
   wasm: WasmHost,
   preparedState: PreparedProjectionState
 ) => {
+  // Short-circuit.
+  if (
+    !preparedState.pixelMatrixInverse ||
+    preparedState.pixelMatrixInverse.length !==
+      WASM_Unproject_CONTEXT_ELEMENT_COUNT
+  ) {
+    const d = (_point: Readonly<SpritePoint>) => null;
+    d.release = () => {};
+    return d;
+  }
+
   // Allocate a matrix buffer.
   const matrixHolder = createTypedBuffer(
     wasm,
     Float64Array,
-    WASM_Unproject_CONTEXT_ELEMENT_COUNT
+    preparedState.pixelMatrixInverse
   );
-
-  // Store context data into the buffer.
-  (() => {
-    const { buffer: matrix } = matrixHolder.prepare();
-    for (let index = 0; index < 16; index++) {
-      matrix[index] = preparedState.pixelMatrixInverse?.[index] ?? 0;
-    }
-  })();
 
   // Allocate a result buffer.
   const resultHolder = createTypedBuffer(
@@ -213,7 +174,9 @@ const createUnproject = (
 
   // `unproject` delegation body
   const unproject = (point: Readonly<SpritePoint>): SpriteLocation | null => {
+    // Prepare the matrix buffer.
     const { ptr: matrixPtr } = matrixHolder.prepare();
+    // Prepare the result buffer.
     const { ptr: resultPtr, buffer: result } = resultHolder.prepare();
 
     if (
@@ -234,6 +197,7 @@ const createUnproject = (
     }
   };
 
+  // Attach releaser
   unproject.release = () => {
     matrixHolder.release();
     resultHolder.release();
@@ -259,21 +223,26 @@ const createCalculatePerspectiveRatio = (
   wasm: WasmHost,
   preparedState: PreparedProjectionState
 ) => {
+  // Short-circuit.
+  if (
+    !preparedState.mercatorMatrix ||
+    preparedState.mercatorMatrix.length !==
+      WASM_CalculatePerspectiveRatio_CONTEXT_ELEMENT_COUNT ||
+    preparedState.cameraToCenterDistance <= 0
+  ) {
+    const d = (
+      _location: Readonly<SpriteLocation>,
+      _cachedMercator?: SpriteMercatorCoordinate
+    ) => 1;
+    d.release = () => {};
+    return d;
+  }
+
   const matrixHolder = createTypedBuffer(
     wasm,
     Float64Array,
-    WASM_CalculatePerspectiveRatio_CONTEXT_ELEMENT_COUNT
+    preparedState.mercatorMatrix
   );
-
-  (() => {
-    const { buffer: matrix } = matrixHolder.prepare();
-    for (let index = 0; index < 16; index++) {
-      matrix[index] = preparedState.mercatorMatrix?.[index] ?? 0;
-    }
-  })();
-
-  const isInvalidState =
-    !preparedState.mercatorMatrix || preparedState.cameraToCenterDistance <= 0;
 
   const cachedMercatorHolder = createTypedBuffer(
     wasm,
@@ -287,14 +256,11 @@ const createCalculatePerspectiveRatio = (
     WASM_CalculatePerspectiveRatio_RESULT_ELEMENT_COUNT
   );
 
+  // `calculatePerspectiveRatio` delegation body
   const calculatePerspectiveRatio = (
     location: Readonly<SpriteLocation>,
     cachedMercator?: SpriteMercatorCoordinate
   ): number => {
-    if (isInvalidState) {
-      return 1;
-    }
-
     if (cachedMercator) {
       const { ptr: matrixPtr } = matrixHolder.prepare();
       const { ptr: cachedMercatorPtr, buffer: cachedMercatorBuffer } =
@@ -344,6 +310,7 @@ const createCalculatePerspectiveRatio = (
     }
   };
 
+  // Attach releaser
   calculatePerspectiveRatio.release = () => {
     matrixHolder.release();
     resultHolder.release();
@@ -351,8 +318,6 @@ const createCalculatePerspectiveRatio = (
 
   return calculatePerspectiveRatio;
 };
-
-// TODO: Other ProjectionHost members
 
 //////////////////////////////////////////////////////////////////////////////////////
 

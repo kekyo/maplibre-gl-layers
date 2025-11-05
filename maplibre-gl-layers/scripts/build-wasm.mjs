@@ -18,11 +18,16 @@ const projectRoot = resolve(__dirname, '..');
 const repositoryRoot = resolve(projectRoot, '..');
 const wasmSourceDir = resolve(projectRoot, 'wasm');
 const wasmOutputDir = resolve(projectRoot, 'src/wasm');
-const sourceFile = resolve(wasmSourceDir, 'projection_host.cpp');
-const outputFile = resolve(wasmOutputDir, 'projection_host.wasm');
+const sourceFiles = [
+  resolve(wasmSourceDir, 'projection_host.cpp'),
+  resolve(wasmSourceDir, 'calculation_host.cpp'),
+];
+const outputFile = resolve(wasmOutputDir, 'offloads.wasm');
 
-if (!existsSync(sourceFile)) {
-  throw new Error(`Missing WASM source file: ${sourceFile}`);
+for (const sourceFile of sourceFiles) {
+  if (!existsSync(sourceFile)) {
+    throw new Error(`Missing WASM source file: ${sourceFile}`);
+  }
 }
 
 if (!existsSync(wasmOutputDir)) {
@@ -64,7 +69,7 @@ const findWasmOptExecutable = (emsdkDir) => {
 };
 
 const args = [
-  sourceFile,
+  ...sourceFiles,
   '-O3',
   '-msimd128',
   '-std=c++17',
@@ -73,7 +78,7 @@ const args = [
   '-s',
   'ENVIRONMENT=web,webview,worker,node',
   '-s',
-  'EXPORTED_FUNCTIONS=["_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_malloc","_free"]',
+  'EXPORTED_FUNCTIONS=["_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_projectLngLatToClipSpace","_calculateBillboardDepthKey","_calculateSurfaceDepthKey","_malloc","_free"]',
   '-s',
   'ALLOW_MEMORY_GROWTH=1',
   '-s',

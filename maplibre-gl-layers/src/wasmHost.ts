@@ -52,7 +52,37 @@ export type WasmCalculatePerspectiveRatio = (
   outPtr: number
 ) => boolean;
 
-// TODO: Will add calculation host related function types.
+export type WasmProjectLngLatToClipSpace = (
+  lng: number,
+  lat: number,
+  altitude: number,
+  matrixPtr: number,
+  outPtr: number
+) => boolean;
+
+export type WasmCalculateBillboardDepthKey = (
+  centerX: number,
+  centerY: number,
+  worldSize: number,
+  inverseMatrixPtr: number,
+  mercatorMatrixPtr: number,
+  outPtr: number
+) => boolean;
+
+export type WasmCalculateSurfaceDepthKey = (
+  baseLng: number,
+  baseLat: number,
+  baseAltitude: number,
+  displacementPtr: number,
+  displacementCount: number,
+  indexPtr: number,
+  indexCount: number,
+  mercatorMatrixPtr: number,
+  applyBias: number,
+  biasNdc: number,
+  minClipZEpsilon: number,
+  outPtr: number
+) => boolean;
 
 /**
  * Wasm host reference.
@@ -67,6 +97,9 @@ export interface WasmHost {
   readonly project: WasmProject;
   readonly calculatePerspectiveRatio: WasmCalculatePerspectiveRatio;
   readonly unproject: WasmUnproject;
+  readonly projectLngLatToClipSpace: WasmProjectLngLatToClipSpace;
+  readonly calculateBillboardDepthKey: WasmCalculateBillboardDepthKey;
+  readonly calculateSurfaceDepthKey: WasmCalculateSurfaceDepthKey;
 
   // TODO: Will add CalculationHost related functions.
 }
@@ -89,6 +122,12 @@ interface RawProjectionWasmExports {
   readonly unproject?: WasmUnproject;
   readonly _calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
   readonly calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
+  readonly _projectLngLatToClipSpace?: WasmProjectLngLatToClipSpace;
+  readonly projectLngLatToClipSpace?: WasmProjectLngLatToClipSpace;
+  readonly _calculateBillboardDepthKey?: WasmCalculateBillboardDepthKey;
+  readonly calculateBillboardDepthKey?: WasmCalculateBillboardDepthKey;
+  readonly _calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
+  readonly calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
 }
 
 type NodeFsPromisesModule = typeof import('fs/promises');
@@ -124,7 +163,7 @@ const createImportFunctionStub = (): Record<
  * @returns Raw wasm binary stream.
  */
 const loadWasmBinary = async (): Promise<ArrayBuffer> => {
-  const wasmUrl = new URL('./wasm/projection_host.wasm', import.meta.url);
+  const wasmUrl = new URL('./wasm/offloads.wasm', import.meta.url);
 
   if (typeof fetch === 'function') {
     try {
@@ -153,7 +192,7 @@ const loadWasmBinary = async (): Promise<ArrayBuffer> => {
 
   const response = await fetch(wasmUrl);
   if (!response.ok) {
-    throw new Error(`Failed to load projection host WASM: ${wasmUrl.href}`);
+    throw new Error(`Failed to load offloads WASM: ${wasmUrl.href}`);
   }
   return await response.arrayBuffer();
 };
@@ -200,6 +239,27 @@ const instantiateProjectionWasm = async (): Promise<WasmHost> => {
     (exports.calculatePerspectiveRatio as
       | WasmCalculatePerspectiveRatio
       | undefined);
+  const projectLngLatToClipSpace =
+    (exports._projectLngLatToClipSpace as
+      | WasmProjectLngLatToClipSpace
+      | undefined) ??
+    (exports.projectLngLatToClipSpace as
+      | WasmProjectLngLatToClipSpace
+      | undefined);
+  const calculateBillboardDepthKey =
+    (exports._calculateBillboardDepthKey as
+      | WasmCalculateBillboardDepthKey
+      | undefined) ??
+    (exports.calculateBillboardDepthKey as
+      | WasmCalculateBillboardDepthKey
+      | undefined);
+  const calculateSurfaceDepthKey =
+    (exports._calculateSurfaceDepthKey as
+      | WasmCalculateSurfaceDepthKey
+      | undefined) ??
+    (exports.calculateSurfaceDepthKey as
+      | WasmCalculateSurfaceDepthKey
+      | undefined);
   const unproject =
     (exports._unproject as WasmUnproject | undefined) ??
     (exports.unproject as WasmUnproject | undefined);
@@ -211,6 +271,9 @@ const instantiateProjectionWasm = async (): Promise<WasmHost> => {
     !fromLngLat ||
     !project ||
     !calculatePerspectiveRatio ||
+    !projectLngLatToClipSpace ||
+    !calculateBillboardDepthKey ||
+    !calculateSurfaceDepthKey ||
     !unproject
   ) {
     throw new Error('Projection host WASM exports are incomplete.');
@@ -221,6 +284,9 @@ const instantiateProjectionWasm = async (): Promise<WasmHost> => {
     fromLngLat,
     project,
     calculatePerspectiveRatio,
+    projectLngLatToClipSpace,
+    calculateBillboardDepthKey,
+    calculateSurfaceDepthKey,
     unproject,
     malloc,
     free,
@@ -262,10 +328,42 @@ export const prepareWasmHost = (): WasmHost => {
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * A holder that createTypedBuffer.
+ * An array element type that createTypedBuffer.
  * @param TArray - A type for ArrayBufferView (ex: Float64Array)
  */
-export interface BufferHolder<TArray extends ArrayBufferView> {
+export type TypedArrayElement<TArray> = TArray extends {
+  [index: number]: infer T;
+}
+  ? T
+  : never;
+
+/**
+ * Typed ArrayBufferView.
+ * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+ */
+export interface TypedArrayBufferView<TArray> extends ArrayBufferView {
+  /**
+   * Copy in an array.
+   * @param from An array.
+   */
+  readonly set: (from: ArrayLike<TypedArrayElement<TArray>>) => void;
+}
+
+/**
+ * TypedArrayBuffer view constructor type.
+ * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+ */
+export type TypedArrayConstructor<TArray extends TypedArrayBufferView<TArray>> =
+  {
+    readonly BYTES_PER_ELEMENT: number;
+    new (buffer: ArrayBuffer, byteOffset: number, length: number): TArray;
+  };
+
+/**
+ * The BufferHolder, capsule both wasm raw memory pointer and ArrayBufferBuffer.
+ * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+ */
+export interface BufferHolder<TArray extends TypedArrayBufferView<TArray>> {
   /**
    * Prepare and get the raw pointer and the buffer reference.
    * @returns The raw pointer and the buffer reference.
@@ -278,48 +376,47 @@ export interface BufferHolder<TArray extends ArrayBufferView> {
   readonly release: () => void;
 }
 
-export type TypedArrayConstructor<TArray extends ArrayBufferView> = {
-  readonly BYTES_PER_ELEMENT: number;
-  new (buffer: ArrayBuffer, byteOffset: number, length: number): TArray;
-};
-
 /**
  * Helper for wasm interoperation buffer.
  * @param TArray - A type for ArrayBufferView (ex: Float64Array)
  * @param wasm - WasmHost
  * @param ArrayType - ArrayBufferView constructor
- * @param elementCount - Buffer element count
+ * @param elements - Buffer element count or copy in data array.
  */
-export const createTypedBuffer = <TArray extends ArrayBufferView>(
+export const createTypedBuffer = <TArray extends TypedArrayBufferView<TArray>>(
   wasm: WasmHost,
   ArrayType: TypedArrayConstructor<TArray>,
-  elementCount: number
+  elements: number | ArrayLike<TypedArrayElement<TArray>>
 ): BufferHolder<TArray> => {
-  const byteLength = elementCount * ArrayType.BYTES_PER_ELEMENT;
-  let ptr = wasm.malloc(byteLength);
-  let buffer: TArray | null = new ArrayType(
-    wasm.memory.buffer,
-    ptr,
-    elementCount
-  );
+  const isElementLength = typeof elements === 'number';
+  const length = isElementLength ? elements : elements.length;
+
+  let ptr = wasm.malloc(length * ArrayType.BYTES_PER_ELEMENT);
+  let buffer: TArray = new ArrayType(wasm.memory.buffer, ptr, length);
+
+  if (!isElementLength) {
+    buffer.set(elements);
+  }
+
   const prepare = () => {
     if (ptr === 0) {
       throw new Error('Buffer already freed.');
     }
-    if (!buffer) {
-      buffer = new ArrayType(wasm.memory.buffer, ptr, elementCount);
-    } else if (buffer.buffer !== wasm.memory.buffer) {
-      buffer = new ArrayType(wasm.memory.buffer, ptr, elementCount);
+    // Out of dated the buffer
+    if (buffer.buffer !== wasm.memory.buffer) {
+      buffer = new ArrayType(wasm.memory.buffer, ptr, length);
     }
-    return { ptr, buffer: buffer! };
+    return { ptr, buffer };
   };
+
   const release = () => {
     if (ptr !== 0) {
       wasm.free(ptr);
       ptr = 0;
-      buffer = null;
+      buffer = undefined!;
     }
   };
+
   return {
     prepare,
     release,

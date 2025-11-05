@@ -1448,7 +1448,6 @@ export interface SurfaceCorner {
 
 /**
  * Corner list for a unit, axis-aligned surface quad before rotation and scaling.
- * @constant
  */
 const SURFACE_BASE_CORNERS: ReadonlyArray<readonly [number, number]> = [
   [-1, 1],
@@ -1456,6 +1455,11 @@ const SURFACE_BASE_CORNERS: ReadonlyArray<readonly [number, number]> = [
   [-1, -1],
   [1, -1],
 ] as const;
+
+/**
+ * Number of surface corners returns from `calculateSurfaceCornerDisplacements`.
+ */
+export const SURFACE_CORNER_DISPLACEMENT_COUNT = SURFACE_BASE_CORNERS.length;
 
 /**
  * Converts normalized surface corners into world-space displacements honoring anchor, rotation, and offsets.
