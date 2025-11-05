@@ -5,10 +5,8 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type {
-  CollectDepthSortedItemsInputs,
-  DepthSortedItem,
   PreparedDrawSpriteImageParams,
-  PrepareDrawSpriteImageInputs,
+  PrepareDrawSpriteImageParams,
   RenderCalculationHost,
 } from './internalTypes';
 import { prepareWasmHost, type WasmHost } from './wasmHost';
@@ -22,22 +20,11 @@ import { createCalculationHost } from './calculationHost';
 //////////////////////////////////////////////////////////////////////////////////////
 
 // TODO: To be implementing in wasm side.
-const collectDepthSortedItemsInternal = <T>(
+const prepareDrawSpriteImagesInternal = <TTag>(
   _wasm: WasmHost,
   _preparedState: PreparedProjectionState,
-  _inputs: CollectDepthSortedItemsInputs<T>
-): DepthSortedItem<T>[] => {
-  return undefined!;
-};
-void collectDepthSortedItemsInternal;
-
-// TODO: To be implementing in wasm side.
-const prepareDrawSpriteImagesInternal = <T>(
-  _wasm: WasmHost,
-  _preparedState: PreparedProjectionState,
-  _items: readonly Readonly<DepthSortedItem<T>>[],
-  _inputs: PrepareDrawSpriteImageInputs<T>
-): PreparedDrawSpriteImageParams<T>[] => {
+  _params: PrepareDrawSpriteImageParams<TTag>
+): PreparedDrawSpriteImageParams<TTag>[] => {
   // TODO: To be implementing in wasm side.
   return undefined!;
 };
@@ -66,12 +53,9 @@ export const createWasmCalculationHost = <TTag>(
   const baseHost = createCalculationHost<TTag>(params);
 
   return {
-    collectDepthSortedItems: (inputs) =>
-      baseHost.collectDepthSortedItems(inputs),
-    //prepareDrawSpriteImagesInternal(wasm, preparedState, inputs),
-    prepareDrawSpriteImages: (items, inputs) =>
-      baseHost.prepareDrawSpriteImages(items, inputs),
-    //prepareDrawSpriteImagesInternal(wasm, preparedState, items, inputs),
+    prepareDrawSpriteImages: (params) =>
+      baseHost.prepareDrawSpriteImages(params),
+    //prepareDrawSpriteImagesInternal(wasm, preparedState, params),
     release: () => {},
   };
 };

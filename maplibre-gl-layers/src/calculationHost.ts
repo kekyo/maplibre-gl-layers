@@ -28,7 +28,7 @@ import {
   type QuadCorner,
   calculateZoomScaleFactor,
   resolveScalingOptions,
-  type ResolvedSpriteScalingOptions,
+  resolveSpriteMercator,
 } from './math';
 import {
   BILLBOARD_BASE_CORNERS,
@@ -43,13 +43,12 @@ import type {
   SurfaceShaderInputs,
   ClipContext,
   ProjectionHost,
-  CollectDepthSortedItemsInputs,
-  DepthSortedItem,
   PreparedDrawSpriteImageParams,
-  PrepareDrawSpriteImageInputs,
+  PrepareDrawSpriteImageParams,
   RenderCalculationHost,
-  ImageCenterCache,
-  ImageCenterCacheEntry,
+  MutableSpriteScreenPoint,
+  PrepareDrawSpriteImageParamsBefore,
+  PrepareDrawSpriteImageParamsAfter,
 } from './internalTypes';
 import type {
   SpriteAnchor,
@@ -83,13 +82,60 @@ import {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-const collectDepthSortedItemsInternal = <T>(
+/**
+ * Cache entry storing anchor-adjusted and raw centers for a sprite image.
+ */
+interface ImageCenterCacheEntry {
+  readonly anchorApplied?: SpritePoint;
+  readonly anchorless?: SpritePoint;
+}
+
+/**
+ * Nested cache keyed by sprite ID and image key to avoid recomputing centers each frame.
+ */
+type ImageCenterCache = Map<string, Map<string, ImageCenterCacheEntry>>;
+
+interface DepthSortedItem<T> {
+  readonly sprite: InternalSpriteCurrentState<T>;
+  readonly image: InternalSpriteImageState;
+  readonly resource: Readonly<RegisteredImage>;
+  readonly depthKey: number;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Ensures an image has a reusable hit-test corner buffer.
+ * @param {InternalSpriteImageState} imageEntry - Image requiring a corner buffer.
+ * @returns {[SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint]}
+ */
+const ensureHitTestCorners = (
+  imageEntry: InternalSpriteImageState
+): [
+  MutableSpriteScreenPoint,
+  MutableSpriteScreenPoint,
+  MutableSpriteScreenPoint,
+  MutableSpriteScreenPoint,
+] => {
+  if (!imageEntry.hitTestCorners) {
+    imageEntry.hitTestCorners = [
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+    ];
+  }
+  return imageEntry.hitTestCorners;
+};
+
+export const collectDepthSortedItemsInternal = <T>(
   projectionHost: ProjectionHost,
+  zoom: number,
+  zoomScaleFactor: number,
+  originCenterCache: ImageCenterCache,
   {
     bucket,
     images,
-    resolvedScaling,
-    zoomScaleFactor: zoomScaleFactorOverride,
     clipContext,
     baseMetersPerPixel,
     spriteMinPixel,
@@ -97,9 +143,7 @@ const collectDepthSortedItemsInternal = <T>(
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
-    originCenterCache,
-    resolveSpriteMercator,
-  }: CollectDepthSortedItemsInputs<T>
+  }: PrepareDrawSpriteImageParamsBefore<T>
 ): DepthSortedItem<T>[] => {
   const itemsWithDepth: DepthSortedItem<T>[] = [];
 
@@ -109,11 +153,6 @@ const collectDepthSortedItemsInternal = <T>(
   const unprojectPoint: UnprojectPointFn = (point: SpriteScreenPoint) => {
     return projectionHost.unproject(point);
   };
-
-  const zoom = projectionHost.getZoom();
-  const zoomScaleFactor =
-    zoomScaleFactorOverride ??
-    (resolvedScaling ? calculateZoomScaleFactor(zoom, resolvedScaling) : 1);
 
   for (const [spriteEntry, imageEntry] of bucket) {
     const imageResource = images.get(imageEntry.imageId);
@@ -303,7 +342,7 @@ const collectDepthSortedItemsInternal = <T>(
  * @param {ClipContext | null} context - Clip-space context; `null` skips projection.
  * @returns {[number, number, number, number] | null} Clip coordinates or `null` when projection fails.
  */
-export const projectLngLatToClipSpace = (
+const projectLngLatToClipSpace = (
   projectionHost: ProjectionHost,
   location: Readonly<SpriteLocation>,
   context: Readonly<ClipContext> | null
@@ -612,16 +651,14 @@ const prepareSurfaceShaderInputs = (
 /**
  * Prepares quad data for a single sprite image before issuing the draw call.
  */
-const prepareDrawSpriteImage = <T>(
+export const prepareDrawSpriteImageInternal = <TTag>(
   projectionHost: ProjectionHost,
-  item: DepthSortedItem<T>,
-  inputs: PrepareDrawSpriteImageInputs<T>
-): PreparedDrawSpriteImageParams<T> | null => {
-  const {
-    originCenterCache,
+  item: DepthSortedItem<TTag>,
+  zoom: number,
+  zoomScaleFactor: number,
+  originCenterCache: ImageCenterCache,
+  {
     images,
-    resolvedScaling,
-    zoomScaleFactor: zoomScaleFactorOverride,
     baseMetersPerPixel,
     spriteMinPixel,
     spriteMaxPixel,
@@ -637,10 +674,8 @@ const prepareDrawSpriteImage = <T>(
     screenToClipScaleY,
     screenToClipOffsetX,
     screenToClipOffsetY,
-    ensureHitTestCorners,
-    resolveSpriteMercator,
-  } = inputs;
-
+  }: PrepareDrawSpriteImageParamsAfter
+): PreparedDrawSpriteImageParams<TTag> | null => {
   const spriteEntry = item.sprite;
   const imageEntry = item.image;
   const imageResource = item.resource;
@@ -676,20 +711,17 @@ const prepareDrawSpriteImage = <T>(
     offsetX: identityOffsetX,
     offsetY: identityOffsetY,
   };
+
   // Use per-image anchor/offset when provided; otherwise fall back to defaults.
   const anchor = imageEntry.anchor ?? DEFAULT_ANCHOR;
   const offsetDef = imageEntry.offset ?? DEFAULT_IMAGE_OFFSET;
+
   // Prefer the dynamically interpolated rotation when available; otherwise synthesize it from base + manual rotations.
   const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
     ? imageEntry.displayedRotateDeg
     : normalizeAngleDeg(
         (imageEntry.resolvedBaseRotateDeg ?? 0) + (imageEntry.rotateDeg ?? 0)
       );
-
-  const zoom = projectionHost.getZoom();
-  const zoomScaleFactor =
-    zoomScaleFactorOverride ??
-    (resolvedScaling ? calculateZoomScaleFactor(zoom, resolvedScaling) : 1);
 
   const projected = projectionHost.project(spriteEntry.currentLocation);
   if (!projected) {
@@ -709,6 +741,7 @@ const prepareDrawSpriteImage = <T>(
     spriteEntry.currentLocation,
     spriteMercator
   );
+
   // Convert meters-per-pixel into pixels-per-meter when valid so scaling remains intuitive.
   const basePixelsPerMeter =
     metersPerPixelAtLat > 0 ? 1 / metersPerPixelAtLat : 0;
@@ -1226,15 +1259,48 @@ const prepareDrawSpriteImage = <T>(
   };
 };
 
-const prepareDrawSpriteImagesInternal = <T>(
-  projectionHost: ProjectionHost,
-  items: readonly Readonly<DepthSortedItem<T>>[],
-  options: PrepareDrawSpriteImageInputs<T>
-): PreparedDrawSpriteImageParams<T>[] => {
-  const preparedItems: PreparedDrawSpriteImageParams<T>[] = [];
+//////////////////////////////////////////////////////////////////////////////////////
 
-  for (const item of items) {
-    const prepared = prepareDrawSpriteImage(projectionHost, item, options);
+const prepareDrawSpriteImages = <TTag>(
+  projectionHost: ProjectionHost,
+  params: PrepareDrawSpriteImageParams<TTag>
+) => {
+  // Render sprite images. The renderTargetEntries list is already filtered to visible items.
+  // Cache of sprite-specific reference origins (center pixel coordinates).
+  const originCenterCache: ImageCenterCache = new Map();
+
+  const zoom = projectionHost.getZoom();
+  const resolvedScaling =
+    params.resolvedScaling ??
+    resolveScalingOptions({
+      metersPerPixel: params.baseMetersPerPixel,
+      spriteMinPixel: params.spriteMinPixel,
+      spriteMaxPixel: params.spriteMaxPixel,
+      zoomMin: zoom,
+      zoomMax: zoom,
+    });
+  const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
+
+  // Step 1
+  const itemsWithDepth = collectDepthSortedItemsInternal(
+    projectionHost,
+    zoom,
+    zoomScaleFactor,
+    originCenterCache,
+    params
+  );
+
+  // Step 2
+  const preparedItems: PreparedDrawSpriteImageParams<TTag>[] = [];
+  for (const item of itemsWithDepth) {
+    const prepared = prepareDrawSpriteImageInternal(
+      projectionHost,
+      item,
+      zoom,
+      zoomScaleFactor,
+      originCenterCache,
+      params
+    );
     if (prepared) {
       preparedItems.push(prepared);
     } else {
@@ -1243,78 +1309,6 @@ const prepareDrawSpriteImagesInternal = <T>(
   }
 
   return preparedItems;
-};
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-type CollectDepthSortedItemsParams<T> = Omit<
-  CollectDepthSortedItemsInputs<T>,
-  'resolvedScaling' | 'zoomScaleFactor'
-> & {
-  readonly projectionHost: ProjectionHost;
-  readonly resolvedScaling?: ResolvedSpriteScalingOptions;
-  readonly zoomScaleFactor?: number;
-  readonly zoom?: number;
-};
-
-/**
- * Backwards-compatible entry point for collecting depth-sorted items without creating a host.
- */
-export const collectDepthSortedItems = <T>(
-  params: CollectDepthSortedItemsParams<T>
-): DepthSortedItem<T>[] => {
-  const { projectionHost, resolvedScaling, zoomScaleFactor, zoom, ...rest } =
-    params;
-
-  const ensuredScaling =
-    resolvedScaling ??
-    resolveScalingOptions({
-      metersPerPixel: rest.baseMetersPerPixel,
-      spriteMinPixel: rest.spriteMinPixel,
-      spriteMaxPixel: rest.spriteMaxPixel,
-      zoomMin: zoom,
-      zoomMax: zoom,
-    });
-
-  return collectDepthSortedItemsInternal(projectionHost, {
-    ...rest,
-    resolvedScaling: ensuredScaling,
-    zoomScaleFactor,
-  });
-};
-
-type PrepareDrawSpriteImagesParams<T> = Omit<
-  PrepareDrawSpriteImageInputs<T>,
-  'resolvedScaling' | 'zoomScaleFactor'
-> & {
-  readonly projectionHost: ProjectionHost;
-  readonly items: readonly DepthSortedItem<T>[];
-  readonly resolvedScaling?: ResolvedSpriteScalingOptions;
-  readonly zoomScaleFactor?: number;
-};
-
-/**
- * Backwards-compatible entry point for preparing draw parameters without creating a host.
- */
-export const prepareDrawSpriteImages = <T>(
-  params: PrepareDrawSpriteImagesParams<T>
-): PreparedDrawSpriteImageParams<T>[] => {
-  const { projectionHost, items, resolvedScaling, zoomScaleFactor, ...rest } =
-    params;
-
-  const ensuredScaling =
-    resolvedScaling ??
-    resolveScalingOptions({
-      metersPerPixel: rest.baseMetersPerPixel,
-      spriteMinPixel: rest.spriteMinPixel,
-      spriteMaxPixel: rest.spriteMaxPixel,
-    });
-
-  return prepareDrawSpriteImagesInternal(projectionHost, items, {
-    ...rest,
-    resolvedScaling: ensuredScaling,
-    zoomScaleFactor,
-  });
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -1330,10 +1324,8 @@ export const createMapLibreCalculationHost = <TTag>(
 ): RenderCalculationHost<TTag> => {
   const projectionHost = createMapLibreProjectionHost(map);
   return {
-    collectDepthSortedItems: (inputs) =>
-      collectDepthSortedItemsInternal(projectionHost, inputs),
-    prepareDrawSpriteImages: (items, inputs) =>
-      prepareDrawSpriteImagesInternal(projectionHost, items, inputs),
+    prepareDrawSpriteImages: (params) =>
+      prepareDrawSpriteImages(projectionHost, params),
     release: projectionHost.release,
   };
 };
@@ -1341,7 +1333,7 @@ export const createMapLibreCalculationHost = <TTag>(
 /**
  * Create calculation host that pure implementation.
  * @param TTag Tag type.
- * @param params Projection host params.
+ * @param params Projection host PrepareDrawSpriteImageInputsparams.
  * @returns Calculation host.
  */
 export const createCalculationHost = <TTag>(
@@ -1349,10 +1341,8 @@ export const createCalculationHost = <TTag>(
 ): RenderCalculationHost<TTag> => {
   const projectionHost = createProjectionHost(params);
   return {
-    collectDepthSortedItems: (inputs) =>
-      collectDepthSortedItemsInternal(projectionHost, inputs),
-    prepareDrawSpriteImages: (items, inputs) =>
-      prepareDrawSpriteImagesInternal(projectionHost, items, inputs),
+    prepareDrawSpriteImages: (params) =>
+      prepareDrawSpriteImages(projectionHost, params),
     release: projectionHost.release,
   };
 };

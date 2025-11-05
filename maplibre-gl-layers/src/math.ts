@@ -12,7 +12,12 @@ import type {
   SpriteScalingOptions,
   SpriteScreenPoint,
 } from './types';
-import type { MatrixInput } from './internalTypes';
+import type {
+  InternalSpriteCurrentState,
+  MatrixInput,
+  ProjectionHost,
+  SpriteMercatorCoordinate,
+} from './internalTypes';
 import {
   DEG2RAD,
   EARTH_RADIUS_METERS,
@@ -1500,4 +1505,32 @@ export const calculateSurfaceCornerDisplacements = (
   }
 
   return corners;
+};
+
+/**
+ * Ensures the sprite's cached Mercator coordinate matches its current location.
+ * Recomputes the coordinate lazily when longitude/latitude/altitude change.
+ * @param {ProjectionHost} projectionHost - Projection host.
+ * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
+ * @returns {SpriteMercatorCoordinate} Cached Mercator coordinate representing the current location.
+ */
+export const resolveSpriteMercator = <T>(
+  projectionHost: ProjectionHost,
+  sprite: InternalSpriteCurrentState<T>
+): SpriteMercatorCoordinate => {
+  const location = sprite.currentLocation;
+  if (
+    sprite.cachedMercator &&
+    sprite.cachedMercatorLng === location.lng &&
+    sprite.cachedMercatorLat === location.lat &&
+    sprite.cachedMercatorZ === location.z
+  ) {
+    return sprite.cachedMercator;
+  }
+  const mercator = projectionHost.fromLngLat(location);
+  sprite.cachedMercator = mercator;
+  sprite.cachedMercatorLng = location.lng;
+  sprite.cachedMercatorLat = location.lat;
+  sprite.cachedMercatorZ = location.z;
+  return mercator;
 };

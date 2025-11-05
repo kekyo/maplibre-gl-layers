@@ -54,16 +54,13 @@ import type {
   ResolvedTextGlyphPadding,
   ResolvedBorderSides,
   ResolvedTextGlyphOptions,
-  MutableSpriteScreenPoint,
   Canvas2DContext,
   Canvas2DSource,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
   SurfaceShaderInputs,
   ProjectionHost,
-  SpriteMercatorCoordinate,
   PreparedDrawSpriteImageParams,
-  ImageCenterCache,
   RenderCalculationHost,
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './loadImage';
@@ -88,6 +85,7 @@ import {
   calculateSurfaceCornerDisplacements,
   cloneSpriteLocation,
   spriteLocationsEqual,
+  resolveSpriteMercator,
 } from './math';
 import {
   applyOffsetUpdate,
@@ -1215,34 +1213,6 @@ export const createSpriteLayer = <T = any>(
   const sprites = new Map<string, InternalSpriteCurrentState<T>>();
 
   /**
-   * Ensures the sprite's cached Mercator coordinate matches its current location.
-   * Recomputes the coordinate lazily when longitude/latitude/altitude change.
-   * @param {ProjectionHost} projectionHost - Projection host.
-   * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
-   * @returns {SpriteMercatorCoordinate} Cached Mercator coordinate representing the current location.
-   */
-  const resolveSpriteMercator = (
-    projectionHost: ProjectionHost,
-    sprite: InternalSpriteCurrentState<T>
-  ): SpriteMercatorCoordinate => {
-    const location = sprite.currentLocation;
-    if (
-      sprite.cachedMercator &&
-      sprite.cachedMercatorLng === location.lng &&
-      sprite.cachedMercatorLat === location.lat &&
-      sprite.cachedMercatorZ === location.z
-    ) {
-      return sprite.cachedMercator;
-    }
-    const mercator = projectionHost.fromLngLat(location);
-    sprite.cachedMercator = mercator;
-    sprite.cachedMercatorLng = location.lng;
-    sprite.cachedMercatorLat = location.lat;
-    sprite.cachedMercatorZ = location.z;
-    return mercator;
-  };
-
-  /**
    * State stored in the QuadTree used for hit testing.
    */
   interface HitTestTreeState {
@@ -1901,30 +1871,6 @@ export const createSpriteLayer = <T = any>(
     InternalSpriteImageState,
     HitTestEntry
   >();
-
-  /**
-   * Ensures an image has a reusable hit-test corner buffer.
-   * @param {InternalSpriteImageState} imageEntry - Image requiring a corner buffer.
-   * @returns {[SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint]}
-   */
-  const ensureHitTestCorners = (
-    imageEntry: InternalSpriteImageState
-  ): [
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-  ] => {
-    if (!imageEntry.hitTestCorners) {
-      imageEntry.hitTestCorners = [
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-      ];
-    }
-    return imageEntry.hitTestCorners;
-  };
 
   /**
    * Adds a hit-test entry to the cache, computing its axis-aligned bounding box.
@@ -3188,14 +3134,6 @@ export const createSpriteLayer = <T = any>(
         );
       };
 
-      /**
-       * Prepares quad data for a single sprite image before issuing the draw call.
-       * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image being drawn.
-       * @param {InternalSpriteImageState} imageEntry - Image state describing rendering parameters.
-       * @param {RegisteredImage} imageResource - GPU-backed image resource.
-       * @param {ImageCenterCache} originCenterCache - Cache for resolving origin references quickly.
-       * @returns {boolean} `true` when the sprite image is ready to draw; `false` when skipped.
-       */
       let drawOrderCounter = 0;
 
       const issueSpriteDraw = (
@@ -3298,10 +3236,6 @@ export const createSpriteLayer = <T = any>(
         drawOrderCounter += 1;
       };
 
-      // Render sprite images. The renderTargetEntries list is already filtered to visible items.
-      // Cache of sprite-specific reference origins (center pixel coordinates).
-      const originCenterCache: ImageCenterCache = new Map();
-
       const sortedSubLayerBuckets =
         buildSortedSubLayerBuckets(renderTargetEntries);
 
@@ -3312,7 +3246,7 @@ export const createSpriteLayer = <T = any>(
       const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
         const calculationHost = createCalculationHostForMap<T>(mapInstance);
         try {
-          const itemsWithDepth = calculationHost.collectDepthSortedItems({
+          const preparedItems = calculationHost.prepareDrawSpriteImages({
             bucket,
             images,
             resolvedScaling,
@@ -3323,35 +3257,15 @@ export const createSpriteLayer = <T = any>(
             drawingBufferWidth,
             drawingBufferHeight,
             pixelRatio,
-            originCenterCache,
-            resolveSpriteMercator,
+            identityScaleX,
+            identityScaleY,
+            identityOffsetX,
+            identityOffsetY,
+            screenToClipScaleX,
+            screenToClipScaleY,
+            screenToClipOffsetX,
+            screenToClipOffsetY,
           });
-
-          const preparedItems = calculationHost.prepareDrawSpriteImages(
-            itemsWithDepth,
-            {
-              originCenterCache,
-              images,
-              resolvedScaling,
-              baseMetersPerPixel,
-              spriteMinPixel,
-              spriteMaxPixel,
-              drawingBufferWidth,
-              drawingBufferHeight,
-              pixelRatio,
-              clipContext,
-              identityScaleX,
-              identityScaleY,
-              identityOffsetX,
-              identityOffsetY,
-              screenToClipScaleX,
-              screenToClipScaleY,
-              screenToClipOffsetX,
-              screenToClipOffsetY,
-              ensureHitTestCorners,
-              resolveSpriteMercator,
-            }
-          );
 
           for (const prepared of preparedItems) {
             issueSpriteDraw(prepared);

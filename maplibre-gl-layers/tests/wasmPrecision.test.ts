@@ -10,10 +10,8 @@ import {
   createProjectionHost,
   type ProjectionHostParams,
 } from '../src/projectionHost';
-import {
-  createWasmProjectionHost,
-  initProjectionWasm,
-} from '../src/wasmProjectionHost';
+import { createWasmProjectionHost } from '../src/wasmProjectionHost';
+import { initializeWasmHost } from '../src/wasmHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -58,7 +56,7 @@ describe('wasm fromLngLat precision', () => {
   it('compares 1M samples between JS and WASM implementations', async () => {
     expect.hasAssertions();
 
-    const initialized = await initProjectionWasm();
+    const initialized = await initializeWasmHost();
     expect(initialized).toBe(true);
 
     const referenceHost = createProjectionHost(BASE_PARAMS);
@@ -104,11 +102,11 @@ describe('wasm fromLngLat precision', () => {
     expect(maxDiffY).toBeLessThanOrEqual(1e-12);
     expect(maxDiffZ).toBeLessThanOrEqual(1e-6);
 
-    console.info(
-      'maplibre-gl-layers: fromLngLat max abs diff (x, y, z) =',
-      maxDiffX,
-      maxDiffY,
-      maxDiffZ
-    );
+    //console.info(
+    //  'maplibre-gl-layers: fromLngLat max abs diff (x, y, z) =',
+    //  maxDiffX,
+    //  maxDiffY,
+    //  maxDiffZ
+    //);
   }, 60_000);
 });

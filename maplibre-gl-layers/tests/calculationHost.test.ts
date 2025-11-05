@@ -9,20 +9,24 @@ import { MercatorCoordinate, type Map as MapLibreMap } from 'maplibre-gl';
 
 import { createMapLibreProjectionHost } from '../src/mapLibreProjectionHost';
 import {
-  collectDepthSortedItems,
-  prepareDrawSpriteImages,
-  projectLngLatToClipSpace,
+  collectDepthSortedItemsInternal,
+  prepareDrawSpriteImageInternal,
 } from '../src/calculationHost';
+import {
+  calculateZoomScaleFactor,
+  resolveScalingOptions,
+  type ResolvedSpriteScalingOptions,
+} from '../src/math';
 import type {
   ClipContext,
-  DepthSortedItem,
-  ImageCenterCache,
   InternalSpriteCurrentState,
   InternalSpriteImageState,
-  MutableSpriteScreenPoint,
   ProjectionHost,
   RegisteredImage,
   SpriteMercatorCoordinate,
+  PrepareDrawSpriteImageParamsBefore,
+  PrepareDrawSpriteImageParamsAfter,
+  PreparedDrawSpriteImageParams,
 } from '../src/internalTypes';
 import type {
   SpriteAnchor,
@@ -200,119 +204,176 @@ const createSpriteState = (
   };
 };
 
-const createEnsureHitTestCorners = () => {
-  return (
-    imageEntry: InternalSpriteImageState
-  ): [
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-  ] => {
-    if (!imageEntry.hitTestCorners) {
-      imageEntry.hitTestCorners = [
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-      ];
-    }
-    return imageEntry.hitTestCorners;
-  };
+type ImageCenterCacheEntryLike = {
+  readonly anchorApplied?: SpritePoint;
+  readonly anchorless?: SpritePoint;
 };
 
-type CollectParams = Parameters<typeof collectDepthSortedItems<null>>[0];
+type ImageCenterCacheLike = Map<string, Map<string, ImageCenterCacheEntryLike>>;
 
-type CollectOptionsOverrides = Partial<CollectParams> & {
+type DepthItem<TTag> = {
+  readonly sprite: InternalSpriteCurrentState<TTag>;
+  readonly image: InternalSpriteImageState;
+  readonly resource: RegisteredImage;
+  readonly depthKey: number;
+};
+
+interface CollectContext {
+  readonly projectionHost: ProjectionHost;
+  readonly paramsBefore: PrepareDrawSpriteImageParamsBefore<null>;
+  readonly originCenterCache: ImageCenterCacheLike;
+  readonly zoom: number;
+  readonly zoomScaleFactor: number;
+}
+
+interface CollectContextOverrides {
+  readonly bucket?: readonly Readonly<
+    [InternalSpriteCurrentState<null>, InternalSpriteImageState]
+  >[];
+  readonly projectionHost?: ProjectionHost;
   readonly projectionHostOptions?: FakeProjectionHostOptions;
-};
+  readonly images?: ReadonlyMap<string, Readonly<RegisteredImage>>;
+  readonly clipContext?: Readonly<ClipContext> | null;
+  readonly baseMetersPerPixel?: number;
+  readonly spriteMinPixel?: number;
+  readonly spriteMaxPixel?: number;
+  readonly drawingBufferWidth?: number;
+  readonly drawingBufferHeight?: number;
+  readonly pixelRatio?: number;
+  readonly resolvedScaling?: ResolvedSpriteScalingOptions;
+  readonly zoom?: number;
+  readonly zoomScaleFactor?: number;
+  readonly originCenterCache?: ImageCenterCacheLike;
+}
 
-const createCollectOptions = (
-  overrides: CollectOptionsOverrides = {}
-): CollectParams => {
-  const { projectionHostOptions, ...rest } = overrides;
+const createCollectContext = (
+  overrides: CollectContextOverrides = {}
+): CollectContext => {
+  const {
+    projectionHost: projectionHostOverride,
+    projectionHostOptions,
+    bucket = [],
+    images = new Map<string, RegisteredImage>(),
+    clipContext: clipOverride,
+    baseMetersPerPixel = 1,
+    spriteMinPixel = 0,
+    spriteMaxPixel = 4096,
+    drawingBufferWidth = 1024,
+    drawingBufferHeight = 768,
+    pixelRatio = 1,
+    resolvedScaling: resolvedScalingOverride,
+    zoom: zoomOverride,
+    zoomScaleFactor: zoomScaleFactorOverride,
+    originCenterCache: originCacheOverride,
+  } = overrides;
+
   const projectionHost =
-    rest.projectionHost ?? createFakeProjectionHost(projectionHostOptions);
+    projectionHostOverride ?? createFakeProjectionHost(projectionHostOptions);
   const clipContext =
-    rest.clipContext === undefined
-      ? projectionHost.getClipContext()
-      : rest.clipContext;
-  const resolveSpriteMercator: CollectParams['resolveSpriteMercator'] =
-    rest.resolveSpriteMercator ??
-    ((host, sprite) =>
-      sprite.cachedMercator ?? host.fromLngLat(sprite.currentLocation));
-  return {
-    resolvedScaling: rest.resolvedScaling,
-    zoom: rest.zoom,
-    bucket: rest.bucket ?? [],
-    projectionHost,
-    images: rest.images ?? new Map(),
+    clipOverride === undefined ? projectionHost.getClipContext() : clipOverride;
+
+  const zoom = zoomOverride ?? projectionHost.getZoom();
+  const resolvedScaling =
+    resolvedScalingOverride ??
+    resolveScalingOptions({
+      metersPerPixel: baseMetersPerPixel,
+      spriteMinPixel,
+      spriteMaxPixel,
+      zoomMin: zoom,
+      zoomMax: zoom,
+    });
+  const zoomScaleFactor =
+    zoomScaleFactorOverride ?? calculateZoomScaleFactor(zoom, resolvedScaling);
+
+  const paramsBefore: PrepareDrawSpriteImageParamsBefore<null> = {
+    bucket,
+    images,
     clipContext,
-    zoomScaleFactor: rest.zoomScaleFactor ?? 1,
-    baseMetersPerPixel: rest.baseMetersPerPixel ?? 1,
-    spriteMinPixel: rest.spriteMinPixel ?? 0,
-    spriteMaxPixel: rest.spriteMaxPixel ?? 4096,
-    drawingBufferWidth: rest.drawingBufferWidth ?? 1024,
-    drawingBufferHeight: rest.drawingBufferHeight ?? 768,
-    pixelRatio: rest.pixelRatio ?? 1,
+    baseMetersPerPixel,
+    spriteMinPixel,
+    spriteMaxPixel,
+    drawingBufferWidth,
+    drawingBufferHeight,
+    pixelRatio,
+    resolvedScaling,
+    zoomScaleFactor,
+  };
+
+  return {
+    projectionHost,
+    paramsBefore,
     originCenterCache:
-      rest.originCenterCache ?? (new Map() as ImageCenterCache),
-    resolveSpriteMercator,
+      originCacheOverride ?? (new Map() as ImageCenterCacheLike),
+    zoom,
+    zoomScaleFactor,
   };
 };
 
-describe('projectLngLatToClipSpace', () => {
-  it('returns homogeneous coordinates when a clip context is available', () => {
-    const location: SpriteLocation = { lng: 0, lat: 0, z: 0 };
-    const projectionHost = createFakeProjectionHost();
-    const clip = projectLngLatToClipSpace(
-      projectionHost,
-      location,
-      projectionHost.getClipContext()
+const createAfterParams = (
+  before: PrepareDrawSpriteImageParamsBefore<null>,
+  overrides: Partial<
+    Omit<
+      PrepareDrawSpriteImageParamsAfter,
+      | 'images'
+      | 'baseMetersPerPixel'
+      | 'spriteMinPixel'
+      | 'spriteMaxPixel'
+      | 'drawingBufferWidth'
+      | 'drawingBufferHeight'
+      | 'pixelRatio'
+    >
+  > = {}
+): PrepareDrawSpriteImageParamsAfter => {
+  return {
+    images: before.images,
+    baseMetersPerPixel: before.baseMetersPerPixel,
+    spriteMinPixel: before.spriteMinPixel,
+    spriteMaxPixel: before.spriteMaxPixel,
+    drawingBufferWidth: before.drawingBufferWidth,
+    drawingBufferHeight: before.drawingBufferHeight,
+    pixelRatio: before.pixelRatio,
+    clipContext:
+      overrides.clipContext === undefined
+        ? before.clipContext
+        : overrides.clipContext,
+    identityScaleX: overrides.identityScaleX ?? 1,
+    identityScaleY: overrides.identityScaleY ?? 1,
+    identityOffsetX: overrides.identityOffsetX ?? 0,
+    identityOffsetY: overrides.identityOffsetY ?? 0,
+    screenToClipScaleX:
+      overrides.screenToClipScaleX ?? 2 / before.drawingBufferWidth,
+    screenToClipScaleY:
+      overrides.screenToClipScaleY ?? -2 / before.drawingBufferHeight,
+    screenToClipOffsetX: overrides.screenToClipOffsetX ?? -1,
+    screenToClipOffsetY: overrides.screenToClipOffsetY ?? 1,
+  };
+};
+
+const prepareItems = (
+  context: CollectContext,
+  items: readonly DepthItem<null>[],
+  overrides: Parameters<typeof createAfterParams>[1] = {}
+): PreparedDrawSpriteImageParams<null>[] => {
+  const paramsAfter = createAfterParams(context.paramsBefore, overrides);
+  const originCenterCache: ImageCenterCacheLike = new Map();
+  const prepared: PreparedDrawSpriteImageParams<null>[] = [];
+  for (const item of items) {
+    const result = prepareDrawSpriteImageInternal(
+      context.projectionHost,
+      item,
+      context.zoom,
+      context.zoomScaleFactor,
+      originCenterCache,
+      paramsAfter
     );
-    expect(clip).not.toBeNull();
-    if (!clip) {
-      return;
+    if (result) {
+      prepared.push(result);
+    } else {
+      item.image.surfaceShaderInputs = undefined;
     }
-    expect(clip[0]).toBeCloseTo(0.5, 6);
-    expect(clip[1]).toBeCloseTo(0.5, 6);
-    expect(clip[2]).toBeCloseTo(0, 6);
-    expect(clip[3]).toBeCloseTo(1, 6);
-  });
-
-  it('returns null when clip-space W collapses', () => {
-    const matrix = new Float64Array([
-      1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-    ]);
-    const projectionHost = createFakeProjectionHost();
-    const result = projectLngLatToClipSpace(
-      projectionHost,
-      { lng: 0, lat: 0, z: 0 },
-      { mercatorMatrix: matrix }
-    );
-    expect(result).toBeNull();
-  });
-
-  it('returns null when clip-space W falls below the minimum threshold', () => {
-    const matrix = new Float64Array([
-      1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 5e-7,
-    ]);
-    const projectionHost = createFakeProjectionHost();
-    const result = projectLngLatToClipSpace(
-      projectionHost,
-      { lng: 0, lat: 0, z: 0 },
-      { mercatorMatrix: matrix }
-    );
-    expect(result).toBeNull();
-  });
-
-  it('returns null when clip context is missing', () => {
-    const projectionHost = createFakeProjectionHost();
-    expect(
-      projectLngLatToClipSpace(projectionHost, { lng: 0, lat: 0, z: 0 }, null)
-    ).toBeNull();
-  });
-});
+  }
+  return prepared;
+};
 
 describe('calculatePerspectiveRatio', () => {
   const location: SpriteLocation = { lng: 0, lat: 0, z: 0 };
@@ -396,12 +457,18 @@ describe('collectDepthSortedItems', () => {
       ['icon-b', createImageResource('icon-b')],
     ]);
 
-    const options = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, imageA] as const, [sprite, imageB] as const],
       images: resources,
     });
 
-    const result = collectDepthSortedItems(options);
+    const result = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
     expect(result).toHaveLength(2);
     expect(result.map((item) => item.image.order)).toEqual([1, 2]);
   });
@@ -424,7 +491,7 @@ describe('collectDepthSortedItems', () => {
       ['lex-b', createImageResource('lex-b')],
     ]);
 
-    const options = createCollectOptions({
+    const context = createCollectContext({
       bucket: [
         [spriteSecond, imageSecond] as const,
         [spriteFirst, imageFirst] as const,
@@ -432,7 +499,13 @@ describe('collectDepthSortedItems', () => {
       images,
     });
 
-    const items = collectDepthSortedItems(options);
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
     expect(items).toHaveLength(2);
     expect(items[0].sprite.spriteId).toBe('sprite-1');
     expect(items[1].sprite.spriteId).toBe('sprite-2');
@@ -443,14 +516,19 @@ describe('collectDepthSortedItems', () => {
     const sprite = createSpriteState('sprite-noclip', [image]);
     const resource = createImageResource('noclip');
 
-    const baseOptions = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, image] as const],
       images: new Map([['noclip', resource]]),
-    });
-    const items = collectDepthSortedItems({
-      ...baseOptions,
       clipContext: null,
     });
+
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
     expect(items).toHaveLength(0);
   });
 
@@ -475,18 +553,20 @@ describe('collectDepthSortedItems', () => {
       ['surface-front', createImageResource('surface-front')],
     ]);
 
-    const sharedOptions = {
+    const context = createCollectContext({
       bucket: [[sprite, surfaceBase] as const, [sprite, surfaceFront] as const],
       images: resources,
       clipContext: DEFAULT_CLIP_CONTEXT,
-    } as const;
+      originCenterCache: new Map(),
+    });
 
-    const biased = collectDepthSortedItems(
-      createCollectOptions({
-        ...sharedOptions,
-        originCenterCache: new Map(),
-      })
-    );
+    const biased = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
 
     expect(biased).toHaveLength(2);
 
@@ -509,12 +589,18 @@ describe('collectDepthSortedItems', () => {
       texture: undefined,
     };
 
-    const options = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, image] as const],
       images: new Map([['icon-c', resource]]),
     });
 
-    const result = collectDepthSortedItems(options);
+    const result = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
     expect(result).toHaveLength(0);
   });
 });
@@ -525,37 +611,19 @@ describe('prepareDrawSpriteImages', () => {
     const image = createImageState({ imageId: 'icon-d', order: 0 });
     const sprite = createSpriteState('sprite-c', [image]);
 
-    const collectOptions = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, image] as const],
       images: new Map([['icon-d', resource]]),
-      originCenterCache: new Map(),
     });
-    const items = collectDepthSortedItems(collectOptions);
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
 
-    const prepared = prepareDrawSpriteImages({
-      items,
-      originCenterCache: new Map(),
-      projectionHost: collectOptions.projectionHost,
-      images: new Map([['icon-d', resource]]),
-      zoomScaleFactor: collectOptions.zoomScaleFactor,
-      baseMetersPerPixel: collectOptions.baseMetersPerPixel,
-      spriteMinPixel: collectOptions.spriteMinPixel,
-      spriteMaxPixel: collectOptions.spriteMaxPixel,
-      drawingBufferWidth: collectOptions.drawingBufferWidth,
-      drawingBufferHeight: collectOptions.drawingBufferHeight,
-      pixelRatio: collectOptions.pixelRatio,
-      clipContext: collectOptions.clipContext,
-      identityScaleX: 1,
-      identityScaleY: 1,
-      identityOffsetX: 0,
-      identityOffsetY: 0,
-      screenToClipScaleX: 2 / collectOptions.drawingBufferWidth,
-      screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
-      screenToClipOffsetX: -1,
-      screenToClipOffsetY: 1,
-      ensureHitTestCorners: createEnsureHitTestCorners(),
-      resolveSpriteMercator: collectOptions.resolveSpriteMercator,
-    });
+    const prepared = prepareItems(context, items);
 
     expect(prepared).toHaveLength(1);
     const [draw] = prepared;
@@ -564,8 +632,8 @@ describe('prepareDrawSpriteImages', () => {
     expect(draw.imageResource).toBe(resource);
     expect(draw.vertexData.length).toBe(TRIANGLE_INDICES.length * 6);
     expect(draw.screenToClip).toEqual({
-      scaleX: 2 / collectOptions.drawingBufferWidth,
-      scaleY: -2 / collectOptions.drawingBufferHeight,
+      scaleX: 2 / context.paramsBefore.drawingBufferWidth,
+      scaleY: -2 / context.paramsBefore.drawingBufferHeight,
       offsetX: -1,
       offsetY: 1,
     });
@@ -578,37 +646,19 @@ describe('prepareDrawSpriteImages', () => {
     const image = createImageState({ imageId: 'icon-billboard', order: 1 });
     const sprite = createSpriteState('sprite-billboard', [image]);
 
-    const collectOptions = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, image] as const],
       images: new Map([['icon-billboard', resource]]),
-      originCenterCache: new Map(),
     });
-    const items = collectDepthSortedItems(collectOptions);
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
 
-    const prepared = prepareDrawSpriteImages({
-      items,
-      originCenterCache: new Map(),
-      projectionHost: collectOptions.projectionHost,
-      images: new Map([['icon-billboard', resource]]),
-      zoomScaleFactor: collectOptions.zoomScaleFactor,
-      baseMetersPerPixel: collectOptions.baseMetersPerPixel,
-      spriteMinPixel: collectOptions.spriteMinPixel,
-      spriteMaxPixel: collectOptions.spriteMaxPixel,
-      drawingBufferWidth: collectOptions.drawingBufferWidth,
-      drawingBufferHeight: collectOptions.drawingBufferHeight,
-      pixelRatio: collectOptions.pixelRatio,
-      clipContext: collectOptions.clipContext,
-      identityScaleX: 1,
-      identityScaleY: 1,
-      identityOffsetX: 0,
-      identityOffsetY: 0,
-      screenToClipScaleX: 2 / collectOptions.drawingBufferWidth,
-      screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
-      screenToClipOffsetX: -1,
-      screenToClipOffsetY: 1,
-      ensureHitTestCorners: createEnsureHitTestCorners(),
-      resolveSpriteMercator: collectOptions.resolveSpriteMercator,
-    });
+    const prepared = prepareItems(context, items);
 
     expect(prepared).toHaveLength(1);
     const [draw] = prepared;
@@ -633,39 +683,20 @@ describe('prepareDrawSpriteImages', () => {
     });
     const sprite = createSpriteState('sprite-surface-cpu', [image]);
 
-    const collectOptions = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, image] as const],
       images: new Map([['icon-surface-cpu', resource]]),
       clipContext: DEFAULT_CLIP_CONTEXT,
-      originCenterCache: new Map(),
     });
-    const items = collectDepthSortedItems(collectOptions);
-    const ensureCorners = createEnsureHitTestCorners();
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
 
-    const prepared = prepareDrawSpriteImages({
-      items,
-      originCenterCache: new Map(),
-      projectionHost: collectOptions.projectionHost,
-      images: new Map([['icon-surface-cpu', resource]]),
-      zoomScaleFactor: collectOptions.zoomScaleFactor,
-      baseMetersPerPixel: collectOptions.baseMetersPerPixel,
-      spriteMinPixel: collectOptions.spriteMinPixel,
-      spriteMaxPixel: collectOptions.spriteMaxPixel,
-      drawingBufferWidth: collectOptions.drawingBufferWidth,
-      drawingBufferHeight: collectOptions.drawingBufferHeight,
-      pixelRatio: collectOptions.pixelRatio,
-      clipContext: null,
-      identityScaleX: 1,
-      identityScaleY: 1,
-      identityOffsetX: 0,
-      identityOffsetY: 0,
-      screenToClipScaleX: 2 / collectOptions.drawingBufferWidth,
-      screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
-      screenToClipOffsetX: -1,
-      screenToClipOffsetY: 1,
-      ensureHitTestCorners: ensureCorners,
-      resolveSpriteMercator: collectOptions.resolveSpriteMercator,
-    });
+    const prepared = prepareItems(context, items, { clipContext: null });
 
     expect(prepared).toHaveLength(0);
     expect(image.surfaceShaderInputs).toBeUndefined();
@@ -681,38 +712,20 @@ describe('prepareDrawSpriteImages', () => {
     });
     const sprite = createSpriteState('sprite-surface-bias', [image]);
 
-    const collectOptions = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, image] as const],
       images: new Map([['icon-surface-bias', resource]]),
       clipContext: DEFAULT_CLIP_CONTEXT,
-      originCenterCache: new Map(),
     });
-    const items = collectDepthSortedItems(collectOptions);
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
 
-    const prepared = prepareDrawSpriteImages({
-      items,
-      originCenterCache: new Map(),
-      projectionHost: collectOptions.projectionHost,
-      images: new Map([['icon-surface-bias', resource]]),
-      zoomScaleFactor: collectOptions.zoomScaleFactor,
-      baseMetersPerPixel: collectOptions.baseMetersPerPixel,
-      spriteMinPixel: collectOptions.spriteMinPixel,
-      spriteMaxPixel: collectOptions.spriteMaxPixel,
-      drawingBufferWidth: collectOptions.drawingBufferWidth,
-      drawingBufferHeight: collectOptions.drawingBufferHeight,
-      pixelRatio: collectOptions.pixelRatio,
-      clipContext: collectOptions.clipContext,
-      identityScaleX: 1,
-      identityScaleY: 1,
-      identityOffsetX: 0,
-      identityOffsetY: 0,
-      screenToClipScaleX: 2 / collectOptions.drawingBufferWidth,
-      screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
-      screenToClipOffsetX: -1,
-      screenToClipOffsetY: 1,
-      ensureHitTestCorners: createEnsureHitTestCorners(),
-      resolveSpriteMercator: collectOptions.resolveSpriteMercator,
-    });
+    const prepared = prepareItems(context, items);
 
     expect(prepared).toHaveLength(1);
     const [draw] = prepared;
@@ -735,39 +748,20 @@ describe('prepareDrawSpriteImages', () => {
     });
     const sprite = createSpriteState('sprite-surface-shader', [image]);
 
-    const collectOptions = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, image] as const],
       images: new Map([['icon-surface', resource]]),
       clipContext: DEFAULT_CLIP_CONTEXT,
-      originCenterCache: new Map(),
     });
-    const items = collectDepthSortedItems(collectOptions);
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
 
-    const ensureCorners = createEnsureHitTestCorners();
-    const prepared = prepareDrawSpriteImages({
-      items,
-      originCenterCache: new Map(),
-      projectionHost: collectOptions.projectionHost,
-      images: new Map([['icon-surface', resource]]),
-      zoomScaleFactor: collectOptions.zoomScaleFactor,
-      baseMetersPerPixel: collectOptions.baseMetersPerPixel,
-      spriteMinPixel: collectOptions.spriteMinPixel,
-      spriteMaxPixel: collectOptions.spriteMaxPixel,
-      drawingBufferWidth: collectOptions.drawingBufferWidth,
-      drawingBufferHeight: collectOptions.drawingBufferHeight,
-      pixelRatio: collectOptions.pixelRatio,
-      clipContext: collectOptions.clipContext,
-      identityScaleX: 1,
-      identityScaleY: 1,
-      identityOffsetX: 0,
-      identityOffsetY: 0,
-      screenToClipScaleX: 2 / collectOptions.drawingBufferWidth,
-      screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
-      screenToClipOffsetX: -1,
-      screenToClipOffsetY: 1,
-      ensureHitTestCorners: ensureCorners,
-      resolveSpriteMercator: collectOptions.resolveSpriteMercator,
-    });
+    const prepared = prepareItems(context, items);
 
     expect(prepared).toHaveLength(1);
     const [draw] = prepared;
@@ -821,45 +815,23 @@ describe('prepareDrawSpriteImages', () => {
 
     const sprite = createSpriteState('sprite-origin', [baseImage, childImage]);
 
-    const collectOptions = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, baseImage] as const, [sprite, childImage] as const],
       images: new Map([
         ['icon-origin-base', resourceBase],
         ['icon-origin-child', resourceChild],
       ]),
       clipContext: DEFAULT_CLIP_CONTEXT,
-      originCenterCache: new Map(),
       projectionHost,
     });
-
-    const items = collectDepthSortedItems(collectOptions);
-    const prepared = prepareDrawSpriteImages({
-      items,
-      originCenterCache: new Map(),
-      projectionHost,
-      images: new Map([
-        ['icon-origin-base', resourceBase],
-        ['icon-origin-child', resourceChild],
-      ]),
-      zoomScaleFactor: collectOptions.zoomScaleFactor,
-      baseMetersPerPixel: collectOptions.baseMetersPerPixel,
-      spriteMinPixel: collectOptions.spriteMinPixel,
-      spriteMaxPixel: collectOptions.spriteMaxPixel,
-      drawingBufferWidth: collectOptions.drawingBufferWidth,
-      drawingBufferHeight: collectOptions.drawingBufferHeight,
-      pixelRatio: collectOptions.pixelRatio,
-      clipContext: collectOptions.clipContext,
-      identityScaleX: 1,
-      identityScaleY: 1,
-      identityOffsetX: 0,
-      identityOffsetY: 0,
-      screenToClipScaleX: 2 / collectOptions.drawingBufferWidth,
-      screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
-      screenToClipOffsetX: -1,
-      screenToClipOffsetY: 1,
-      ensureHitTestCorners: createEnsureHitTestCorners(),
-      resolveSpriteMercator: collectOptions.resolveSpriteMercator,
-    });
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
+    const prepared = prepareItems(context, items);
 
     expect(prepared).not.toHaveLength(0);
     expect(unprojectSpy).toHaveBeenCalled();
@@ -875,66 +847,24 @@ describe('prepareDrawSpriteImages', () => {
     const image = createImageState({ imageId: 'icon-hitreuse', order: 0 });
     const sprite = createSpriteState('sprite-hitreuse', [image]);
 
-    const collectOptions = createCollectOptions({
+    const context = createCollectContext({
       bucket: [[sprite, image] as const],
       images: new Map([['icon-hitreuse', resource]]),
-      originCenterCache: new Map(),
     });
-    const items = collectDepthSortedItems(collectOptions);
-    const ensureCorners = createEnsureHitTestCorners();
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
 
-    const firstPrepared = prepareDrawSpriteImages({
-      items,
-      originCenterCache: new Map(),
-      projectionHost: collectOptions.projectionHost,
-      images: new Map([['icon-hitreuse', resource]]),
-      zoomScaleFactor: collectOptions.zoomScaleFactor,
-      baseMetersPerPixel: collectOptions.baseMetersPerPixel,
-      spriteMinPixel: collectOptions.spriteMinPixel,
-      spriteMaxPixel: collectOptions.spriteMaxPixel,
-      drawingBufferWidth: collectOptions.drawingBufferWidth,
-      drawingBufferHeight: collectOptions.drawingBufferHeight,
-      pixelRatio: collectOptions.pixelRatio,
-      clipContext: collectOptions.clipContext,
-      identityScaleX: 1,
-      identityScaleY: 1,
-      identityOffsetX: 0,
-      identityOffsetY: 0,
-      screenToClipScaleX: 2 / collectOptions.drawingBufferWidth,
-      screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
-      screenToClipOffsetX: -1,
-      screenToClipOffsetY: 1,
-      ensureHitTestCorners: ensureCorners,
-      resolveSpriteMercator: collectOptions.resolveSpriteMercator,
-    });
+    const firstPrepared = prepareItems(context, items);
 
     const firstCorners = firstPrepared[0].hitTestCorners;
     expect(firstCorners).not.toBeNull();
 
-    const secondPrepared = prepareDrawSpriteImages({
-      items,
-      originCenterCache: new Map(),
-      projectionHost: collectOptions.projectionHost,
-      images: new Map([['icon-hitreuse', resource]]),
-      zoomScaleFactor: collectOptions.zoomScaleFactor,
-      baseMetersPerPixel: collectOptions.baseMetersPerPixel,
-      spriteMinPixel: collectOptions.spriteMinPixel,
-      spriteMaxPixel: collectOptions.spriteMaxPixel,
-      drawingBufferWidth: collectOptions.drawingBufferWidth,
-      drawingBufferHeight: collectOptions.drawingBufferHeight,
-      pixelRatio: collectOptions.pixelRatio,
-      clipContext: collectOptions.clipContext,
-      identityScaleX: 1,
-      identityScaleY: 1,
-      identityOffsetX: 0,
-      identityOffsetY: 0,
-      screenToClipScaleX: 2 / collectOptions.drawingBufferWidth,
-      screenToClipScaleY: -2 / collectOptions.drawingBufferHeight,
-      screenToClipOffsetX: -1,
-      screenToClipOffsetY: 1,
-      ensureHitTestCorners: ensureCorners,
-      resolveSpriteMercator: collectOptions.resolveSpriteMercator,
-    });
+    const secondPrepared = prepareItems(context, items);
 
     const secondCorners = secondPrepared[0].hitTestCorners;
     expect(secondCorners).not.toBeNull();
@@ -946,11 +876,10 @@ describe('prepareDrawSpriteImages', () => {
 
   it('returns no entries when projection fails and clears surface data', () => {
     const resource = createImageResource('icon-e');
-    const image = createImageState({ imageId: 'icon-e', mode: 'surface' });
-    image.surfaceShaderInputs = {} as any;
+    const image = createImageState({ imageId: 'icon-e', order: 0 });
     const sprite = createSpriteState('sprite-d', [image]);
 
-    const depthItem: DepthSortedItem<null> = {
+    const depthItem: DepthItem<null> = {
       sprite,
       image,
       resource,
@@ -960,12 +889,8 @@ describe('prepareDrawSpriteImages', () => {
     const projectionHost = createFakeProjectionHost({
       project: () => null,
     });
-    const prepared = prepareDrawSpriteImages({
-      items: [depthItem],
-      originCenterCache: new Map(),
-      projectionHost,
+    const paramsAfter: PrepareDrawSpriteImageParamsAfter = {
       images: new Map([['icon-e', resource]]),
-      zoomScaleFactor: 1,
       baseMetersPerPixel: 1,
       spriteMinPixel: 0,
       spriteMaxPixel: 4096,
@@ -981,11 +906,18 @@ describe('prepareDrawSpriteImages', () => {
       screenToClipScaleY: 0,
       screenToClipOffsetX: 0,
       screenToClipOffsetY: 0,
-      ensureHitTestCorners: createEnsureHitTestCorners(),
-      resolveSpriteMercator: (_host, spriteEntry) => spriteEntry.cachedMercator,
-    });
+    };
 
-    expect(prepared).toHaveLength(0);
+    const prepared = prepareDrawSpriteImageInternal(
+      projectionHost,
+      depthItem,
+      projectionHost.getZoom(),
+      1,
+      new Map() as ImageCenterCacheLike,
+      paramsAfter
+    );
+
+    expect(prepared).toBeNull();
     expect(image.surfaceShaderInputs).toBeUndefined();
   });
 });

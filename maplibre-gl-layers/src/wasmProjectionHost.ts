@@ -360,7 +360,7 @@ const createCalculatePerspectiveRatio = (
  * Create wasm-based calculation projection host.
  * @param params Projection parameters
  * @returns Projection host
- * @remarks This needs using before initialization (initProjectionWasm function)
+ * @remarks This needs using before initialization (initializeWasmHost function)
  */
 export const createWasmProjectionHost = (
   params: ProjectionHostParams
