@@ -99,6 +99,13 @@ interface ImageCenterCacheEntry {
  */
 type ImageCenterCache = Map<string, Map<string, ImageCenterCacheEntry>>;
 
+/**
+ * Resolves the image entry that a sprite should use as its origin reference when
+ * another image in the same render bucket needs to inherit that origin.
+ * The resolver is always invoked with the current sprite/image pair and can
+ * return `null` when the origin is not available (e.g., the reference was
+ * culled or stored in another bucket).
+ */
 type OriginImageResolver<T> = (
   sprite: Readonly<InternalSpriteCurrentState<T>>,
   image: Readonly<InternalSpriteImageState>
@@ -114,24 +121,39 @@ interface DepthSortedItem<T> {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * Creates a resolver that can look up origin reference images within a specific
+ * render bucket. Each sprite image stores the index of the entry whose origin
+ * data it depends on, so the resulting resolver simply dereferences that index
+ * with additional validation to ensure the bucket still contains the expected
+ * sprite/image pair.
+ *
+ * @param bucket - Ordered list of sprite/image pairs scheduled for rendering.
+ * @returns Function that returns the origin image entry or `null` if it cannot
+ *   be resolved safely.
+ */
 const createBucketOriginResolver = <T>(
   bucket: readonly Readonly<RenderTargetEntryLike<T>>[]
 ): OriginImageResolver<T> => {
   return (sprite, image) => {
+    // Data-driven origin references store the bucket index directly on the image entry.
     const index = image.originRenderTargetIndex;
     if (
       index === SPRITE_ORIGIN_REFERENCE_INDEX_NONE ||
       index < 0 ||
       index >= bucket.length
     ) {
+      // Missing index or out-of-bounds reference -> origin cannot be resolved.
       return null;
     }
     const entry = bucket[index];
     if (!entry) {
+      // Bucket holes should not happen, but guard to avoid undefined access.
       return null;
     }
     const [resolvedSprite, resolvedImage] = entry;
     if (resolvedSprite !== sprite) {
+      // A stale index referencing another sprite is treated as unresolved.
       return null;
     }
     return resolvedImage;

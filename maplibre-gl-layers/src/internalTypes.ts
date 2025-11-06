@@ -28,27 +28,39 @@ import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './math';
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Image id handler interface.
- * @remarks It is used for (wasm) interoperability for image identity.
+ * The handle value that using the instance.
  */
-export interface ImageIdHandler {
+export type IdHandle = number;
+
+/**
+ * Id handler interface.
+ * @param T Identified instance type
+ * @remarks It is used for (wasm) interoperability for identity.
+ */
+export interface IdHandler<T> {
   /**
-   * Allocates a numeric handle for the specified image identifier.
-   * @param {string} imageId - Image identifier.
-   * @returns {number} Allocated handle.
+   * Allocates a numeric handle for the specified identifier.
+   * @param {string} rawId - Raw identifier.
+   * @returns {IdHandle} Allocated handle.
    */
-  readonly allocate: (imageId: string) => number;
+  readonly allocate: (rawId: string) => IdHandle;
   /**
-   * Stores an image reference at the given handle index.
-   * @param {number} handle - Numeric handle.
-   * @param {RegisteredImage} image - Registered image.
+   * Stores an instance reference at the given handle index.
+   * @param {IdHandle} handle - Numeric handle.
+   * @param {T} instance - Registered instance.
    */
-  readonly store: (handle: number, image: RegisteredImage) => void;
+  readonly store: (handle: IdHandle, instance: T) => void;
   /**
-   * Releases the numeric handle associated with the provided identifier.
-   * @param {string} imageId - Image identifier.
+   * Get instance by handle.
+   * @param handle Numeric handle
+   * @returns Instance.
    */
-  readonly release: (imageId: string) => void;
+  readonly get: (handle: IdHandle) => T;
+  /**
+   * Releases the handle associated with the provided identifier.
+   * @param {string} rawId - Raw identifier.
+   */
+  readonly release: (rawId: string) => void;
   /**
    * Clears all handle bookkeeping state.
    */
@@ -67,6 +79,7 @@ export interface ImageHandleBuffers {
 
 /**
  * Registered image references aligned by handle index.
+ * @remarks It is used for (wasm) interoperability for image identity.
  */
 export type ImageResourceTable = readonly (
   | Readonly<RegisteredImage>
@@ -98,7 +111,8 @@ export interface ImageHandleBufferController {
 
 /**
  * Encoded pointer representing the target of an origin reference.
- * @remarks The high bits encode the sub-layer while the low bits encode the order slot.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ *          The high bits encode the sub-layer while the low bits encode the order slot.
  */
 export type SpriteOriginReferenceKey = number;
 
@@ -107,7 +121,9 @@ export const SPRITE_ORIGIN_REFERENCE_KEY_NONE = -1;
 
 /**
  * Index into the render target bucket pointing at the resolved origin image.
- * @remarks When no origin is assigned or the reference could not be resolved, the value will be {@link SPRITE_ORIGIN_REFERENCE_INDEX_NONE}.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ *          When no origin is assigned or the reference could not be resolved,
+ *          the value will be {@link SPRITE_ORIGIN_REFERENCE_INDEX_NONE}.
  */
 export type SpriteOriginReferenceIndex = number;
 
@@ -138,6 +154,45 @@ export interface SpriteOriginReference {
     readonly subLayer: number;
     readonly order: number;
   };
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Tuple representing a single entry in a render target bucket.
+ * @remarks It is used for (wasm) interoperability for sprite origin.
+ *          The first item is the sprite's frame-level state and the second item is
+ *          the specific image being rendered,
+ *          mirroring how the renderer stores draw calls on the CPU side.
+ *          Keeping the pair immutable prevents accidental divergence between cached data
+ *          and the GPU buffers derived from it.
+ */
+export type RenderTargetEntryLike<TTag> = readonly [
+  InternalSpriteCurrentState<TTag>, // Sprite-level state shared by all of its images.
+  InternalSpriteImageState, // Concrete image variant queued for rendering.
+];
+
+/**
+ * Parallel typed arrays that expose bucket metadata in a WASM-friendly layout.
+ * @remarks It is used for (wasm) interoperability for sprite origin.
+ *          Both arrays always share the same length as the bucket, allowing shader-side
+ *          code (or WASM helpers) to traverse origin reference metadata without touching
+ *          the heavyweight tuple objects.
+ */
+export interface RenderTargetBucketBuffers {
+  /**
+   * Encoded origin metadata (sub-layer/order pairs) for each queued image,
+   * mirroring `image.originReferenceKey`. A value of
+   * `SPRITE_ORIGIN_REFERENCE_KEY_NONE` denotes that the entry is self-originating.
+   */
+  readonly originReferenceKeys: Int32Array;
+  /**
+   * Bucket index pointing to the entry that should provide the origin image for
+   * the current sprite. Values equal to
+   * `SPRITE_ORIGIN_REFERENCE_INDEX_NONE` or outside the bucket range mark the
+   * origin as unresolved.
+   */
+  readonly originTargetIndices: Int32Array;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -216,19 +271,6 @@ export interface PrepareDrawSpriteImageParamsBase {
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
   readonly clipContext: Readonly<ClipContext> | null;
-}
-
-export type RenderTargetEntryLike<TTag> = readonly [
-  InternalSpriteCurrentState<TTag>,
-  InternalSpriteImageState,
-];
-
-/**
- * Typed buffer views derived from render target entries to support WASM interop.
- */
-export interface RenderTargetBucketBuffers {
-  readonly originReferenceKeys: Int32Array;
-  readonly originTargetIndices: Int32Array;
 }
 
 export interface PrepareDrawSpriteImageParamsBefore<TTag>
@@ -558,6 +600,7 @@ export interface InternalSpriteImageState {
  */
 export interface InternalSpriteCurrentState<TTag> {
   spriteId: string;
+  handle: IdHandle;
   isEnabled: boolean;
   currentLocation: Readonly<SpriteLocation>;
   fromLocation?: Readonly<SpriteLocation>;

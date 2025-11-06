@@ -14,7 +14,7 @@
     "noEmit": true,
 
     /* Linting */
-    "erasableSyntaxOnly": true,
+    "erasableSyntaxOnly": false,
     "noUncheckedSideEffectImports": true,
     "useDefineForClassFields": true,
     "declaration": true,

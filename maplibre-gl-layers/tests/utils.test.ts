@@ -9,12 +9,12 @@ import { describe, expect, it } from 'vitest';
 import { RegisteredImage } from '../src/internalTypes';
 import {
   createImageHandleBufferController,
-  createImageIdHandler,
+  createIdHandler,
 } from '../src/utils';
 
 describe('createImageIdHandler', () => {
   it('reuses released handles before allocating new ones', () => {
-    const handler = createImageIdHandler();
+    const handler = createIdHandler();
     const first = handler.allocate('image-a');
     const second = handler.allocate('image-b');
 
@@ -28,7 +28,7 @@ describe('createImageIdHandler', () => {
   });
 
   it('resets allocation state and tolerates unknown releases', () => {
-    const handler = createImageIdHandler();
+    const handler = createIdHandler();
     handler.allocate('image-a');
     handler.allocate('image-b');
 

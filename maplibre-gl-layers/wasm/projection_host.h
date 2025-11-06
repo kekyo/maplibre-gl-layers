@@ -1,3 +1,10 @@
+// maplibre-gl-layers - MapLibre's layer extension library enabling
+// the display, movement, and modification of large numbers of dynamic sprite images
+// Copyright (c) Kouji Matsui (@kekyo)
+// Under MIT
+
+#pragma once
+
 #ifndef _PROJECTION_HOST_H
 #define _PROJECTION_HOST_H
 

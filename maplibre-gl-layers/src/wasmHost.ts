@@ -84,6 +84,11 @@ export type WasmCalculateSurfaceDepthKey = (
   outPtr: number
 ) => boolean;
 
+export type WasmPrepareDrawSpriteImages = (
+  paramsPtr: number,
+  resultPtr: number
+) => boolean;
+
 /**
  * Wasm host reference.
  */
@@ -102,6 +107,7 @@ export interface WasmHost {
   readonly calculateSurfaceDepthKey: WasmCalculateSurfaceDepthKey;
 
   // TODO: Will add CalculationHost related functions.
+  readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////

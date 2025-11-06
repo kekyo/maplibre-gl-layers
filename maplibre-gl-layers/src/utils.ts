@@ -10,7 +10,8 @@ import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
   type ImageHandleBufferController,
   type ImageHandleBuffers,
-  type ImageIdHandler,
+  type IdHandle,
+  type IdHandler,
   type ImageResourceTable,
   type RegisteredImage,
   type RenderTargetBucketBuffers,
@@ -22,68 +23,74 @@ import {
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Create image id handler object.
+ * Create id handler object.
+ * @param T Identified instance type
  * @returns Image id handler object.
  * @remarks It is used for (wasm) interoperability for image identity.
  */
-export const createImageIdHandler = (): ImageIdHandler => {
+export const createIdHandler = <T>(): IdHandler<T> => {
   /**
-   * Maps image identifiers to their numeric handles.
+   * Maps instance identifiers to their numeric handles.
    */
-  const imageHandleById = new Map<string, number>();
+  const handleById = new Map<string, number>();
 
   /**
-   * Table of registered images indexed by handle. Index 0 is reserved.
+   * Table of registered instance indexed by handle. Index 0 is reserved.
    */
-  const imagesByHandle: Array<RegisteredImage | undefined> = [undefined];
+  const byHandle: T[] = [undefined!];
 
   /**
-   * Reusable handles reclaimed from unregistered images.
+   * Reusable handles reclaimed from unregistered instance.
    */
-  const reusableImageHandles: number[] = [];
+  const reusableHandles: number[] = [];
 
   /**
    * Next handle to allocate when the reusable pool is empty.
    */
-  let nextImageHandle = 1;
+  let nexteHandle = 1;
 
   /**
-   * Allocates a numeric handle for the specified image identifier.
-   * @param {string} imageId - Image identifier.
+   * Allocates a numeric handle for the specified instance identifier.
+   * @param {string} rawId - Raw identifier.
    * @returns {number} Allocated handle.
    */
-  const allocate = (imageId: string): number => {
+  const allocate = (rawId: string): number => {
     const handle =
-      reusableImageHandles.length > 0
-        ? reusableImageHandles.pop()!
-        : nextImageHandle++;
-    imageHandleById.set(imageId, handle);
+      reusableHandles.length > 0 ? reusableHandles.pop()! : nexteHandle++;
+    handleById.set(rawId, handle);
     return handle;
   };
 
   /**
-   * Stores an image reference at the given handle index.
+   * Stores an instance reference at the given handle index.
    * @param {number} handle - Numeric handle.
-   * @param {RegisteredImage} image - Registered image.
-   * @returns {void}
+   * @param {T} instance - Registered instance.
+x   */
+  const store = (handle: number, instance: T): void => {
+    byHandle[handle] = instance;
+  };
+
+  /**
+   * Get instance by handle.
+   * @param handle Numeric handle
+   * @returns Instance.
    */
-  const store = (handle: number, image: RegisteredImage): void => {
-    imagesByHandle[handle] = image;
+  const get = (handle: IdHandle): T => {
+    return byHandle[handle]!;
   };
 
   /**
    * Releases the numeric handle associated with the provided identifier.
-   * @param {string} imageId - Image identifier.
-   * @returns {void}
+   * @param {string} rawId - Raw identifier.
    */
-  const release = (imageId: string): void => {
-    const handle = imageHandleById.get(imageId);
+  const release = (rawId: string): void => {
+    const handle = handleById.get(rawId);
     if (handle === undefined) {
       return;
     }
-    imageHandleById.delete(imageId);
-    imagesByHandle[handle] = undefined;
-    reusableImageHandles.push(handle);
+    handleById.delete(rawId);
+    byHandle[handle] = undefined!;
+    reusableHandles.push(handle);
   };
 
   /**
@@ -91,16 +98,17 @@ export const createImageIdHandler = (): ImageIdHandler => {
    * @returns {void}
    */
   const reset = (): void => {
-    imageHandleById.clear();
-    imagesByHandle.length = 1;
-    imagesByHandle[0] = undefined;
-    reusableImageHandles.length = 0;
-    nextImageHandle = 1;
+    handleById.clear();
+    byHandle.length = 1;
+    byHandle[0] = undefined!;
+    reusableHandles.length = 0;
+    nexteHandle = 1;
   };
 
   return {
     allocate,
     store,
+    get,
     release,
     reset,
   };

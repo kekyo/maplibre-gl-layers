@@ -1,8 +1,13 @@
-#include "projection_host.h"
+// maplibre-gl-layers - MapLibre's layer extension library enabling
+// the display, movement, and modification of large numbers of dynamic sprite images
+// Copyright (c) Kouji Matsui (@kekyo)
+// Under MIT
 
 #include <emscripten/emscripten.h>
-
 #include <cstdint>
+
+#include "projection_host.h"
+#include "param_layouts.h"
 
 //////////////////////////////////////////////////////////////////////////////////////
 

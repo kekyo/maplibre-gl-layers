@@ -152,7 +152,7 @@ import {
 import { SL_DEBUG } from './config';
 import {
   createImageHandleBufferController,
-  createImageIdHandler,
+  createIdHandler,
   createSpriteOriginReference,
   createRenderTargetBucketBuffers,
 } from './utils';
@@ -1120,14 +1120,19 @@ export const createSpriteLayer = <T = any>(
     // return createMapLibreProjectionHost(mapInstance);
   };
 
-  const createCalculationHostForMap = <TTag>(
+  const createCalculationHostForMap = (
     mapInstance: MapLibreMap
-  ): RenderCalculationHost<TTag> => {
+  ): RenderCalculationHost<T> => {
     const params = createProjectionHostParamsFromMapLibre(mapInstance);
     if (wasmInitializationSucceeded) {
-      return createWasmCalculationHost<TTag>(params);
+      return createWasmCalculationHost<T>(params, {
+        imageIdHandler,
+        imageHandleBuffersController,
+        originReference,
+        spriteIdHandler,
+      });
     }
-    return createCalculationHost<TTag>(params);
+    return createCalculationHost<T>(params);
     // return createMapLibreCalculationHost<TTag>(mapInstance);
   };
 
@@ -1202,7 +1207,12 @@ export const createSpriteLayer = <T = any>(
    * Maps image identifiers to their numeric handles.
    * @remarks It is used for (wasm) interoperability for image identity.
    */
-  const imageIdHandler = createImageIdHandler();
+  const imageIdHandler = createIdHandler<RegisteredImage>();
+
+  /**
+   * Maps sprite identifiers to numeric handles for wasm interop.
+   */
+  const spriteIdHandler = createIdHandler<InternalSpriteCurrentState<T>>();
 
   /**
    * Create image handle buffer controller.
@@ -3359,7 +3369,7 @@ export const createSpriteLayer = <T = any>(
        * @param {RenderTargetEntry[]} bucket - Sprite/image pairs belonging to a single sub-layer.
        */
       const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
-        const calculationHost = createCalculationHostForMap<T>(mapInstance);
+        const calculationHost = createCalculationHostForMap(mapInstance);
         try {
           const imageHandleBuffers = imageHandleBuffersController.ensure();
           const imageResources =
@@ -3974,8 +3984,11 @@ export const createSpriteLayer = <T = any>(
     const currentLocation = cloneSpriteLocation(init.location);
     const initialAltitude = currentLocation.z ?? 0;
     const initialMercator = projectionHost.fromLngLat(currentLocation);
+    const spriteHandle = spriteIdHandler.allocate(spriteId);
+
     const spriteState: InternalSpriteCurrentState<T> = {
       spriteId,
+      handle: spriteHandle,
       // Sprites default to enabled unless explicitly disabled in the init payload.
       isEnabled: init.isEnabled ?? true,
       currentLocation,
@@ -3997,6 +4010,7 @@ export const createSpriteLayer = <T = any>(
 
     // Store the sprite state.
     sprites.set(spriteId, spriteState);
+    spriteIdHandler.store(spriteHandle, spriteState);
 
     refreshSpriteHitTestBounds(projectionHost, spriteState);
 
@@ -4094,6 +4108,7 @@ export const createSpriteLayer = <T = any>(
       });
     });
     sprites.delete(spriteId);
+    spriteIdHandler.release(spriteId);
     return true;
   };
 
@@ -4153,6 +4168,7 @@ export const createSpriteLayer = <T = any>(
     hitTestTreeItems = new WeakMap();
     hitTestEntryByImage = new WeakMap();
     sprites.clear();
+    spriteIdHandler.reset();
 
     // Rebuild render target entries.
     ensureRenderTargetEntries();
