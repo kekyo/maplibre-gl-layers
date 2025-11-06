@@ -7,6 +7,14 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { MercatorCoordinate } from 'maplibre-gl';
 import type { ProjectionHostParams } from '../src/projectionHost';
+import type {
+  InternalSpriteCurrentState,
+  InternalSpriteImageState,
+} from '../src/internalTypes';
+import {
+  SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+  SPRITE_ORIGIN_REFERENCE_KEY_NONE,
+} from '../src/internalTypes';
 
 vi.mock('../src/projectionHost', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/projectionHost')>();
@@ -475,6 +483,145 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
     expect(recorded).toHaveLength(0);
 
     layer.off('spriteclick', handler);
+    layer.onRemove?.(map as unknown as any, gl);
+  });
+
+  it('throws when a sprite references a missing origin image', async () => {
+    const { layer, map, gl } = await setupLayer();
+
+    expect(() =>
+      layer.addSprite('invalid-origin', {
+        location: { lng: 0, lat: 0 },
+        images: [
+          {
+            imageId: 'marker',
+            mode: 'billboard',
+            subLayer: 0,
+            order: 1,
+            opacity: 1,
+            scale: 1,
+            originLocation: { subLayer: 0, order: 0 },
+          },
+        ],
+      })
+    ).toThrowError(/originLocation refers missing image/);
+
+    layer.onRemove?.(map as unknown as any, gl);
+  });
+
+  it('detects cyclic originLocation references within a sprite', async () => {
+    const { layer, map, gl } = await setupLayer();
+
+    expect(() =>
+      layer.addSprite('cyclic-origin', {
+        location: { lng: 0, lat: 0 },
+        images: [
+          {
+            imageId: 'marker',
+            mode: 'billboard',
+            subLayer: 0,
+            order: 0,
+            opacity: 1,
+            scale: 1,
+            originLocation: { subLayer: 0, order: 1 },
+          },
+          {
+            imageId: 'marker',
+            mode: 'billboard',
+            subLayer: 0,
+            order: 1,
+            opacity: 1,
+            scale: 1,
+            originLocation: { subLayer: 0, order: 0 },
+          },
+        ],
+      })
+    ).toThrowError(/originLocation has cyclic reference/);
+
+    layer.onRemove?.(map as unknown as any, gl);
+  });
+
+  it('assigns origin render target index for referenced images', async () => {
+    const { layer, map, gl } = await setupLayer();
+    const spriteId = 'sprite-origin-index';
+
+    const added = layer.addSprite(spriteId, {
+      location: { lng: 0, lat: 0 },
+      images: [
+        { imageId: 'marker', mode: 'billboard', subLayer: 0, order: 0 },
+        {
+          imageId: 'marker',
+          mode: 'billboard',
+          subLayer: 0,
+          order: 1,
+          originLocation: { subLayer: 0, order: 0 },
+        },
+      ],
+    });
+    expect(added).toBe(true);
+
+    const state = layer.getSpriteState(spriteId) as
+      | InternalSpriteCurrentState<unknown>
+      | undefined;
+    expect(state).toBeDefined();
+
+    const base = state?.images.get(0)?.get(0) as
+      | InternalSpriteImageState
+      | undefined;
+    const child = state?.images.get(0)?.get(1) as
+      | InternalSpriteImageState
+      | undefined;
+
+    expect(base).toBeDefined();
+    expect(child).toBeDefined();
+    expect(base?.originReferenceKey).toBe(SPRITE_ORIGIN_REFERENCE_KEY_NONE);
+    expect(base?.originRenderTargetIndex).toBe(
+      SPRITE_ORIGIN_REFERENCE_INDEX_NONE
+    );
+    expect(child?.originReferenceKey).not.toBe(
+      SPRITE_ORIGIN_REFERENCE_KEY_NONE
+    );
+    expect(child?.originRenderTargetIndex).toBe(0);
+
+    layer.onRemove?.(map as unknown as any, gl);
+  });
+
+  it('clears origin render target index when the referenced image is skipped', async () => {
+    const { layer, map, gl } = await setupLayer();
+    const spriteId = 'sprite-origin-update';
+
+    layer.addSprite(spriteId, {
+      location: { lng: 0, lat: 0 },
+      images: [
+        { imageId: 'marker', mode: 'billboard', subLayer: 0, order: 0 },
+        {
+          imageId: 'marker',
+          mode: 'billboard',
+          subLayer: 0,
+          order: 1,
+          originLocation: { subLayer: 0, order: 0 },
+        },
+      ],
+    });
+
+    const updated = layer.updateSpriteImage(spriteId, 0, 0, {
+      opacity: 0,
+    });
+    expect(updated).toBe(true);
+
+    const state = layer.getSpriteState(spriteId) as
+      | InternalSpriteCurrentState<unknown>
+      | undefined;
+    expect(state).toBeDefined();
+
+    const child = state?.images.get(0)?.get(1) as
+      | InternalSpriteImageState
+      | undefined;
+    expect(child).toBeDefined();
+    expect(child?.originRenderTargetIndex).toBe(
+      SPRITE_ORIGIN_REFERENCE_INDEX_NONE
+    );
+
     layer.onRemove?.(map as unknown as any, gl);
   });
 });

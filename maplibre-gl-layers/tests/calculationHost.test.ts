@@ -12,8 +12,13 @@ import {
   collectDepthSortedItemsInternal,
   prepareDrawSpriteImageInternal,
 } from '../src/calculationHost';
-import { createImageHandleBufferController } from '../src/image';
 import {
+  createImageHandleBufferController,
+  createRenderTargetBucketBuffers,
+  createSpriteOriginReference,
+} from '../src/utils';
+import {
+  calculateBillboardAnchorShiftPixels,
   calculateZoomScaleFactor,
   resolveScalingOptions,
   type ResolvedSpriteScalingOptions,
@@ -28,6 +33,11 @@ import type {
   PrepareDrawSpriteImageParamsBefore,
   PrepareDrawSpriteImageParamsAfter,
   PreparedDrawSpriteImageParams,
+  SpriteOriginReference,
+} from '../src/internalTypes';
+import {
+  SPRITE_ORIGIN_REFERENCE_KEY_NONE,
+  SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
 } from '../src/internalTypes';
 import type {
   SpriteAnchor,
@@ -139,35 +149,49 @@ const createImageResource = (id: string): RegisteredImage => ({
   texture: {} as WebGLTexture,
 });
 
+const originReference = createSpriteOriginReference();
+
 const createImageState = (
   overrides: Partial<InternalSpriteImageState> = {}
-): InternalSpriteImageState => ({
-  subLayer: overrides.subLayer ?? 0,
-  order: overrides.order ?? 0,
-  imageId: overrides.imageId ?? 'image',
-  imageHandle: overrides.imageHandle ?? 0,
-  mode: overrides.mode ?? 'billboard',
-  opacity: overrides.opacity ?? 1,
-  scale: overrides.scale ?? 1,
-  anchor: overrides.anchor ?? DEFAULT_ANCHOR,
-  offset: overrides.offset ?? DEFAULT_OFFSET,
-  rotateDeg: overrides.rotateDeg ?? 0,
-  displayedRotateDeg: overrides.displayedRotateDeg ?? overrides.rotateDeg ?? 0,
-  autoRotation: overrides.autoRotation ?? false,
-  autoRotationMinDistanceMeters: overrides.autoRotationMinDistanceMeters ?? 0,
-  resolvedBaseRotateDeg: overrides.resolvedBaseRotateDeg ?? 0,
-  originLocation: overrides.originLocation,
-  rotationInterpolationState: overrides.rotationInterpolationState ?? null,
-  rotationInterpolationOptions: overrides.rotationInterpolationOptions ?? null,
-  offsetDegInterpolationState: overrides.offsetDegInterpolationState ?? null,
-  offsetMetersInterpolationState:
-    overrides.offsetMetersInterpolationState ?? null,
-  lastCommandRotateDeg: overrides.lastCommandRotateDeg ?? 0,
-  lastCommandOffsetDeg: overrides.lastCommandOffsetDeg ?? 0,
-  lastCommandOffsetMeters: overrides.lastCommandOffsetMeters ?? 0,
-  surfaceShaderInputs: overrides.surfaceShaderInputs,
-  hitTestCorners: overrides.hitTestCorners,
-});
+): InternalSpriteImageState => {
+  const originLocation = overrides.originLocation;
+  const originReferenceKey =
+    originLocation !== undefined
+      ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
+      : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
+  return {
+    subLayer: overrides.subLayer ?? 0,
+    order: overrides.order ?? 0,
+    imageId: overrides.imageId ?? 'image',
+    imageHandle: overrides.imageHandle ?? 0,
+    mode: overrides.mode ?? 'billboard',
+    opacity: overrides.opacity ?? 1,
+    scale: overrides.scale ?? 1,
+    anchor: overrides.anchor ?? DEFAULT_ANCHOR,
+    offset: overrides.offset ?? DEFAULT_OFFSET,
+    rotateDeg: overrides.rotateDeg ?? 0,
+    displayedRotateDeg:
+      overrides.displayedRotateDeg ?? overrides.rotateDeg ?? 0,
+    autoRotation: overrides.autoRotation ?? false,
+    autoRotationMinDistanceMeters: overrides.autoRotationMinDistanceMeters ?? 0,
+    resolvedBaseRotateDeg: overrides.resolvedBaseRotateDeg ?? 0,
+    originLocation,
+    originReferenceKey: overrides.originReferenceKey ?? originReferenceKey,
+    originRenderTargetIndex:
+      overrides.originRenderTargetIndex ?? SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+    rotationInterpolationState: overrides.rotationInterpolationState ?? null,
+    rotationInterpolationOptions:
+      overrides.rotationInterpolationOptions ?? null,
+    offsetDegInterpolationState: overrides.offsetDegInterpolationState ?? null,
+    offsetMetersInterpolationState:
+      overrides.offsetMetersInterpolationState ?? null,
+    lastCommandRotateDeg: overrides.lastCommandRotateDeg ?? 0,
+    lastCommandOffsetDeg: overrides.lastCommandOffsetDeg ?? 0,
+    lastCommandOffsetMeters: overrides.lastCommandOffsetMeters ?? 0,
+    surfaceShaderInputs: overrides.surfaceShaderInputs,
+    hitTestCorners: overrides.hitTestCorners,
+  };
+};
 
 const createSpriteState = (
   spriteId: string,
@@ -221,6 +245,10 @@ type DepthItem<TTag> = {
   readonly image: InternalSpriteImageState;
   readonly resource: RegisteredImage;
   readonly depthKey: number;
+  readonly resolveOrigin: (
+    sprite: InternalSpriteCurrentState<TTag>,
+    image: InternalSpriteImageState
+  ) => InternalSpriteImageState | null;
 };
 
 interface CollectContext {
@@ -290,9 +318,41 @@ const createCollectContext = (
   const zoomScaleFactor =
     zoomScaleFactorOverride ?? calculateZoomScaleFactor(zoom, resolvedScaling);
 
-  bucket.forEach(([, image]) => {
+  const originIndexBySprite = new Map<string, Map<number, number>>();
+
+  bucket.forEach(([sprite, image], index) => {
     const resource = images.get(image.imageId);
     image.imageHandle = resource ? resource.handle : image.imageHandle;
+    image.originReferenceKey =
+      image.originLocation !== undefined
+        ? originReference.encodeKey(
+            image.originLocation.subLayer,
+            image.originLocation.order
+          )
+        : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
+
+    let indexMap = originIndexBySprite.get(sprite.spriteId);
+    if (!indexMap) {
+      indexMap = new Map();
+      originIndexBySprite.set(sprite.spriteId, indexMap);
+    }
+    const selfKey = originReference.encodeKey(image.subLayer, image.order);
+    indexMap.set(selfKey, index);
+  });
+
+  bucket.forEach(([sprite, image]) => {
+    if (image.originReferenceKey === SPRITE_ORIGIN_REFERENCE_KEY_NONE) {
+      image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+      return;
+    }
+    const indexMap = originIndexBySprite.get(sprite.spriteId);
+    image.originRenderTargetIndex =
+      indexMap?.get(image.originReferenceKey) ??
+      SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+  });
+
+  const bucketBuffers = createRenderTargetBucketBuffers(bucket, {
+    originReference,
   });
 
   const handleController = createImageHandleBufferController();
@@ -302,6 +362,7 @@ const createCollectContext = (
 
   const paramsBefore: PrepareDrawSpriteImageParamsBefore<null> = {
     bucket,
+    bucketBuffers,
     imageResources,
     imageHandleBuffers,
     clipContext,
@@ -859,6 +920,207 @@ describe('prepareDrawSpriteImages', () => {
     expect(childResult!.surfaceShaderInputs).toBeDefined();
   });
 
+  it('aligns billboard origin with anchorless placement when requested', () => {
+    const resourceBase = createImageResource('icon-origin-billboard-base');
+    const resourceChild = createImageResource('icon-origin-billboard-child');
+
+    const baseImage = createImageState({
+      imageId: 'icon-origin-billboard-base',
+      mode: 'billboard',
+      order: 0,
+      subLayer: 0,
+      anchor: { x: 1, y: 1 },
+    });
+    const childImage = createImageState({
+      imageId: 'icon-origin-billboard-child',
+      mode: 'billboard',
+      order: 1,
+      subLayer: 0,
+      originLocation: {
+        subLayer: baseImage.subLayer,
+        order: baseImage.order,
+        useResolvedAnchor: false,
+      },
+    });
+
+    const sprite = createSpriteState('sprite-origin-billboard', [
+      baseImage,
+      childImage,
+    ]);
+
+    const context = createCollectContext({
+      bucket: [[sprite, baseImage] as const, [sprite, childImage] as const],
+      images: new Map([
+        ['icon-origin-billboard-base', resourceBase],
+        ['icon-origin-billboard-child', resourceChild],
+      ]),
+    });
+
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
+
+    const prepared = prepareItems(context, items);
+
+    const baseResult = prepared.find((entry) => entry.imageEntry === baseImage);
+    const childResult = prepared.find(
+      (entry) => entry.imageEntry === childImage
+    );
+
+    expect(baseResult?.billboardUniforms).not.toBeNull();
+    expect(childResult?.billboardUniforms).not.toBeNull();
+
+    const baseUniforms = baseResult!.billboardUniforms!;
+    const childUniforms = childResult!.billboardUniforms!;
+
+    const minusRotationRad = Math.atan2(baseUniforms.sin, baseUniforms.cos);
+    const rotationDeg = -minusRotationRad * (180 / Math.PI);
+    const anchorShift = calculateBillboardAnchorShiftPixels(
+      baseUniforms.halfWidth,
+      baseUniforms.halfHeight,
+      baseUniforms.anchor,
+      rotationDeg
+    );
+
+    expect(Math.abs(anchorShift.x) + Math.abs(anchorShift.y)).toBeGreaterThan(
+      0
+    );
+
+    const expectedAnchorless = {
+      x: baseUniforms.center.x + anchorShift.x,
+      y: baseUniforms.center.y - anchorShift.y,
+    };
+
+    expect(childUniforms.center.x).toBeCloseTo(expectedAnchorless.x, 6);
+    expect(childUniforms.center.y).toBeCloseTo(expectedAnchorless.y, 6);
+  });
+
+  it('exposes bucket buffers for origin references', () => {
+    const resourceBase = createImageResource('icon-bucket-base');
+    const resourceChild = createImageResource('icon-bucket-child');
+
+    const baseImage = createImageState({
+      imageId: 'icon-bucket-base',
+      order: 0,
+      subLayer: 0,
+    });
+    const childImage = createImageState({
+      imageId: 'icon-bucket-child',
+      order: 1,
+      subLayer: 0,
+      originLocation: { subLayer: 0, order: 0 },
+    });
+    const sprite = createSpriteState('sprite-bucket', [baseImage, childImage]);
+
+    const context = createCollectContext({
+      bucket: [[sprite, baseImage] as const, [sprite, childImage] as const],
+      images: new Map([
+        ['icon-bucket-base', resourceBase],
+        ['icon-bucket-child', resourceChild],
+      ]),
+    });
+
+    const buffers = context.paramsBefore.bucketBuffers;
+    expect(buffers).toBeDefined();
+    expect(Array.from(buffers?.originReferenceKeys ?? [])).toEqual([
+      SPRITE_ORIGIN_REFERENCE_KEY_NONE,
+      originReference.encodeKey(0, 0),
+    ]);
+    expect(Array.from(buffers?.originTargetIndices ?? [])).toEqual([
+      SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+      0,
+    ]);
+  });
+
+  it('propagates originLocation across chained billboard references', () => {
+    const resourceBase = createImageResource('icon-chain-base');
+    const resourceMid = createImageResource('icon-chain-mid');
+    const resourceLeaf = createImageResource('icon-chain-leaf');
+
+    const baseImage = createImageState({
+      imageId: 'icon-chain-base',
+      mode: 'billboard',
+      order: 0,
+      subLayer: 0,
+    });
+    const midImage = createImageState({
+      imageId: 'icon-chain-mid',
+      mode: 'billboard',
+      order: 1,
+      subLayer: 0,
+      originLocation: {
+        subLayer: baseImage.subLayer,
+        order: baseImage.order,
+        useResolvedAnchor: true,
+      },
+      offset: { offsetMeters: 10, offsetDeg: 90 },
+    });
+    const leafImage = createImageState({
+      imageId: 'icon-chain-leaf',
+      mode: 'billboard',
+      order: 2,
+      subLayer: 0,
+      originLocation: {
+        subLayer: midImage.subLayer,
+        order: midImage.order,
+        useResolvedAnchor: true,
+      },
+    });
+
+    const sprite = createSpriteState('sprite-origin-chain', [
+      baseImage,
+      midImage,
+      leafImage,
+    ]);
+
+    const context = createCollectContext({
+      bucket: [
+        [sprite, baseImage] as const,
+        [sprite, midImage] as const,
+        [sprite, leafImage] as const,
+      ],
+      images: new Map([
+        ['icon-chain-base', resourceBase],
+        ['icon-chain-mid', resourceMid],
+        ['icon-chain-leaf', resourceLeaf],
+      ]),
+    });
+
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
+
+    const prepared = prepareItems(context, items);
+
+    const baseResult = prepared.find((entry) => entry.imageEntry === baseImage);
+    const midResult = prepared.find((entry) => entry.imageEntry === midImage);
+    const leafResult = prepared.find((entry) => entry.imageEntry === leafImage);
+
+    expect(baseResult?.billboardUniforms).not.toBeNull();
+    expect(midResult?.billboardUniforms).not.toBeNull();
+    expect(leafResult?.billboardUniforms).not.toBeNull();
+
+    const baseCenter = baseResult!.billboardUniforms!.center;
+    const midCenter = midResult!.billboardUniforms!.center;
+    const leafCenter = leafResult!.billboardUniforms!.center;
+
+    expect(
+      Math.abs(midCenter.x - baseCenter.x) +
+        Math.abs(midCenter.y - baseCenter.y)
+    ).toBeGreaterThan(0);
+
+    expect(leafCenter.x).toBeCloseTo(midCenter.x, 6);
+    expect(leafCenter.y).toBeCloseTo(midCenter.y, 6);
+  });
+
   it('reuses hit-test corner buffers across sequential preparations', () => {
     const resource = createImageResource('icon-hitreuse');
     const image = createImageState({ imageId: 'icon-hitreuse', order: 0 });
@@ -902,6 +1164,7 @@ describe('prepareDrawSpriteImages', () => {
       image,
       resource,
       depthKey: 0,
+      resolveOrigin: () => null,
     };
 
     const projectionHost = createFakeProjectionHost({

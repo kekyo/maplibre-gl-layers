@@ -18,7 +18,7 @@ import {
   type PreparedProjectionState,
   type ProjectionHostParams,
 } from './projectionHost';
-import { createCalculationHost } from './calculationHost';
+import { __createWasmProjectionCalculationHost } from './calculationHost';
 import { MIN_CLIP_Z_EPSILON, TRIANGLE_INDICES } from './const';
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -341,6 +341,14 @@ const prepareDrawSpriteImagesInternal = <TTag>(
   _preparedState: PreparedProjectionState,
   _params: PrepareDrawSpriteImageParams<TTag>
 ): PreparedDrawSpriteImageParams<TTag>[] => {
+  const { bucket, bucketBuffers } = _params;
+  if (
+    bucketBuffers &&
+    (bucketBuffers.originReferenceKeys.length !== bucket.length ||
+      bucketBuffers.originTargetIndices.length !== bucket.length)
+  ) {
+    throw new Error('bucketBuffers length mismatch');
+  }
   // TODO: To be implementing in wasm side.
   return undefined!;
 };
@@ -366,7 +374,7 @@ export const createWasmCalculationHost = <TTag>(
   void preparedState; // (ignored warning)
 
   // TODO: Remove this when wasm implementation is done.
-  const baseHost = createCalculationHost<TTag>(params);
+  const baseHost = __createWasmProjectionCalculationHost<TTag>(params);
 
   return {
     prepareDrawSpriteImages: (params) =>

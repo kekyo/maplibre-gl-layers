@@ -42,18 +42,15 @@ export interface ImageIdHandler {
    * Stores an image reference at the given handle index.
    * @param {number} handle - Numeric handle.
    * @param {RegisteredImage} image - Registered image.
-   * @returns {void}
    */
   readonly store: (handle: number, image: RegisteredImage) => void;
   /**
    * Releases the numeric handle associated with the provided identifier.
    * @param {string} imageId - Image identifier.
-   * @returns {void}
    */
   readonly release: (imageId: string) => void;
   /**
    * Clears all handle bookkeeping state.
-   * @returns {void}
    */
   readonly reset: () => void;
 }
@@ -95,6 +92,52 @@ export interface ImageHandleBufferController {
    * Returns registered images aligned by handle index. Ensures buffers are up to date.
    */
   readonly getResourcesByHandle: () => ImageResourceTable;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Encoded pointer representing the target of an origin reference.
+ * @remarks The high bits encode the sub-layer while the low bits encode the order slot.
+ */
+export type SpriteOriginReferenceKey = number;
+
+/** Sentinel used when the image does not reference another sprite image. */
+export const SPRITE_ORIGIN_REFERENCE_KEY_NONE = -1;
+
+/**
+ * Index into the render target bucket pointing at the resolved origin image.
+ * @remarks When no origin is assigned or the reference could not be resolved, the value will be {@link SPRITE_ORIGIN_REFERENCE_INDEX_NONE}.
+ */
+export type SpriteOriginReferenceIndex = number;
+
+/** Sentinel indicating that the origin pointer has not been resolved yet. */
+export const SPRITE_ORIGIN_REFERENCE_INDEX_NONE = -1;
+
+/**
+ * Encode/Decode interface for a (subLayer, order) pair into a compact numeric key.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ */
+export interface SpriteOriginReference {
+  /**
+   * Encodes a (subLayer, order) pair into a compact numeric key.
+   * @param subLayer Sub-layer identifier within the sprite.
+   * @param order Order slot inside the sub-layer.
+   * @returns Encoded origin reference key.
+   */
+  readonly encodeKey: (
+    subLayer: number,
+    order: number
+  ) => SpriteOriginReferenceKey;
+  /**
+   * Decodes an origin reference key back into the sub-layer and order pair.
+   * @param key Encoded origin reference key.
+   * @returns `subLayer` and `order` components; when the key is invalid, both values are set to `-1`.
+   */
+  readonly decodeKey: (key: SpriteOriginReferenceKey) => {
+    readonly subLayer: number;
+    readonly order: number;
+  };
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -180,9 +223,18 @@ export type RenderTargetEntryLike<TTag> = readonly [
   InternalSpriteImageState,
 ];
 
+/**
+ * Typed buffer views derived from render target entries to support WASM interop.
+ */
+export interface RenderTargetBucketBuffers {
+  readonly originReferenceKeys: Int32Array;
+  readonly originTargetIndices: Int32Array;
+}
+
 export interface PrepareDrawSpriteImageParamsBefore<TTag>
   extends PrepareDrawSpriteImageParamsBase {
   readonly bucket: readonly Readonly<RenderTargetEntryLike<TTag>>[];
+  readonly bucketBuffers?: Readonly<RenderTargetBucketBuffers>;
   readonly resolvedScaling: ResolvedSpriteScalingOptions;
   readonly zoomScaleFactor?: number;
 }
@@ -483,6 +535,8 @@ export interface InternalSpriteImageState {
   autoRotationMinDistanceMeters: number;
   resolvedBaseRotateDeg: number;
   originLocation?: Readonly<SpriteImageOriginLocation>;
+  originReferenceKey: SpriteOriginReferenceKey;
+  originRenderTargetIndex: SpriteOriginReferenceIndex;
   rotationInterpolationState: Readonly<DegreeInterpolationState> | null;
   rotationInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
   offsetDegInterpolationState: Readonly<DegreeInterpolationState> | null;

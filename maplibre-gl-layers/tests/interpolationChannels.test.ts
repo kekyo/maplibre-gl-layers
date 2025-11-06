@@ -7,6 +7,10 @@
 import { describe, expect, it } from 'vitest';
 import type { InternalSpriteImageState } from '../src/internalTypes';
 import {
+  SPRITE_ORIGIN_REFERENCE_KEY_NONE,
+  SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+} from '../src/internalTypes';
+import {
   applyOffsetUpdate,
   clearOffsetDegInterpolation,
   clearOffsetMetersInterpolation,
@@ -28,6 +32,8 @@ const createImageState = (): InternalSpriteImageState => ({
   autoRotation: false,
   autoRotationMinDistanceMeters: 0,
   resolvedBaseRotateDeg: 0,
+  originReferenceKey: SPRITE_ORIGIN_REFERENCE_KEY_NONE,
+  originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   rotationInterpolationState: null,
   rotationInterpolationOptions: null,
   offsetDegInterpolationState: null,

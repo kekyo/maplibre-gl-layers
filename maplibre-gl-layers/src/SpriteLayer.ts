@@ -62,13 +62,14 @@ import type {
   ProjectionHost,
   PreparedDrawSpriteImageParams,
   RenderCalculationHost,
+  SpriteOriginReference,
+  SpriteOriginReferenceKey,
 } from './internalTypes';
 import {
-  createImageHandleBufferController,
-  createImageIdHandler,
-  loadImageBitmap,
-  SvgSizeResolutionError,
-} from './image';
+  SPRITE_ORIGIN_REFERENCE_KEY_NONE,
+  SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+} from './internalTypes';
+import { loadImageBitmap, SvgSizeResolutionError } from './image';
 import {
   createInterpolationState,
   evaluateInterpolation,
@@ -149,6 +150,12 @@ import {
   MIN_TEXT_GLYPH_FONT_SIZE,
 } from './const';
 import { SL_DEBUG } from './config';
+import {
+  createImageHandleBufferController,
+  createImageIdHandler,
+  createSpriteOriginReference,
+  createRenderTargetBucketBuffers,
+} from './utils';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -1016,17 +1023,24 @@ export const cloneInterpolationOptions = (
  * @param {SpriteImageDefinitionInit} imageInit - Caller-provided image definition.
  * @param {number} subLayer - Sub-layer index the image belongs to.
  * @param {number} order - Ordering slot within the sub-layer.
+ * @param {SpriteOriginReference} originReference - Encode/Decode origin reference.
  * @returns {InternalSpriteImageState} Normalized internal state ready for rendering.
  */
 export const createImageStateFromInit = (
   imageInit: SpriteImageDefinitionInit,
   subLayer: number,
-  order: number
+  order: number,
+  originReference: SpriteOriginReference
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
   const initialOffset = cloneOffset(imageInit.offset);
   const initialRotateDeg = normalizeAngleDeg(imageInit.rotateDeg ?? 0);
+  const originLocation = cloneOriginLocation(imageInit.originLocation);
+  const originReferenceKey =
+    originLocation !== undefined
+      ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
+      : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
   const state: InternalSpriteImageState = {
     subLayer,
     order,
@@ -1044,7 +1058,9 @@ export const createImageStateFromInit = (
       imageInit.autoRotationMinDistanceMeters ??
       DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
     resolvedBaseRotateDeg: 0,
-    originLocation: cloneOriginLocation(imageInit.originLocation),
+    originLocation,
+    originReferenceKey,
+    originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
     rotationInterpolationState: null,
     rotationInterpolationOptions: null,
     offsetDegInterpolationState: null,
@@ -1204,6 +1220,11 @@ export const createSpriteLayer = <T = any>(
     const resource = images.get(imageId);
     return resource ? resource.handle : 0;
   };
+
+  /**
+   * Encode/Decode for a (subLayer, order) pair into a compact numeric key.
+   */
+  const originReference = createSpriteOriginReference();
 
   /**
    * Tracks queued image IDs to avoid duplicated uploads.
@@ -2507,14 +2528,29 @@ export const createSpriteLayer = <T = any>(
         orderMap.forEach((image) => {
           // Fully transparent images contribute nothing and can be ignored.
           if (image.opacity <= 0) {
+            image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+            image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
           }
           const imageResource = images.get(image.imageId);
           // Skip images referencing texture IDs that are not registered.
           if (!imageResource) {
             image.imageHandle = 0;
+            image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+            image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
           }
+
+          if (image.originLocation !== undefined) {
+            image.originReferenceKey = originReference.encodeKey(
+              image.originLocation.subLayer,
+              image.originLocation.order
+            );
+          } else {
+            image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
+          }
+          image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+
           image.imageHandle = imageResource.handle;
           renderTargetEntries.push([sprite, image]);
         });
@@ -2533,6 +2569,34 @@ export const createSpriteLayer = <T = any>(
       }
       return aImage.imageId.localeCompare(bImage.imageId);
     });
+
+    const originIndexBySprite = new Map<
+      string,
+      Map<SpriteOriginReferenceKey, number>
+    >();
+
+    for (let index = 0; index < renderTargetEntries.length; index++) {
+      const [sprite, image] = renderTargetEntries[index]!;
+      let indexMap = originIndexBySprite.get(sprite.spriteId);
+      if (!indexMap) {
+        indexMap = new Map<SpriteOriginReferenceKey, number>();
+        originIndexBySprite.set(sprite.spriteId, indexMap);
+      }
+      const selfKey = originReference.encodeKey(image.subLayer, image.order);
+      indexMap.set(selfKey, index);
+    }
+
+    for (const [sprite, image] of renderTargetEntries) {
+      if (image.originReferenceKey === SPRITE_ORIGIN_REFERENCE_KEY_NONE) {
+        image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+        continue;
+      }
+      const indexMap = originIndexBySprite.get(sprite.spriteId);
+      const targetIndex =
+        indexMap?.get(image.originReferenceKey) ??
+        SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+      image.originRenderTargetIndex = targetIndex;
+    }
   };
 
   //////////////////////////////////////////////////////////////////////////
@@ -3300,8 +3364,12 @@ export const createSpriteLayer = <T = any>(
           const imageHandleBuffers = imageHandleBuffersController.ensure();
           const imageResources =
             imageHandleBuffersController.getResourcesByHandle();
+          const bucketBuffers = createRenderTargetBucketBuffers(bucket, {
+            originReference,
+          });
           const preparedItems = calculationHost.prepareDrawSpriteImages({
             bucket,
+            bucketBuffers,
             imageResources,
             imageHandleBuffers,
             resolvedScaling,
@@ -3842,7 +3910,8 @@ export const createSpriteLayer = <T = any>(
       const state = createImageStateFromInit(
         imageInit,
         imageInit.subLayer,
-        imageInit.order
+        imageInit.order,
+        originReference
       );
       state.imageHandle = resolveImageHandle(state.imageId);
       let inner = images.get(imageInit.subLayer);
@@ -4164,7 +4233,12 @@ export const createSpriteLayer = <T = any>(
     }
 
     // Create and add the internal image state.
-    const state = createImageStateFromInit(imageInit, subLayer, order);
+    const state = createImageStateFromInit(
+      imageInit,
+      subLayer,
+      order,
+      originReference
+    );
     state.imageHandle = resolveImageHandle(state.imageId);
 
     // Verify references: ensure targets exist and no cycles occur.
@@ -4728,6 +4802,7 @@ export const createSpriteLayer = <T = any>(
       projectionHost.release();
     }
   };
+
   /**
    * Adds, updates, or removes sprites based on arbitrary source items.
    * @template TSourceItem Source item type that exposes a sprite identifier.
@@ -4892,6 +4967,7 @@ export const createSpriteLayer = <T = any>(
       projectionHost.release();
     }
   };
+
   /**
    * Iterates over every sprite and attempts to update it via the provided callback.
    * @param {(sprite: SpriteCurrentState<T>, update: SpriteUpdaterEntry<T>) => boolean} updater - Callback invoked per sprite; return `false` to abort iteration.

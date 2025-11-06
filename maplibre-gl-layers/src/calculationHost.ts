@@ -50,7 +50,9 @@ import type {
   MutableSpriteScreenPoint,
   PrepareDrawSpriteImageParamsBefore,
   PrepareDrawSpriteImageParamsAfter,
+  RenderTargetEntryLike,
 } from './internalTypes';
+import { SPRITE_ORIGIN_REFERENCE_INDEX_NONE } from './internalTypes';
 import type {
   SpriteAnchor,
   SpriteLocation,
@@ -80,6 +82,7 @@ import {
   USE_SHADER_BILLBOARD_GEOMETRY,
   USE_SHADER_SURFACE_GEOMETRY,
 } from './config';
+import { createWasmProjectionHost } from './wasmProjectionHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -96,14 +99,44 @@ interface ImageCenterCacheEntry {
  */
 type ImageCenterCache = Map<string, Map<string, ImageCenterCacheEntry>>;
 
+type OriginImageResolver<T> = (
+  sprite: Readonly<InternalSpriteCurrentState<T>>,
+  image: Readonly<InternalSpriteImageState>
+) => InternalSpriteImageState | null;
+
 interface DepthSortedItem<T> {
   readonly sprite: InternalSpriteCurrentState<T>;
   readonly image: InternalSpriteImageState;
   readonly resource: Readonly<RegisteredImage>;
   readonly depthKey: number;
+  readonly resolveOrigin: OriginImageResolver<T>;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
+
+const createBucketOriginResolver = <T>(
+  bucket: readonly Readonly<RenderTargetEntryLike<T>>[]
+): OriginImageResolver<T> => {
+  return (sprite, image) => {
+    const index = image.originRenderTargetIndex;
+    if (
+      index === SPRITE_ORIGIN_REFERENCE_INDEX_NONE ||
+      index < 0 ||
+      index >= bucket.length
+    ) {
+      return null;
+    }
+    const entry = bucket[index];
+    if (!entry) {
+      return null;
+    }
+    const [resolvedSprite, resolvedImage] = entry;
+    if (resolvedSprite !== sprite) {
+      return null;
+    }
+    return resolvedImage;
+  };
+};
 
 /**
  * Ensures an image has a reusable hit-test corner buffer.
@@ -136,6 +169,7 @@ export const collectDepthSortedItemsInternal = <T>(
   originCenterCache: ImageCenterCache,
   {
     bucket,
+    bucketBuffers,
     imageResources,
     clipContext,
     baseMetersPerPixel,
@@ -154,6 +188,16 @@ export const collectDepthSortedItemsInternal = <T>(
   const unprojectPoint: UnprojectPointFn = (point: SpriteScreenPoint) => {
     return projectionHost.unproject(point);
   };
+
+  if (
+    bucketBuffers &&
+    (bucketBuffers.originReferenceKeys.length !== bucket.length ||
+      bucketBuffers.originTargetIndices.length !== bucket.length)
+  ) {
+    throw new Error('bucketBuffers length mismatch');
+  }
+
+  const resolveOrigin = createBucketOriginResolver(bucket);
 
   for (const [spriteEntry, imageEntry] of bucket) {
     const imageResource = imageResources[imageEntry.imageHandle];
@@ -187,7 +231,7 @@ export const collectDepthSortedItemsInternal = <T>(
       continue;
     }
 
-    const centerParams: ComputeImageCenterParams = {
+    const centerParams: ComputeImageCenterParams<T> = {
       projectionHost,
       imageResources,
       originCenterCache,
@@ -201,6 +245,7 @@ export const collectDepthSortedItemsInternal = <T>(
       drawingBufferHeight,
       pixelRatio,
       clipContext,
+      resolveOrigin,
     };
 
     const anchorResolved = imageEntry.anchor ?? DEFAULT_ANCHOR;
@@ -251,9 +296,7 @@ export const collectDepthSortedItemsInternal = <T>(
 
       const baseLngLat = (() => {
         if (imageEntry.originLocation !== undefined) {
-          const refImg = spriteEntry.images
-            .get(imageEntry.originLocation.subLayer)
-            ?.get(imageEntry.originLocation.order);
+          const refImg = resolveOrigin(spriteEntry, imageEntry);
           if (refImg) {
             const baseCenter = computeImageCenterXY(
               spriteEntry,
@@ -313,6 +356,7 @@ export const collectDepthSortedItemsInternal = <T>(
       image: imageEntry,
       resource: imageResource,
       depthKey,
+      resolveOrigin,
     });
   }
 
@@ -369,7 +413,7 @@ const projectLngLatToClipSpace = (
 /**
  * Parameters required to determine an image center in screen space.
  */
-interface ComputeImageCenterParams {
+interface ComputeImageCenterParams<T> {
   readonly projectionHost: ProjectionHost;
   readonly imageResources: ImageResourceTable;
   readonly originCenterCache: ImageCenterCache;
@@ -383,6 +427,7 @@ interface ComputeImageCenterParams {
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
   readonly clipContext: Readonly<ClipContext> | null;
+  readonly resolveOrigin: OriginImageResolver<T>;
 }
 
 /**
@@ -397,7 +442,7 @@ interface ComputeImageCenterParams {
 const computeImageCenterXY = <T>(
   sprite: Readonly<InternalSpriteCurrentState<T>>,
   image: Readonly<InternalSpriteImageState>,
-  params: ComputeImageCenterParams,
+  params: ComputeImageCenterParams<T>,
   useResolvedAnchor: boolean
 ): SpriteScreenPoint => {
   const {
@@ -414,6 +459,7 @@ const computeImageCenterXY = <T>(
     drawingBufferHeight,
     pixelRatio,
     clipContext,
+    resolveOrigin,
   } = params;
 
   let spriteCache = originCenterCache.get(sprite.spriteId);
@@ -437,9 +483,7 @@ const computeImageCenterXY = <T>(
 
   let base: Readonly<SpriteScreenPoint> = projected;
   if (image.originLocation !== undefined) {
-    const ref = sprite.images
-      .get(image.originLocation.subLayer)
-      ?.get(image.originLocation.order);
+    const ref = resolveOrigin(sprite, image);
     if (ref) {
       const refCenter = computeImageCenterXY(
         sprite,
@@ -680,6 +724,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   const spriteEntry = item.sprite;
   const imageEntry = item.image;
   const imageResource = item.resource;
+  const resolveOrigin = item.resolveOrigin;
 
   const spriteMercator = resolveSpriteMercator(projectionHost, item.sprite);
 
@@ -757,7 +802,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   // Input scale defaults to 1 when callers omit it.
   const imageScale = imageEntry.scale ?? 1;
 
-  const centerParams: ComputeImageCenterParams = {
+  const centerParams: ComputeImageCenterParams<TTag> = {
     projectionHost,
     imageResources,
     originCenterCache,
@@ -771,13 +816,12 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     drawingBufferHeight,
     pixelRatio,
     clipContext,
+    resolveOrigin,
   };
 
   let baseProjected = { x: projected.x, y: projected.y };
   if (imageEntry.originLocation !== undefined) {
-    const refImg = spriteEntry.images
-      .get(imageEntry.originLocation.subLayer)
-      ?.get(imageEntry.originLocation.order);
+    const refImg = resolveOrigin(spriteEntry, imageEntry);
     if (refImg) {
       // Align this image's base position with the referenced image when available.
       baseProjected = computeImageCenterXY(
@@ -1341,6 +1385,18 @@ export const createCalculationHost = <TTag>(
   params: ProjectionHostParams
 ): RenderCalculationHost<TTag> => {
   const projectionHost = createProjectionHost(params);
+  return {
+    prepareDrawSpriteImages: (params) =>
+      prepareDrawSpriteImages(projectionHost, params),
+    release: projectionHost.release,
+  };
+};
+
+// TODO: For testing purpose, will be removed
+export const __createWasmProjectionCalculationHost = <TTag>(
+  params: ProjectionHostParams
+): RenderCalculationHost<TTag> => {
+  const projectionHost = createWasmProjectionHost(params);
   return {
     prepareDrawSpriteImages: (params) =>
       prepareDrawSpriteImages(projectionHost, params),
