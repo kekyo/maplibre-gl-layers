@@ -12,6 +12,7 @@ import {
   collectDepthSortedItemsInternal,
   prepareDrawSpriteImageInternal,
 } from '../src/calculationHost';
+import { createImageHandleBufferController } from '../src/image';
 import {
   calculateZoomScaleFactor,
   resolveScalingOptions,
@@ -127,8 +128,11 @@ const createFakeProjectionHost = (
   };
 };
 
+let nextImageHandle = 1;
+
 const createImageResource = (id: string): RegisteredImage => ({
   id,
+  handle: nextImageHandle++,
   width: 32,
   height: 32,
   bitmap: {} as ImageBitmap,
@@ -141,6 +145,7 @@ const createImageState = (
   subLayer: overrides.subLayer ?? 0,
   order: overrides.order ?? 0,
   imageId: overrides.imageId ?? 'image',
+  imageHandle: overrides.imageHandle ?? 0,
   mode: overrides.mode ?? 'billboard',
   opacity: overrides.opacity ?? 1,
   scale: overrides.scale ?? 1,
@@ -285,9 +290,20 @@ const createCollectContext = (
   const zoomScaleFactor =
     zoomScaleFactorOverride ?? calculateZoomScaleFactor(zoom, resolvedScaling);
 
+  bucket.forEach(([, image]) => {
+    const resource = images.get(image.imageId);
+    image.imageHandle = resource ? resource.handle : image.imageHandle;
+  });
+
+  const handleController = createImageHandleBufferController();
+  handleController.markDirty(images);
+  const imageHandleBuffers = handleController.ensure();
+  const imageResources = handleController.getResourcesByHandle();
+
   const paramsBefore: PrepareDrawSpriteImageParamsBefore<null> = {
     bucket,
-    images,
+    imageResources,
+    imageHandleBuffers,
     clipContext,
     baseMetersPerPixel,
     spriteMinPixel,
@@ -325,7 +341,8 @@ const createAfterParams = (
   > = {}
 ): PrepareDrawSpriteImageParamsAfter => {
   return {
-    images: before.images,
+    imageResources: before.imageResources,
+    imageHandleBuffers: before.imageHandleBuffers,
     baseMetersPerPixel: before.baseMetersPerPixel,
     spriteMinPixel: before.spriteMinPixel,
     spriteMaxPixel: before.spriteMaxPixel,
@@ -877,6 +894,7 @@ describe('prepareDrawSpriteImages', () => {
   it('returns no entries when projection fails and clears surface data', () => {
     const resource = createImageResource('icon-e');
     const image = createImageState({ imageId: 'icon-e', order: 0 });
+    image.imageHandle = resource.handle;
     const sprite = createSpriteState('sprite-d', [image]);
 
     const depthItem: DepthItem<null> = {
@@ -889,8 +907,14 @@ describe('prepareDrawSpriteImages', () => {
     const projectionHost = createFakeProjectionHost({
       project: () => null,
     });
+    const controller = createImageHandleBufferController();
+    controller.markDirty(new Map([['icon-e', resource]]));
+    const imageHandleBuffers = controller.ensure();
+    const imageResources = controller.getResourcesByHandle();
+
     const paramsAfter: PrepareDrawSpriteImageParamsAfter = {
-      images: new Map([['icon-e', resource]]),
+      imageResources,
+      imageHandleBuffers,
       baseMetersPerPixel: 1,
       spriteMinPixel: 0,
       spriteMaxPixel: 4096,

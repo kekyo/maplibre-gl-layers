@@ -17,6 +17,7 @@ const createImageState = (): InternalSpriteImageState => ({
   subLayer: 0,
   order: 0,
   imageId: 'test',
+  imageHandle: 0,
   mode: 'surface',
   opacity: 1,
   scale: 1,

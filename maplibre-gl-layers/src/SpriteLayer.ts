@@ -63,7 +63,12 @@ import type {
   PreparedDrawSpriteImageParams,
   RenderCalculationHost,
 } from './internalTypes';
-import { loadImageBitmap, SvgSizeResolutionError } from './loadImage';
+import {
+  createImageHandleBufferController,
+  createImageIdHandler,
+  loadImageBitmap,
+  SvgSizeResolutionError,
+} from './image';
 import {
   createInterpolationState,
   evaluateInterpolation,
@@ -1026,6 +1031,7 @@ export const createImageStateFromInit = (
     subLayer,
     order,
     imageId: imageInit.imageId,
+    imageHandle: 0,
     mode,
     opacity: imageInit.opacity ?? 1.0,
     scale: imageInit.scale ?? 1.0,
@@ -1177,6 +1183,29 @@ export const createSpriteLayer = <T = any>(
   const images = new Map<string, RegisteredImage>();
 
   /**
+   * Maps image identifiers to their numeric handles.
+   * @remarks It is used for (wasm) interoperability for image identity.
+   */
+  const imageIdHandler = createImageIdHandler();
+
+  /**
+   * Create image handle buffer controller.
+   * @remarks It is used for (wasm) interoperability for image identity.
+   */
+  const imageHandleBuffersController = createImageHandleBufferController();
+
+  /**
+   * Resolve registered image handle for specified identifier.
+   * @param imageId Image identifier.
+   * @returns Image handle or 0 when not registered.
+   * @remarks It is used for (wasm) interoperability for image identity.
+   */
+  const resolveImageHandle = (imageId: string): number => {
+    const resource = images.get(imageId);
+    return resource ? resource.handle : 0;
+  };
+
+  /**
    * Tracks queued image IDs to avoid duplicated uploads.
    */
   const queuedTextureIds = new Set<string>();
@@ -1211,6 +1240,23 @@ export const createSpriteLayer = <T = any>(
    * Collection of sprites currently managed by the layer.
    */
   const sprites = new Map<string, InternalSpriteCurrentState<T>>();
+
+  /**
+   * Updates image handle for every sprite image referencing the specified identifier.
+   * @param imageId Image identifier.
+   * @param handle Resolved handle (0 when not registered).
+   */
+  const updateSpriteImageHandles = (imageId: string, handle: number): void => {
+    sprites.forEach((sprite) => {
+      sprite.images.forEach((orderMap) => {
+        orderMap.forEach((imageState) => {
+          if (imageState.imageId === imageId) {
+            imageState.imageHandle = handle;
+          }
+        });
+      });
+    });
+  };
 
   /**
    * State stored in the QuadTree used for hit testing.
@@ -2325,6 +2371,7 @@ export const createSpriteLayer = <T = any>(
         // Delete existing textures to avoid stale GPU data.
         glContext.deleteTexture(image.texture);
         image.texture = undefined;
+        imageHandleBuffersController.markDirty(images);
       }
       const texture = glContext.createTexture();
       if (!texture) {
@@ -2419,6 +2466,7 @@ export const createSpriteLayer = <T = any>(
       }
 
       image.texture = texture;
+      imageHandleBuffersController.markDirty(images);
     });
   };
 
@@ -2461,10 +2509,13 @@ export const createSpriteLayer = <T = any>(
           if (image.opacity <= 0) {
             return;
           }
+          const imageResource = images.get(image.imageId);
           // Skip images referencing texture IDs that are not registered.
-          if (!images.has(image.imageId)) {
+          if (!imageResource) {
+            image.imageHandle = 0;
             return;
           }
+          image.imageHandle = imageResource.handle;
           renderTargetEntries.push([sprite, image]);
         });
       });
@@ -3246,9 +3297,13 @@ export const createSpriteLayer = <T = any>(
       const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
         const calculationHost = createCalculationHostForMap<T>(mapInstance);
         try {
+          const imageHandleBuffers = imageHandleBuffersController.ensure();
+          const imageResources =
+            imageHandleBuffersController.getResourcesByHandle();
           const preparedItems = calculationHost.prepareDrawSpriteImages({
             bucket,
-            images,
+            imageResources,
+            imageHandleBuffers,
             resolvedScaling,
             clipContext,
             baseMetersPerPixel,
@@ -3399,15 +3454,20 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    const handle = imageIdHandler.allocate(imageId);
     // Store the image metadata.
     const image: RegisteredImage = {
       id: imageId,
+      handle,
       width: bitmap.width,
       height: bitmap.height,
       bitmap,
       texture: undefined,
     };
     images.set(imageId, image);
+    imageIdHandler.store(handle, image);
+    updateSpriteImageHandles(imageId, handle);
+    imageHandleBuffersController.markDirty(images);
 
     // Queue the upload so the next draw refreshes the texture.
     queueTextureUpload(image);
@@ -3649,14 +3709,19 @@ export const createSpriteLayer = <T = any>(
       renderPixelRatio
     );
 
+    const handle = imageIdHandler.allocate(textGlyphId);
     const image: RegisteredImage = {
       id: textGlyphId,
+      handle,
       width: totalWidth,
       height: totalHeight,
       bitmap,
       texture: undefined,
     };
     images.set(textGlyphId, image);
+    imageIdHandler.store(handle, image);
+    updateSpriteImageHandles(textGlyphId, handle);
+    imageHandleBuffersController.markDirty(images);
 
     queueTextureUpload(image);
     ensureTextures();
@@ -3677,6 +3742,7 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    // Remove image bounds
     sprites.forEach((sprite) => {
       sprite.images.forEach((orderMap) => {
         orderMap.forEach((imageState) => {
@@ -3694,8 +3760,12 @@ export const createSpriteLayer = <T = any>(
     }
 
     cancelQueuedTextureUpload(imageId);
+
     // Remove the image entry.
     images.delete(imageId);
+    imageIdHandler.release(imageId);
+    updateSpriteImageHandles(imageId, 0);
+    imageHandleBuffersController.markDirty(images);
 
     // Rebuild render targets now that the image is gone.
     ensureRenderTargetEntries();
@@ -3719,6 +3789,15 @@ export const createSpriteLayer = <T = any>(
       }
     });
     images.clear();
+    imageIdHandler.reset();
+    imageHandleBuffersController.markDirty(images);
+    sprites.forEach((sprite) => {
+      sprite.images.forEach((orderMap) => {
+        orderMap.forEach((imageState) => {
+          imageState.imageHandle = 0;
+        });
+      });
+    });
     hitTestTree.clear();
     hitTestTreeItems = new WeakMap<
       InternalSpriteImageState,
@@ -3765,6 +3844,7 @@ export const createSpriteLayer = <T = any>(
         imageInit.subLayer,
         imageInit.order
       );
+      state.imageHandle = resolveImageHandle(state.imageId);
       let inner = images.get(imageInit.subLayer);
       if (!inner) {
         // First entry for this sub-layer; allocate a map for subsequent inserts.
@@ -3857,18 +3937,18 @@ export const createSpriteLayer = <T = any>(
   /**
    * Expands a batch sprite payload into iterable entries.
    * @param {SpriteInitCollection<T>} collection - Batch payload.
-   * @returns {Array<[string, SpriteInit<T>]>} Normalized entries.
+   * @returns {Array<[string, Readonly<SpriteInit<T>>]>} Normalized entries.
    */
   const resolveSpriteInitCollection = (
     collection: SpriteInitCollection<T>
-  ): Array<[string, SpriteInit<T>]> => {
+  ): readonly [string, Readonly<SpriteInit<T>>][] => {
     if (Array.isArray(collection)) {
-      return collection.map((entry): [string, SpriteInit<T>] => [
+      return collection.map((entry): [string, Readonly<SpriteInit<T>>] => [
         entry.spriteId,
         entry,
       ]);
     }
-    return Object.entries(collection) as Array<[string, SpriteInit<T>]>;
+    return Object.entries(collection);
   };
 
   /**
@@ -4085,6 +4165,7 @@ export const createSpriteLayer = <T = any>(
 
     // Create and add the internal image state.
     const state = createImageStateFromInit(imageInit, subLayer, order);
+    state.imageHandle = resolveImageHandle(state.imageId);
 
     // Verify references: ensure targets exist and no cycles occur.
     if (state.originLocation !== undefined) {
@@ -4208,6 +4289,7 @@ export const createSpriteLayer = <T = any>(
     if (imageUpdate.imageId !== undefined) {
       // Swap texture reference when caller points to a new image asset.
       state.imageId = imageUpdate.imageId;
+      state.imageHandle = resolveImageHandle(imageUpdate.imageId);
     }
     if (imageUpdate.mode !== undefined) {
       // Mode changes influence how geometry is generated.

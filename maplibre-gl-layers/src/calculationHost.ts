@@ -39,6 +39,7 @@ import {
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
+  ImageResourceTable,
   RegisteredImage,
   SurfaceShaderInputs,
   ClipContext,
@@ -135,7 +136,7 @@ export const collectDepthSortedItemsInternal = <T>(
   originCenterCache: ImageCenterCache,
   {
     bucket,
-    images,
+    imageResources,
     clipContext,
     baseMetersPerPixel,
     spriteMinPixel,
@@ -155,7 +156,7 @@ export const collectDepthSortedItemsInternal = <T>(
   };
 
   for (const [spriteEntry, imageEntry] of bucket) {
-    const imageResource = images.get(imageEntry.imageId);
+    const imageResource = imageResources[imageEntry.imageHandle];
     if (!imageResource || !imageResource.texture) {
       continue;
     }
@@ -188,7 +189,7 @@ export const collectDepthSortedItemsInternal = <T>(
 
     const centerParams: ComputeImageCenterParams = {
       projectionHost,
-      images,
+      imageResources,
       originCenterCache,
       projected,
       baseMetersPerPixel,
@@ -370,7 +371,7 @@ const projectLngLatToClipSpace = (
  */
 interface ComputeImageCenterParams {
   readonly projectionHost: ProjectionHost;
-  readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
+  readonly imageResources: ImageResourceTable;
   readonly originCenterCache: ImageCenterCache;
   readonly projected: Readonly<SpriteScreenPoint>;
   readonly baseMetersPerPixel: number;
@@ -407,7 +408,7 @@ const computeImageCenterXY = <T>(
     spriteMaxPixel,
     effectivePixelsPerMeter,
     zoomScaleFactor,
-    images,
+    imageResources,
     projectionHost,
     drawingBufferWidth,
     drawingBufferHeight,
@@ -456,7 +457,7 @@ const computeImageCenterXY = <T>(
         (image.resolvedBaseRotateDeg ?? 0) + (image.rotateDeg ?? 0)
       );
   const imageScaleLocal = image.scale ?? 1;
-  const imageResourceRef = images.get(image.imageId);
+  const imageResourceRef = imageResources[image.imageHandle];
 
   if (image.mode === 'billboard') {
     const placement = calculateBillboardCenterPosition({
@@ -658,7 +659,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   zoomScaleFactor: number,
   originCenterCache: ImageCenterCache,
   {
-    images,
+    imageResources,
     baseMetersPerPixel,
     spriteMinPixel,
     spriteMaxPixel,
@@ -758,7 +759,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
 
   const centerParams: ComputeImageCenterParams = {
     projectionHost,
-    images,
+    imageResources,
     originCenterCache,
     projected,
     baseMetersPerPixel,

@@ -6,5 +6,5 @@
 
 export * from './types';
 export * from './default';
-export * from './loadImage';
+export * from './image';
 export * from './SpriteLayer';

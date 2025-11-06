@@ -28,6 +28,78 @@ import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './math';
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * Image id handler interface.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ */
+export interface ImageIdHandler {
+  /**
+   * Allocates a numeric handle for the specified image identifier.
+   * @param {string} imageId - Image identifier.
+   * @returns {number} Allocated handle.
+   */
+  readonly allocate: (imageId: string) => number;
+  /**
+   * Stores an image reference at the given handle index.
+   * @param {number} handle - Numeric handle.
+   * @param {RegisteredImage} image - Registered image.
+   * @returns {void}
+   */
+  readonly store: (handle: number, image: RegisteredImage) => void;
+  /**
+   * Releases the numeric handle associated with the provided identifier.
+   * @param {string} imageId - Image identifier.
+   * @returns {void}
+   */
+  readonly release: (imageId: string) => void;
+  /**
+   * Clears all handle bookkeeping state.
+   * @returns {void}
+   */
+  readonly reset: () => void;
+}
+
+/**
+ * Buffers exposing image metadata indexed by handle.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ */
+export interface ImageHandleBuffers {
+  readonly widths: Float32Array;
+  readonly heights: Float32Array;
+  readonly textureReady: Uint8Array;
+}
+
+/**
+ * Registered image references aligned by handle index.
+ */
+export type ImageResourceTable = readonly (
+  | Readonly<RegisteredImage>
+  | undefined
+)[];
+
+/**
+ * Image handle buffer controller interface.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ */
+export interface ImageHandleBufferController {
+  /**
+   * Flag metadata buffers for regeneration.
+   * @param images Image map.
+   */
+  readonly markDirty: (images: ReadonlyMap<string, RegisteredImage>) => void;
+  /**
+   * Rebuilds the metadata buffers when flagged as dirty.
+   * @returns {ImageHandleBuffers} Metadata buffers aligned by handle index.
+   */
+  readonly ensure: () => ImageHandleBuffers;
+  /**
+   * Returns registered images aligned by handle index. Ensures buffers are up to date.
+   */
+  readonly getResourcesByHandle: () => ImageResourceTable;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
  * Represents a projected three dimensional position.
  * `MercatorCoordinate` uses the web mercator projection ([EPSG:3857](https://epsg.io/3857)) with slightly different units:
  * - the size of 1 unit is the width of the projected world instead of the "mercator meter"
@@ -92,7 +164,8 @@ export interface ProjectionHost extends Releaseable {
 //////////////////////////////////////////////////////////////////////////////////////////
 
 export interface PrepareDrawSpriteImageParamsBase {
-  readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
+  readonly imageResources: ImageResourceTable;
+  readonly imageHandleBuffers: Readonly<ImageHandleBuffers>;
   readonly baseMetersPerPixel: number;
   readonly spriteMinPixel: number;
   readonly spriteMaxPixel: number;
@@ -305,6 +378,10 @@ export interface ResolvedTextureFilteringOptions {
  */
 export interface RegisteredImage {
   readonly id: string;
+  /**
+   * For use (wasm) interoperability id.
+   */
+  readonly handle: number;
   readonly width: number;
   readonly height: number;
   readonly bitmap: ImageBitmap;
@@ -394,6 +471,7 @@ export interface InternalSpriteImageState {
   subLayer: number;
   order: number;
   imageId: string;
+  imageHandle: number;
   mode: SpriteMode;
   opacity: number;
   scale: number;
