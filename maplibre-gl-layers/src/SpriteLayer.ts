@@ -3364,21 +3364,20 @@ export const createSpriteLayer = <T = any>(
       const sortedSubLayerBuckets =
         buildSortedSubLayerBuckets(renderTargetEntries);
 
-      /**
-       * Renders every image within the provided sub-layer bucket after calculating depth.
-       * @param {RenderTargetEntry[]} bucket - Sprite/image pairs belonging to a single sub-layer.
-       */
-      const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
+      if (renderTargetEntries.length > 0) {
         const calculationHost = createCalculationHostForMap(mapInstance);
         try {
           const imageHandleBuffers = imageHandleBuffersController.ensure();
           const imageResources =
             imageHandleBuffersController.getResourcesByHandle();
-          const bucketBuffers = createRenderTargetBucketBuffers(bucket, {
-            originReference,
-          });
+          const bucketBuffers = createRenderTargetBucketBuffers(
+            renderTargetEntries,
+            {
+              originReference,
+            }
+          );
           const preparedItems = calculationHost.prepareDrawSpriteImages({
-            bucket,
+            bucket: renderTargetEntries,
             bucketBuffers,
             imageResources,
             imageHandleBuffers,
@@ -3400,17 +3399,26 @@ export const createSpriteLayer = <T = any>(
             screenToClipOffsetY,
           });
 
+          const preparedByImage = new Map<
+            InternalSpriteImageState,
+            PreparedDrawSpriteImageParams<T>
+          >();
           for (const prepared of preparedItems) {
-            issueSpriteDraw(prepared);
+            preparedByImage.set(prepared.imageEntry, prepared);
+          }
+
+          for (const [, bucket] of sortedSubLayerBuckets) {
+            // Process buckets in ascending sub-layer order so draw order respects configuration.
+            for (const [, image] of bucket) {
+              const prepared = preparedByImage.get(image);
+              if (prepared) {
+                issueSpriteDraw(prepared);
+              }
+            }
           }
         } finally {
           calculationHost.release();
         }
-      };
-
-      for (const [, bucket] of sortedSubLayerBuckets) {
-        // Process buckets in ascending sub-layer order so draw order respects configuration.
-        renderSortedBucket(bucket);
       }
 
       if (

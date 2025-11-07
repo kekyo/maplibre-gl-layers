@@ -78,16 +78,18 @@ const args = [
   '-s',
   'ENVIRONMENT=web,webview,worker,node',
   '-s',
-  'EXPORTED_FUNCTIONS=["_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_projectLngLatToClipSpace","_calculateBillboardDepthKey","_calculateSurfaceDepthKey","_malloc","_free"]',
+  'EXPORTED_FUNCTIONS=["_malloc","_free", "_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_projectLngLatToClipSpace","_calculateBillboardDepthKey","_calculateSurfaceDepthKey","_prepareDrawSpriteImages"]',
   '-s',
   'ALLOW_MEMORY_GROWTH=1',
   '-s',
   'ERROR_ON_UNDEFINED_SYMBOLS=0',
+  '-mbulk-memory',
 ];
 
 const wasmOptArgs = [
   '--enable-nontrapping-float-to-int',
   '--enable-simd',
+  '--enable-bulk-memory',
   outputFile,
   '-Oz',
   '-o',

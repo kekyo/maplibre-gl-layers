@@ -802,10 +802,6 @@ const converToPreparedDrawImageParams = <TTag>(
  * @param deps Wasm interoperability dependencies.
  * @param params Input parameters.
  * @returns Prepared draw image parameters, uses to WebGL render.
- *
- * 現状は JS 実装を呼び出しているが、将来的には `wasm.prepareDrawSpriteImages(paramsPtr, resultPtr)` を直接呼ぶだけで済む。
- * `PreparedInputBuffer.parameterHolder` が `paramsPtr` を、`resultBuffer` が `resultPtr` を提供するため、Wasm 側は
- * 同じレイアウト定数 (`INPUT_*`, `RESULT_*`) を参照して構造体へマップすること。
  */
 const prepareDrawSpriteImagesInternal = <TTag>(
   wasm: WasmHost,
@@ -1133,22 +1129,14 @@ export const createWasmCalculationHost = <TTag>(
 
   // Prepare parameters.
   const wasmState = convertToWasmProjectionState<TTag>(wasm, params, deps);
-  let baseHost: RenderCalculationHost<TTag> | null = null;
+  //let baseHost: RenderCalculationHost<TTag> | null = null;
   try {
-    baseHost = __createWasmProjectionCalculationHost<TTag>(params);
-    const hasWasmPrepare = typeof wasm.prepareDrawSpriteImages === 'function';
-
     return {
       prepareDrawSpriteImages: (params) =>
-        hasWasmPrepare
-          ? prepareDrawSpriteImagesInternal<TTag>(wasm, wasmState, deps, params)
-          : baseHost!.prepareDrawSpriteImages(params),
-      release: () => {
-        baseHost?.release();
-      },
+        prepareDrawSpriteImagesInternal<TTag>(wasm, wasmState, deps, params),
+      release: () => {},
     };
   } catch (error) {
-    baseHost?.release();
     throw error;
   }
 };

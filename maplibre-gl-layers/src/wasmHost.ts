@@ -105,8 +105,6 @@ export interface WasmHost {
   readonly projectLngLatToClipSpace: WasmProjectLngLatToClipSpace;
   readonly calculateBillboardDepthKey: WasmCalculateBillboardDepthKey;
   readonly calculateSurfaceDepthKey: WasmCalculateSurfaceDepthKey;
-
-  // TODO: Will add CalculationHost related functions.
   readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
 }
 
@@ -134,6 +132,8 @@ interface RawProjectionWasmExports {
   readonly calculateBillboardDepthKey?: WasmCalculateBillboardDepthKey;
   readonly _calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
   readonly calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
+  readonly _prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
+  readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
 }
 
 type NodeFsPromisesModule = typeof import('fs/promises');
@@ -238,6 +238,9 @@ const instantiateProjectionWasm = async (): Promise<WasmHost> => {
   const project =
     (exports._project as WasmProject | undefined) ??
     (exports.project as WasmProject | undefined);
+  const unproject =
+    (exports._unproject as WasmUnproject | undefined) ??
+    (exports.unproject as WasmUnproject | undefined);
   const calculatePerspectiveRatio =
     (exports._calculatePerspectiveRatio as
       | WasmCalculatePerspectiveRatio
@@ -266,9 +269,13 @@ const instantiateProjectionWasm = async (): Promise<WasmHost> => {
     (exports.calculateSurfaceDepthKey as
       | WasmCalculateSurfaceDepthKey
       | undefined);
-  const unproject =
-    (exports._unproject as WasmUnproject | undefined) ??
-    (exports.unproject as WasmUnproject | undefined);
+  const prepareDrawSpriteImages =
+    (exports._prepareDrawSpriteImages as
+      | WasmPrepareDrawSpriteImages
+      | undefined) ??
+    (exports.prepareDrawSpriteImages as
+      | WasmPrepareDrawSpriteImages
+      | undefined);
 
   if (
     !memory ||
@@ -276,26 +283,28 @@ const instantiateProjectionWasm = async (): Promise<WasmHost> => {
     !free ||
     !fromLngLat ||
     !project ||
+    !unproject ||
     !calculatePerspectiveRatio ||
     !projectLngLatToClipSpace ||
     !calculateBillboardDepthKey ||
     !calculateSurfaceDepthKey ||
-    !unproject
+    !prepareDrawSpriteImages
   ) {
     throw new Error('Projection host WASM exports are incomplete.');
   }
 
   return {
     memory,
+    malloc,
+    free,
     fromLngLat,
     project,
+    unproject,
     calculatePerspectiveRatio,
     projectLngLatToClipSpace,
     calculateBillboardDepthKey,
     calculateSurfaceDepthKey,
-    unproject,
-    malloc,
-    free,
+    prepareDrawSpriteImages,
   };
 };
 
