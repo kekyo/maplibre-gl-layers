@@ -85,7 +85,7 @@ const expectLocationClose = (
 it('createWasmProjectionHost produces consistent Mercator coordinates', async () => {
   expect.hasAssertions();
   const initialized = await initializeWasmHost();
-  expect(initialized).toBe(true);
+  expect(initialized).not.toBe('disabled');
   const referenceHost = createProjectionHost(BASE_PARAMS);
   const wasmHost = createWasmProjectionHost(BASE_PARAMS);
 
@@ -243,7 +243,7 @@ const createStubMap = (params: ProjectionHostParams): StubMap => {
 //////////////////////////////////////////////////////////////////////////////////////
 
 const wasmInitialized = await initializeWasmHost();
-if (!wasmInitialized) {
+if (wasmInitialized === 'disabled') {
   throw new Error('Failed to initialize projection WASM for projection tests.');
 }
 

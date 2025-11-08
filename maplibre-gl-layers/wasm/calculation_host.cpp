@@ -17,6 +17,10 @@
 #include <unordered_map>
 #include <vector>
 
+#ifdef SIMD_ENABLED
+#include <wasm_simd128.h>
+#endif
+
 #include "projection_host.h"
 #include "param_layouts.h"
 
@@ -364,6 +368,13 @@ constexpr std::array<std::array<double, 2>, 4> SURFACE_BASE_CORNERS = {
     std::array<double, 2>{-1.0, 1.0}, std::array<double, 2>{1.0, 1.0},
     std::array<double, 2>{-1.0, -1.0}, std::array<double, 2>{1.0, -1.0}};
 
+#ifdef SIMD_ENABLED
+alignas(16) constexpr double SURFACE_BASE_EAST_SIMD[4] = {-1.0, 1.0, -1.0, 1.0};
+alignas(16) constexpr double SURFACE_BASE_NORTH_SIMD[4] = {1.0, 1.0, -1.0, -1.0};
+alignas(16) constexpr double BILLBOARD_BASE_X_SIMD[4] = {-1.0, 1.0, -1.0, 1.0};
+alignas(16) constexpr double BILLBOARD_BASE_Y_SIMD[4] = {1.0, 1.0, -1.0, -1.0};
+#endif
+
 constexpr double MIN_CLIP_Z_EPSILON = 1e-7;
 
 static inline bool __projectLngLatToClipSpace(double lng,
@@ -520,6 +531,59 @@ static inline ClampSpritePixelSizeResult clampSpritePixelSize(double width,
   }
 
   return {nextWidth, nextHeight, scaleAdjustment};
+}
+
+#ifdef SIMD_ENABLED
+static inline void storeVec2(double*& dst, double v0, double v1) {
+  const v128_t packed = wasm_f64x2_make(v0, v1);
+  wasm_v128_store(dst, packed);
+  dst += 2;
+}
+
+static inline void storeVec2At(double* dst, double v0, double v1) {
+  const v128_t packed = wasm_f64x2_make(v0, v1);
+  wasm_v128_store(dst, packed);
+}
+#else
+static inline void storeVec2(double*& dst, double v0, double v1) {
+  dst[0] = v0;
+  dst[1] = v1;
+  dst += 2;
+}
+
+static inline void storeVec2At(double* dst, double v0, double v1) {
+  dst[0] = v0;
+  dst[1] = v1;
+}
+#endif
+
+static inline void storeScalar(double*& dst, double value) {
+  *dst++ = value;
+}
+
+static inline void storeVec4(double*& dst,
+                             double v0,
+                             double v1,
+                             double v2,
+                             double v3) {
+#ifdef SIMD_ENABLED
+  const v128_t first = wasm_f64x2_make(v0, v1);
+  const v128_t second = wasm_f64x2_make(v2, v3);
+  wasm_v128_store(dst, first);
+  dst += 2;
+  wasm_v128_store(dst, second);
+  dst += 2;
+#else
+  dst[0] = v0;
+  dst[1] = v1;
+  dst[2] = v2;
+  dst[3] = v3;
+  dst += 4;
+#endif
+}
+
+static inline void storeVec4(double*& dst, const std::array<double, 4>& values) {
+  storeVec4(dst, values[0], values[1], values[2], values[3]);
 }
 
 static inline ResultBufferHeader* initializeResultHeader(double* resultPtr) {
@@ -1546,7 +1610,7 @@ static bool prepareDrawSpriteImageInternal(
                                                displacedCenter,
                                                clipCenterPosition);
 
-    std::size_t vertexCursor = 0;
+    double* vertexWrite = vertexData.data();
     for (int idx : TRIANGLE_INDICES) {
       const std::size_t cornerIndex = static_cast<std::size_t>(idx);
       const SurfaceCorner& displacement = cornerDisplacements[cornerIndex];
@@ -1579,25 +1643,19 @@ static bool prepareDrawSpriteImageInternal(
                           screenCorner)) {
           return false;
         }
-        hitTestData[cornerIndex * 2 + 0] = screenCorner.x;
-        hitTestData[cornerIndex * 2 + 1] = screenCorner.y;
+        storeVec2At(hitTestData.data() + cornerIndex * 2,
+                    screenCorner.x,
+                    screenCorner.y);
       }
 
       if (useShaderSurface) {
         const auto& baseCorner = SURFACE_BASE_CORNERS[cornerIndex];
-        vertexData[vertexCursor++] = baseCorner[0];
-        vertexData[vertexCursor++] = baseCorner[1];
-        vertexData[vertexCursor++] = 0.0;
-        vertexData[vertexCursor++] = 1.0;
+        storeVec4(vertexWrite, baseCorner[0], baseCorner[1], 0.0, 1.0);
       } else {
-        vertexData[vertexCursor++] = clipX;
-        vertexData[vertexCursor++] = clipY;
-        vertexData[vertexCursor++] = clipZ;
-        vertexData[vertexCursor++] = clipW;
+        storeVec4(vertexWrite, clipPosition);
       }
       const auto& uv = UV_CORNERS[cornerIndex];
-      vertexData[vertexCursor++] = uv[0];
-      vertexData[vertexCursor++] = uv[1];
+      storeVec2(vertexWrite, uv[0], uv[1]);
     }
 
     bool clipUniformEnabled = false;
@@ -1633,56 +1691,48 @@ static bool prepareDrawSpriteImageInternal(
     surfaceClipEnabledValue = clipUniformEnabled ? 1.0 : 0.0;
 
     if (useShaderSurface) {
-      std::size_t surfaceCursor = 0;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.mercatorCenter.x;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.mercatorCenter.y;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.mercatorCenter.z;
-      surfaceBlock[surfaceCursor++] =
-          surfaceInputs.worldToMercatorScale.east;
-      surfaceBlock[surfaceCursor++] =
-          surfaceInputs.worldToMercatorScale.north;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.halfSizeMeters.east;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.halfSizeMeters.north;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.anchor.x;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.anchor.y;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.offsetMeters.east;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.offsetMeters.north;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.sinValue;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.cosValue;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.totalRotateDeg;
-      surfaceBlock[surfaceCursor++] = depthBiasNdc;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.centerDisplacement.east;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.centerDisplacement.north;
-      const auto writeVec4 = [&surfaceBlock, &surfaceCursor](
-                                 const std::array<double, 4>& value) {
-        surfaceBlock[surfaceCursor++] = value[0];
-        surfaceBlock[surfaceCursor++] = value[1];
-        surfaceBlock[surfaceCursor++] = value[2];
-        surfaceBlock[surfaceCursor++] = value[3];
-      };
-      writeVec4(surfaceInputs.clipCenter);
-      writeVec4(surfaceInputs.clipBasisEast);
-      writeVec4(surfaceInputs.clipBasisNorth);
+      double* surfaceWrite = surfaceBlock.data();
+      storeVec2(surfaceWrite,
+                surfaceInputs.mercatorCenter.x,
+                surfaceInputs.mercatorCenter.y);
+      storeScalar(surfaceWrite, surfaceInputs.mercatorCenter.z);
+      storeVec2(surfaceWrite,
+                surfaceInputs.worldToMercatorScale.east,
+                surfaceInputs.worldToMercatorScale.north);
+      storeVec2(surfaceWrite,
+                surfaceInputs.halfSizeMeters.east,
+                surfaceInputs.halfSizeMeters.north);
+      storeVec2(surfaceWrite, surfaceInputs.anchor.x, surfaceInputs.anchor.y);
+      storeVec2(surfaceWrite,
+                surfaceInputs.offsetMeters.east,
+                surfaceInputs.offsetMeters.north);
+      storeVec2(surfaceWrite, surfaceInputs.sinValue, surfaceInputs.cosValue);
+      storeVec2(surfaceWrite, surfaceInputs.totalRotateDeg, depthBiasNdc);
+      storeVec2(surfaceWrite,
+                surfaceInputs.centerDisplacement.east,
+                surfaceInputs.centerDisplacement.north);
+      storeVec4(surfaceWrite, surfaceInputs.clipCenter);
+      storeVec4(surfaceWrite, surfaceInputs.clipBasisEast);
+      storeVec4(surfaceWrite, surfaceInputs.clipBasisNorth);
       const std::array<double, 4> defaultCorner{0.0, 0.0, 0.0, 1.0};
       for (std::size_t i = 0; i < SURFACE_CLIP_CORNER_COUNT; ++i) {
         const std::array<double, 4>& corner =
             (i < surfaceInputs.clipCornerCount)
                 ? surfaceInputs.clipCorners[i]
                 : defaultCorner;
-        writeVec4(corner);
+        storeVec4(surfaceWrite, corner);
       }
-      surfaceBlock[surfaceCursor++] = surfaceInputs.baseLngLat.lng;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.baseLngLat.lat;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.baseLngLat.z;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.displacedCenter.lng;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.displacedCenter.lat;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.displacedCenter.z;
-      surfaceBlock[surfaceCursor++] = surfaceInputs.scaleAdjustment;
+      storeVec2(surfaceWrite,
+                surfaceInputs.baseLngLat.lng,
+                surfaceInputs.baseLngLat.lat);
+      storeScalar(surfaceWrite, surfaceInputs.baseLngLat.z);
+      storeVec2(surfaceWrite,
+                surfaceInputs.displacedCenter.lng,
+                surfaceInputs.displacedCenter.lat);
+      storeScalar(surfaceWrite, surfaceInputs.displacedCenter.z);
+      storeScalar(surfaceWrite, surfaceInputs.scaleAdjustment);
       for (const auto& corner : surfaceInputs.corners) {
-        surfaceBlock[surfaceCursor++] = corner.east;
-        surfaceBlock[surfaceCursor++] = corner.north;
-        surfaceBlock[surfaceCursor++] = corner.lng;
-        surfaceBlock[surfaceCursor++] = corner.lat;
+        storeVec4(surfaceWrite, corner.east, corner.north, corner.lng, corner.lat);
       }
       outHasSurfaceInputs = true;
     }
@@ -1722,25 +1772,24 @@ static bool prepareDrawSpriteImageInternal(
     billboardSin = bucketItem.rotation.sinNegativeRad;
     billboardCos = bucketItem.rotation.cosNegativeRad;
 
-    std::size_t vertexCursor = 0;
+    double* vertexWrite = vertexData.data();
     for (int idx : TRIANGLE_INDICES) {
       if (useShaderBillboard) {
         const auto& baseCorner = BILLBOARD_BASE_CORNERS[idx];
-        vertexData[vertexCursor++] = baseCorner[0];
-        vertexData[vertexCursor++] = baseCorner[1];
+        storeVec4(vertexWrite, baseCorner[0], baseCorner[1], 0.0, 1.0);
       } else {
-        vertexData[vertexCursor++] = resolvedCorners[idx].x;
-        vertexData[vertexCursor++] = resolvedCorners[idx].y;
+        storeVec4(vertexWrite,
+                  resolvedCorners[idx].x,
+                  resolvedCorners[idx].y,
+                  0.0,
+                  1.0);
       }
-      vertexData[vertexCursor++] = 0.0;
-      vertexData[vertexCursor++] = 1.0;
-      vertexData[vertexCursor++] = resolvedCorners[idx].u;
-      vertexData[vertexCursor++] = resolvedCorners[idx].v;
+      storeVec2(vertexWrite, resolvedCorners[idx].u, resolvedCorners[idx].v);
     }
 
-    for (std::size_t i = 0; i < resolvedCorners.size(); ++i) {
-      hitTestData[i * 2 + 0] = resolvedCorners[i].x;
-      hitTestData[i * 2 + 1] = resolvedCorners[i].y;
+    double* hitTestWrite = hitTestData.data();
+    for (const auto& corner : resolvedCorners) {
+      storeVec2(hitTestWrite, corner.x, corner.y);
     }
 
     outHasHitTest = true;
@@ -1845,6 +1894,43 @@ static inline std::array<SurfaceCorner, SURFACE_CLIP_CORNER_COUNT>
   const double cosR = cosNegativeRotation;
   const double sinR = sinNegativeRotation;
 
+#ifdef SIMD_ENABLED
+  const v128_t widthVec = wasm_f64x2_splat(halfWidth);
+  const v128_t heightVec = wasm_f64x2_splat(halfHeight);
+  const v128_t anchorEastVec = wasm_f64x2_splat(anchorEast);
+  const v128_t anchorNorthVec = wasm_f64x2_splat(anchorNorth);
+  const v128_t cosVec = wasm_f64x2_splat(cosR);
+  const v128_t sinVec = wasm_f64x2_splat(sinR);
+  const v128_t offsetEastVec = wasm_f64x2_splat(offsetMeters.east);
+  const v128_t offsetNorthVec = wasm_f64x2_splat(offsetMeters.north);
+
+  for (std::size_t idx = 0; idx < SURFACE_CLIP_CORNER_COUNT; idx += 2) {
+    v128_t east = wasm_f64x2_mul(wasm_v128_load(&SURFACE_BASE_EAST_SIMD[idx]),
+                                 widthVec);
+    v128_t north = wasm_f64x2_mul(wasm_v128_load(&SURFACE_BASE_NORTH_SIMD[idx]),
+                                  heightVec);
+    east = wasm_f64x2_sub(east, anchorEastVec);
+    north = wasm_f64x2_sub(north, anchorNorthVec);
+
+    const v128_t rotatedEast =
+        wasm_f64x2_sub(wasm_f64x2_mul(east, cosVec),
+                       wasm_f64x2_mul(north, sinVec));
+    const v128_t rotatedNorth =
+        wasm_f64x2_add(wasm_f64x2_mul(east, sinVec),
+                       wasm_f64x2_mul(north, cosVec));
+
+    alignas(16) double eastStore[2];
+    alignas(16) double northStore[2];
+    wasm_v128_store(eastStore,
+                    wasm_f64x2_add(rotatedEast, offsetEastVec));
+    wasm_v128_store(northStore,
+                    wasm_f64x2_add(rotatedNorth, offsetNorthVec));
+    for (std::size_t lane = 0; lane < 2; ++lane) {
+      const std::size_t cornerIndex = idx + lane;
+      corners[cornerIndex] = {eastStore[lane], northStore[lane]};
+    }
+  }
+#else
   for (std::size_t idx = 0; idx < SURFACE_BASE_CORNERS.size(); ++idx) {
     const auto& baseCorner = SURFACE_BASE_CORNERS[idx];
     const double cornerEast = baseCorner[0] * halfWidth;
@@ -1856,6 +1942,7 @@ static inline std::array<SurfaceCorner, SURFACE_CLIP_CORNER_COUNT>
     corners[idx] = {rotatedEast + offsetMeters.east,
                     rotatedNorth + offsetMeters.north};
   }
+#endif
   return corners;
 }
 
@@ -1870,32 +1957,22 @@ computeSurfaceCornerShaderModel(const SpriteLocation& baseLngLat,
                                 double sinNegativeRotation,
                                 double cosNegativeRotation,
                                 const SurfaceCorner& offsetMeters) {
-  const double halfWidth = worldWidthMeters / 2.0;
-  const double halfHeight = worldHeightMeters / 2.0;
-  const double sinR = sinNegativeRotation;
-  const double cosR = cosNegativeRotation;
   const double cosLat = std::cos(baseLngLat.lat * DEG2RAD);
   const double cosLatClamped = std::max(cosLat, MIN_COS_LAT);
 
   std::array<SurfaceShaderCornerModel, SURFACE_CLIP_CORNER_COUNT> corners{};
 
-  const double anchorEast = (anchor ? anchor->x : 0.0) * halfWidth;
-  const double anchorNorth = (anchor ? anchor->y : 0.0) * halfHeight;
+  const auto rotatedCorners = calculateSurfaceCornerDisplacements(
+      worldWidthMeters,
+      worldHeightMeters,
+      anchor,
+      sinNegativeRotation,
+      cosNegativeRotation,
+      offsetMeters);
 
-  for (std::size_t idx = 0; idx < SURFACE_BASE_CORNERS.size(); ++idx) {
-    const auto& baseCorner = SURFACE_BASE_CORNERS[idx];
-    const double cornerEast = baseCorner[0] * halfWidth;
-    const double cornerNorth = baseCorner[1] * halfHeight;
-
-    const double localEast = cornerEast - anchorEast;
-    const double localNorth = cornerNorth - anchorNorth;
-
-    const double rotatedEast = localEast * cosR - localNorth * sinR;
-    const double rotatedNorth = localEast * sinR + localNorth * cosR;
-
-    const double east = rotatedEast + offsetMeters.east;
-    const double north = rotatedNorth + offsetMeters.north;
-
+  for (std::size_t idx = 0; idx < rotatedCorners.size(); ++idx) {
+    const double east = rotatedCorners[idx].east;
+    const double north = rotatedCorners[idx].north;
     const double deltaLat = (north / EARTH_RADIUS_METERS) * RAD2DEG;
     const double deltaLng =
         (east / (EARTH_RADIUS_METERS * cosLatClamped)) * RAD2DEG;
@@ -2065,6 +2142,45 @@ static inline std::array<QuadCorner, 4> calculateBillboardCornerScreenPositions(
   const double cosR = rotation.cosNegativeRad;
   const double sinR = rotation.sinNegativeRad;
 
+#ifdef SIMD_ENABLED
+  const v128_t halfWidthVec = wasm_f64x2_splat(halfWidth);
+  const v128_t halfHeightVec = wasm_f64x2_splat(halfHeight);
+  const v128_t anchorXVec = wasm_f64x2_splat(anchorOffsetX);
+  const v128_t anchorYVec = wasm_f64x2_splat(anchorOffsetY);
+  const v128_t cosVec = wasm_f64x2_splat(cosR);
+  const v128_t sinVec = wasm_f64x2_splat(sinR);
+  const v128_t centerXVec = wasm_f64x2_splat(center.x);
+  const v128_t centerYVec = wasm_f64x2_splat(center.y);
+
+  for (std::size_t idx = 0; idx < BILLBOARD_BASE_CORNERS.size(); idx += 2) {
+    v128_t cornerX = wasm_f64x2_mul(wasm_v128_load(&BILLBOARD_BASE_X_SIMD[idx]),
+                                    halfWidthVec);
+    v128_t cornerY = wasm_f64x2_mul(wasm_v128_load(&BILLBOARD_BASE_Y_SIMD[idx]),
+                                    halfHeightVec);
+    cornerX = wasm_f64x2_sub(cornerX, anchorXVec);
+    cornerY = wasm_f64x2_sub(cornerY, anchorYVec);
+
+    const v128_t rotatedX =
+        wasm_f64x2_sub(wasm_f64x2_mul(cornerX, cosVec),
+                       wasm_f64x2_mul(cornerY, sinVec));
+    const v128_t rotatedY =
+        wasm_f64x2_add(wasm_f64x2_mul(cornerX, sinVec),
+                       wasm_f64x2_mul(cornerY, cosVec));
+
+    alignas(16) double xStore[2];
+    alignas(16) double yStore[2];
+    wasm_v128_store(xStore, wasm_f64x2_add(centerXVec, rotatedX));
+    wasm_v128_store(yStore, wasm_f64x2_sub(centerYVec, rotatedY));
+
+    for (std::size_t lane = 0; lane < 2; ++lane) {
+      const std::size_t cornerIndex = idx + lane;
+      corners[cornerIndex] = {xStore[lane],
+                              yStore[lane],
+                              UV_CORNERS[cornerIndex][0],
+                              UV_CORNERS[cornerIndex][1]};
+    }
+  }
+#else
   for (std::size_t i = 0; i < BILLBOARD_BASE_CORNERS.size(); ++i) {
     const double cornerX = BILLBOARD_BASE_CORNERS[i][0] * halfWidth;
     const double cornerY = BILLBOARD_BASE_CORNERS[i][1] * halfHeight;
@@ -2077,6 +2193,7 @@ static inline std::array<QuadCorner, 4> calculateBillboardCornerScreenPositions(
                   UV_CORNERS[i][0],
                   UV_CORNERS[i][1]};
   }
+#endif
 
   return corners;
 }

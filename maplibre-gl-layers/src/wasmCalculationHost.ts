@@ -849,7 +849,6 @@ const prepareDrawSpriteImagesInternal = <TTag>(
     inputBuffer.release();
   }
 };
-void prepareDrawSpriteImagesInternal; // TODO: disabled warning.
 
 //////////////////////////////////////////////////////////////////////////////////////
 

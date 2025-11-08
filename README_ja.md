@@ -44,7 +44,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // MapLibreの準備が出来たら
 map.on('load', async () => {
-  // SpriteLayerを地図に追加します
+  // SpriteLayerを初期化します
+  await spriteLayer.initialize();
   map.addLayer(spriteLayer);
 
   // 指定した画像ファイルを表示で使用する為に、SpriteLayerに登録します
@@ -122,6 +123,9 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // MapLibreの準備が出来たら
 map.on('load', async () => {
+  // SpriteLayerの初期化を行います
+  await spriteLayer.initialize();
+
   // SpriteLayerをMapLibre地図に追加します
   map.addLayer(spriteLayer);
 

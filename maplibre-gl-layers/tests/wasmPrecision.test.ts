@@ -57,7 +57,7 @@ describe('wasm fromLngLat precision', () => {
     expect.hasAssertions();
 
     const initialized = await initializeWasmHost();
-    expect(initialized).toBe(true);
+    expect(initialized).not.toBe('disabled');
 
     const referenceHost = createProjectionHost(BASE_PARAMS);
     const wasmHost = createWasmProjectionHost(BASE_PARAMS);

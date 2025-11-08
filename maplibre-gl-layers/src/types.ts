@@ -581,6 +581,11 @@ export interface SpriteTextureFilteringOptions {
 }
 
 /**
+ * Calculation variant. It is internal calculation methods.
+ */
+export type SpriteLayerCalculationVariant = 'simd' | 'nosimd' | 'disabled';
+
+/**
  * Options accepted when creating a SpriteLayer.
  *
  * @property {string | undefined} id - Optional layer identifier supplied to MapLibre.
@@ -594,6 +599,11 @@ export interface SpriteLayerOptions {
   spriteScaling?: SpriteScalingOptions;
   /** Optional texture filtering configuration. */
   textureFiltering?: SpriteTextureFilteringOptions;
+  /**
+   * Preferred calculation variant. Defaults to `simd`. When the requested variant is unavailable,
+   * the loader automatically falls back to `nosimd`, then to the JavaScript implementation.
+   */
+  calculationVariant?: SpriteLayerCalculationVariant;
   /**
    * When true, renders red outlines around sprite hit-test regions to aid debugging.
    * Defaults to false.
@@ -716,8 +726,9 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   /**
    * Initializes used by the layer.
    * Safe to call multiple times; subsequent invocations resolve immediately.
+   * @returns Applied calculation variant.
    */
-  readonly initialize: () => Promise<void>;
+  readonly initialize: () => Promise<SpriteLayerCalculationVariant>;
   /**
    * Registers an image or glyph so it can be referenced by sprite images.
    *
@@ -818,6 +829,17 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    * @param {boolean} enabled - When false, hit testing is skipped and the internal data structure is cleared.
    */
   readonly setHitTestEnabled: (enabled: boolean) => void;
+  /**
+   * Returns the currently resolved WASM variant in use.
+   */
+  readonly getWasmVariant: () => SpriteLayerCalculationVariant;
+  /**
+   * Reinitializes the WASM host with the requested variant. Resolves with the actual variant in use
+   * after applying fallbacks (nosimd, then disabled).
+   */
+  readonly setWasmVariant: (
+    variant: SpriteLayerCalculationVariant
+  ) => Promise<SpriteLayerCalculationVariant>;
 
   ////////////////////////////////////////////////////////////////////////////////
 

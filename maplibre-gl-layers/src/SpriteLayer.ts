@@ -47,6 +47,7 @@ import {
   type SpriteTextGlyphPaddingPixel,
   type SpriteTextGlyphBorderSide,
   type SpriteImageRegisterOptions,
+  type SpriteLayerCalculationVariant,
 } from './types';
 import type {
   ResolvedTextureFilteringOptions,
@@ -131,7 +132,7 @@ import {
   createProjectionHost,
   createProjectionHostParamsFromMapLibre,
 } from './projectionHost';
-import { initializeWasmHost } from './wasmHost';
+import { initializeWasmHost, type WasmVariant } from './wasmHost';
 import { createWasmProjectionHost } from './wasmProjectionHost';
 import { createWasmCalculationHost } from './wasmCalculationHost';
 import {
@@ -1103,10 +1104,14 @@ export const createSpriteLayer = <T = any>(
     options?.textureFiltering
   );
   const showDebugBounds = options?.showDebugBounds === true;
+  let requestedWasmVariant: WasmVariant = options?.calculationVariant ?? 'simd';
 
   let wasmInitializationSucceeded = false;
-  const initialize = async (): Promise<void> => {
-    wasmInitializationSucceeded = await initializeWasmHost();
+  let wasmInitializationVariant: WasmVariant = 'disabled';
+  const initialize = async (): Promise<SpriteLayerCalculationVariant> => {
+    wasmInitializationVariant = await initializeWasmHost(requestedWasmVariant);
+    wasmInitializationSucceeded = wasmInitializationVariant !== 'disabled';
+    return wasmInitializationVariant;
   };
 
   const createProjectionHostForMap = (
@@ -2507,9 +2512,14 @@ export const createSpriteLayer = <T = any>(
    * Ensure this runs after animations or style updates so the render loop reflects changes.
    * @returns {void}
    */
+  let isRenderScheduled = false;
+
   const scheduleRender = (): void => {
-    // Only attempt to repaint when the MapLibre instance is available.
-    map?.triggerRepaint();
+    if (!map || isRenderScheduled) {
+      return;
+    }
+    isRenderScheduled = true;
+    map.triggerRepaint();
   };
 
   /**
@@ -3033,6 +3043,7 @@ export const createSpriteLayer = <T = any>(
     glContext: WebGLRenderingContext,
     _options: CustomRenderMethodInput
   ): void => {
+    isRenderScheduled = false;
     hitTestEntries.length = 0;
     hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
 
@@ -3497,9 +3508,6 @@ export const createSpriteLayer = <T = any>(
     glContext.depthMask(true);
     glContext.enable(glContext.DEPTH_TEST);
     glContext.disable(glContext.BLEND);
-
-    // Queue another render pass.
-    scheduleRender();
   };
 
   //////////////////////////////////////////////////////////////////////////
@@ -5132,6 +5140,20 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
+  const getWasmVariant = (): WasmVariant => wasmInitializationVariant;
+
+  const setWasmVariant = async (variant: WasmVariant): Promise<WasmVariant> => {
+    requestedWasmVariant = variant;
+    wasmInitializationSucceeded = false;
+    wasmInitializationVariant = 'disabled';
+    const resolved = await initializeWasmHost(variant, {
+      force: true,
+    });
+    wasmInitializationVariant = resolved;
+    wasmInitializationSucceeded = resolved !== 'disabled';
+    return resolved;
+  };
+
   /**
    * MapLibre CustomLayerInterface-compatible object exposing sprite management APIs.
    */
@@ -5162,6 +5184,8 @@ export const createSpriteLayer = <T = any>(
     mutateSprites,
     updateForEach,
     setHitTestEnabled,
+    getWasmVariant,
+    setWasmVariant,
     on: addEventListener,
     off: removeEventListener,
   };

@@ -4,6 +4,8 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
+import type { SpriteLayerCalculationVariant } from './types';
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -108,6 +110,15 @@ export interface WasmHost {
   readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
 }
 
+export type WasmVariant = SpriteLayerCalculationVariant;
+
+type WasmBinaryVariant = Exclude<WasmVariant, 'disabled'>;
+
+const WASM_BINARY_PATHS: Record<WasmBinaryVariant, string> = {
+  simd: './wasm/offloads-simd.wasm',
+  nosimd: './wasm/offloads-nosimd.wasm',
+};
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 interface RawProjectionWasmExports {
@@ -168,8 +179,10 @@ const createImportFunctionStub = (): Record<
  * Load wasm binary.
  * @returns Raw wasm binary stream.
  */
-const loadWasmBinary = async (): Promise<ArrayBuffer> => {
-  const wasmUrl = new URL('./wasm/offloads.wasm', import.meta.url);
+const loadWasmBinary = async (
+  variant: WasmBinaryVariant
+): Promise<ArrayBuffer> => {
+  const wasmUrl = new URL(WASM_BINARY_PATHS[variant], import.meta.url);
 
   if (typeof fetch === 'function') {
     try {
@@ -198,7 +211,7 @@ const loadWasmBinary = async (): Promise<ArrayBuffer> => {
 
   const response = await fetch(wasmUrl);
   if (!response.ok) {
-    throw new Error(`Failed to load offloads WASM: ${wasmUrl.href}`);
+    throw new Error(`Failed to load ${variant} offloads WASM: ${wasmUrl.href}`);
   }
   return await response.arrayBuffer();
 };
@@ -207,9 +220,11 @@ const loadWasmBinary = async (): Promise<ArrayBuffer> => {
  * Load wasm binary, instantiate and refer entry points.
  * @returns WasmHost
  */
-const instantiateProjectionWasm = async (): Promise<WasmHost> => {
+const instantiateProjectionWasm = async (
+  variant: WasmBinaryVariant
+): Promise<WasmHost> => {
   // Load wasm binary and instantiate.
-  const binary = await loadWasmBinary();
+  const binary = await loadWasmBinary(variant);
   const imports: WebAssembly.Imports = {};
   const functionStub = createImportFunctionStub();
   const importTargets = imports as Record<string, unknown>;
@@ -309,24 +324,79 @@ const instantiateProjectionWasm = async (): Promise<WasmHost> => {
 };
 
 /** Resolved projection_wasm.cpp */
-let projectionWasmResolved: WasmHost | null | undefined;
+let projectionWasmResolved: WasmHost | null = null;
+let wasmInitializationResult: WasmVariant | undefined;
+let wasmInitializationPromise: Promise<WasmVariant> | null = null;
+
+const attemptInitializeWasm = async (
+  preferredVariant: WasmVariant
+): Promise<WasmVariant> => {
+  if (preferredVariant === 'disabled') {
+    projectionWasmResolved = null;
+    console.log(
+      'maplibre-gl-layers: Wasm execution disabled by configuration.'
+    );
+    return 'disabled';
+  }
+
+  const variantsToTry: WasmBinaryVariant[] =
+    preferredVariant === 'simd' ? ['simd', 'nosimd'] : ['nosimd'];
+
+  for (const variant of variantsToTry) {
+    try {
+      const host = await instantiateProjectionWasm(variant);
+      projectionWasmResolved = host;
+      console.log(
+        `maplibre-gl-layers: Initialized wasm module (variant: ${variant}).`
+      );
+      return variant;
+    } catch (error) {
+      console.warn(
+        `maplibre-gl-layers: Failed to initialize ${variant} wasm module.`,
+        error
+      );
+    }
+  }
+
+  console.warn(
+    'maplibre-gl-layers: Falling back to JavaScript implementation.'
+  );
+  projectionWasmResolved = null;
+  return 'disabled';
+};
 
 /**
  * Initialize wasm host.
- * @returns True if initialized, otherwise (include failing) false.
+ * @returns The resolved variant.
  */
-export const initializeWasmHost = async (): Promise<boolean> => {
-  if (projectionWasmResolved === undefined) {
-    try {
-      projectionWasmResolved = await instantiateProjectionWasm();
-      console.log('maplibre-gl-layers: Initialized wasm module.');
-    } catch (e: unknown) {
-      console.log(e);
-      projectionWasmResolved = null;
-      return false;
-    }
+interface InitializeWasmHostOptions {
+  readonly force?: boolean;
+}
+
+export const initializeWasmHost = async (
+  preferredVariant: WasmVariant = 'simd',
+  options?: InitializeWasmHostOptions
+): Promise<WasmVariant> => {
+  if (options?.force) {
+    projectionWasmResolved = null;
+    wasmInitializationResult = undefined;
+    wasmInitializationPromise = null;
   }
-  return projectionWasmResolved !== null;
+
+  if (wasmInitializationResult !== undefined) {
+    return wasmInitializationResult;
+  }
+
+  if (!wasmInitializationPromise) {
+    wasmInitializationPromise = attemptInitializeWasm(preferredVariant).finally(
+      () => {
+        wasmInitializationPromise = null;
+      }
+    );
+  }
+
+  wasmInitializationResult = await wasmInitializationPromise;
+  return wasmInitializationResult;
 };
 
 /**
