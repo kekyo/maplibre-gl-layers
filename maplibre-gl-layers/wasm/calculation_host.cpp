@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
-#include <functional>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <string>
@@ -73,6 +73,46 @@ static inline bool toBool(double value) {
   return value != 0.0;
 }
 
+static inline bool convertToRoundedInt32(double value, int32_t& out) {
+  if (!std::isfinite(value)) {
+     return false;
+  }
+  const double rounded = std::floor(value + 0.5);
+  if (!std::isfinite(rounded)) {
+    return false;
+  }
+  if (rounded < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
+      rounded > static_cast<double>(std::numeric_limits<int32_t>::max())) {
+    return false;
+  }
+  out = static_cast<int32_t>(rounded);
+  return true;
+}
+
+static inline uint64_t doubleToKeyBits(double value) {
+  uint64_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(double));
+  return bits;
+}
+
+static inline uint64_t hashCombineUint64(uint64_t a, uint64_t b) {
+  const uint64_t magic = 0x9e3779b97f4a7c15ULL;
+  return a ^ (b + magic + (a << 6) + (a >> 2));
+}
+
+static inline uint64_t makeSpriteCenterCacheKey(double subLayer, double order) {
+  int32_t subLayerKey = 0;
+  int32_t orderKey = 0;
+  if (convertToRoundedInt32(subLayer, subLayerKey) &&
+      convertToRoundedInt32(order, orderKey)) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(subLayerKey)) << 32) |
+           static_cast<uint32_t>(orderKey);
+  }
+  const uint64_t subBits = doubleToKeyBits(subLayer);
+  const uint64_t orderBits = doubleToKeyBits(order);
+  return hashCombineUint64(subBits, orderBits);
+}
+
 static inline bool validateSpan(std::size_t totalLength,
                   std::size_t offset,
                   std::size_t length) {
@@ -101,9 +141,24 @@ struct SpriteAnchor {
   double y = 0.0;
 };
 
+/**
+ * @brief Sprite positional offset expressed in meters and bearing degrees.
+ */
 struct SpriteImageOffset {
   double offsetMeters = 0.0;
   double offsetDeg = 0.0;
+};
+
+/**
+ * @brief Rotation metadata shared by all geometry computations for one sprite.
+ *
+ * The cached sine/cosine of the normalized (negative) angle avoids repeated
+ * calls into libm trigonometric helpers across billboard and surface builders.
+ */
+struct RotationCache {
+  double degrees = 0.0;
+  double sinNegativeRad = 0.0;
+  double cosNegativeRad = 1.0;
 };
 
 static inline SpriteAnchor resolveAnchor(const InputItemEntry& entry) {
@@ -118,11 +173,26 @@ static inline double resolveImageScale(const InputItemEntry& entry) {
   return entry.scale != 0.0 ? entry.scale : 1.0;
 }
 
+/**
+ * @brief Resolves the effective rotation angle for a sprite entry.
+ */
 static inline double resolveTotalRotateDeg(const InputItemEntry& entry) {
   if (std::isfinite(entry.displayedRotateDeg)) {
     return entry.displayedRotateDeg;
   }
   return normalizeAngleDeg(entry.resolvedBaseRotateDeg + entry.rotateDeg);
+}
+
+/**
+ * @brief Builds a RotationCache; invoked exactly once per bucket item.
+ */
+static inline RotationCache buildRotationCache(double totalRotateDeg) {
+  RotationCache cache;
+  cache.degrees = totalRotateDeg;
+  const double rad = -totalRotateDeg * DEG2RAD;
+  cache.sinNegativeRad = std::sin(rad);
+  cache.cosNegativeRad = std::cos(rad);
+  return cache;
 }
 
 struct SurfaceCorner {
@@ -201,6 +271,9 @@ static inline const ResourceInfo* findResourceByHandle(
   return &resources[handleIndex];
 }
 
+/**
+ * @brief CPU-side staging record for each sprite processed in the current frame.
+ */
 struct BucketItem {
   const InputItemEntry* entry = nullptr;
   std::size_t index = 0;
@@ -211,26 +284,11 @@ struct BucketItem {
   SpriteScreenPoint projected;
   bool projectedValid = false;
   int64_t spriteHandle = 0;
-};
-
-using ResolveOriginFn =
-    std::function<const BucketItem*(const BucketItem&)>;
-
-struct ImageCenterCacheKey {
-  double subLayer = 0.0;
-  double order = 0.0;
-
-  bool operator==(const ImageCenterCacheKey& other) const noexcept {
-    return subLayer == other.subLayer && order == other.order;
-  }
-};
-
-struct ImageCenterCacheKeyHash {
-  std::size_t operator()(const ImageCenterCacheKey& key) const noexcept {
-    const std::size_t h1 = std::hash<double>{}(key.subLayer);
-    const std::size_t h2 = std::hash<double>{}(key.order);
-    return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6) + (h1 >> 2));
-  }
+  double metersPerPixelAtLat = 0.0;
+  double perspectiveRatio = 1.0;
+  double effectivePixelsPerMeter = 0.0;
+  bool hasEffectivePixelsPerMeter = false;
+  RotationCache rotation;
 };
 
 struct ImageCenterCacheEntry {
@@ -241,9 +299,7 @@ struct ImageCenterCacheEntry {
 };
 
 using ImageCenterCache =
-    std::unordered_map<ImageCenterCacheKey,
-                       ImageCenterCacheEntry,
-                       ImageCenterCacheKeyHash>;
+    std::unordered_map<uint64_t, ImageCenterCacheEntry>;
 
 using SpriteCenterCacheMap =
     std::unordered_map<int64_t, ImageCenterCache>;
@@ -251,6 +307,10 @@ using SpriteCenterCacheMap =
 struct DepthItem {
   const BucketItem* item = nullptr;
   double depthKey = 0.0;
+  bool hasSurfaceData = false;
+  SurfaceWorldDimensions surfaceWorldDimensions;
+  SurfaceCorner surfaceOffsetMeters;
+  std::array<SurfaceCorner, SURFACE_CLIP_CORNER_COUNT> surfaceCornerDisplacements;
 };
 
 struct DepthCollectionResult {
@@ -258,11 +318,14 @@ struct DepthCollectionResult {
   SpriteCenterCacheMap centerCache;
 };
 
-using ProjectToClipSpaceFn =
-    std::function<bool(const SpriteLocation&, std::array<double, 4>&)>;
-using ProjectLngLatFn =
-    std::function<bool(const SpriteLocation&, SpriteScreenPoint&)>;
+struct ProjectionContext;
 
+/**
+ * @brief Parameters required to compute surface sprite centers and bounds.
+ *
+ * This structure now carries cached sine/cosine values so that all downstream
+ * helpers operate purely on precomputed rotation data.
+ */
 struct SurfaceCenterParams {
   SpriteLocation baseLngLat;
   double imageWidth = 0.0;
@@ -271,13 +334,16 @@ struct SurfaceCenterParams {
   double imageScale = 1.0;
   double zoomScaleFactor = 1.0;
   double totalRotateDeg = 0.0;
+  double sinNegativeRotation = 0.0;
+  double cosNegativeRotation = 1.0;
   const SpriteAnchor* anchor = nullptr;
   const SpriteImageOffset* offset = nullptr;
   double effectivePixelsPerMeter = 0.0;
   double spriteMinPixel = 0.0;
   double spriteMaxPixel = 0.0;
-  ProjectLngLatFn project;
-  ProjectToClipSpaceFn projectToClipSpace;
+  const ProjectionContext* projection = nullptr;
+  bool enableClipProjection = false;
+  bool enableScreenProjection = false;
   double drawingBufferWidth = 0.0;
   double drawingBufferHeight = 0.0;
   double pixelRatio = 0.0;
@@ -314,21 +380,30 @@ static inline SurfaceWorldDimensions calculateSurfaceWorldDimensions(
     double effectivePixelsPerMeter,
     double spriteMinPixel,
     double spriteMaxPixel);
-static inline std::vector<SurfaceCorner> calculateSurfaceCornerDisplacements(
+static inline std::array<SurfaceCorner, SURFACE_CLIP_CORNER_COUNT>
+    calculateSurfaceCornerDisplacements(
     double worldWidthMeters,
     double worldHeightMeters,
     const SpriteAnchor* anchor,
-    double totalRotateDeg,
+    double sinNegativeRotation,
+    double cosNegativeRotation,
     const SurfaceCorner& offsetMeters);
-static inline std::vector<SurfaceShaderCornerModel>
+static inline std::array<SurfaceShaderCornerModel, SURFACE_CLIP_CORNER_COUNT>
 computeSurfaceCornerShaderModel(const SpriteLocation& baseLngLat,
                                 double worldWidthMeters,
                                 double worldHeightMeters,
                                 const SpriteAnchor* anchor,
-                                double totalRotateDeg,
+                                double sinNegativeRotation,
+                                double cosNegativeRotation,
                                 const SurfaceCorner& offsetMeters);
 static inline SurfaceCenterResult calculateSurfaceCenterPosition(
     const SurfaceCenterParams& params);
+/**
+ * @brief Computes billboard center, size and anchor/offset shifts in screen space.
+ *
+ * All rotation math uses `RotationCache` so the caller pays trigonometric cost
+ * only once per sprite.
+ */
 static inline BillboardCenterResult calculateBillboardCenterPosition(
     const SpriteScreenPoint& base,
     double imageWidth,
@@ -339,15 +414,18 @@ static inline BillboardCenterResult calculateBillboardCenterPosition(
     double effectivePixelsPerMeter,
     double spriteMinPixel,
     double spriteMaxPixel,
-    double totalRotateDeg,
+    const RotationCache& rotation,
     const SpriteAnchor* anchor,
     const SpriteImageOffset* offset);
+/**
+ * @brief Generates rotated billboard quad corners around the computed center.
+ */
 static inline std::array<QuadCorner, 4> calculateBillboardCornerScreenPositions(
     const SpriteScreenPoint& center,
     double halfWidth,
     double halfHeight,
     const SpriteAnchor* anchor,
-    double totalRotateDeg);
+    const RotationCache& rotation);
 static inline bool __calculateBillboardDepthKey(double centerX,
                                                 double centerY,
                                                 double worldSize,
@@ -376,6 +454,31 @@ constexpr int INPUT_FLAG_ENABLE_NDC_BIAS_SURFACE = 1 << 2;
 
 constexpr int RESULT_FLAG_HAS_HIT_TEST = 1 << 0;
 constexpr int RESULT_FLAG_HAS_SURFACE_INPUTS = 1 << 1;
+
+static inline const BucketItem* resolveOriginBucketItem(
+    const BucketItem& current,
+    const std::vector<BucketItem>& bucketItems) {
+  int64_t originIndex = 0;
+  if (!convertToInt64(current.entry->originTargetIndex, originIndex)) {
+    return nullptr;
+  }
+  if (originIndex == SPRITE_ORIGIN_REFERENCE_INDEX_NONE) {
+    return nullptr;
+  }
+  if (originIndex < 0 ||
+      static_cast<std::size_t>(originIndex) >= bucketItems.size()) {
+    return nullptr;
+  }
+  const BucketItem& candidate =
+      bucketItems[static_cast<std::size_t>(originIndex)];
+  if (candidate.entry == nullptr) {
+    return nullptr;
+  }
+  if (candidate.spriteHandle != current.spriteHandle) {
+    return nullptr;
+  }
+  return &candidate;
+}
 
 struct ClampSpritePixelSizeResult {
   double width = 0.0;
@@ -593,11 +696,16 @@ static inline SpritePoint calculateBillboardOffsetPixels(
           offsetPixels * std::cos(offsetRad)};
 }
 
+/**
+ * @brief Computes how far the billboard anchor shifts in screen pixels.
+ *
+ * Uses cached rotation values to avoid redundant trigonometric evaluations.
+ */
 static inline SpritePoint calculateBillboardAnchorShiftPixels(
     double halfWidth,
     double halfHeight,
     const SpriteAnchor* anchor,
-    double totalRotateDeg) {
+    const RotationCache& rotation) {
   if (halfWidth <= 0.0 || halfHeight <= 0.0) {
     return {0.0, 0.0};
   }
@@ -606,19 +714,22 @@ static inline SpritePoint calculateBillboardAnchorShiftPixels(
   if (anchorX == 0.0 && anchorY == 0.0) {
     return {0.0, 0.0};
   }
-  const double rad = -totalRotateDeg * DEG2RAD;
-  const double cosR = std::cos(rad);
-  const double sinR = std::sin(rad);
+  const double cosR = rotation.cosNegativeRad;
+  const double sinR = rotation.sinNegativeRad;
   const double shiftX = -anchorX * cosR + anchorY * sinR;
   const double shiftY = -anchorX * sinR - anchorY * cosR;
   return {shiftX, shiftY};
 }
 
+/**
+ * @brief Calculates the anchor shift for surface sprites in world meters.
+ */
 static inline SurfaceCorner calculateSurfaceAnchorShiftMeters(
     double halfWidthMeters,
     double halfHeightMeters,
     const SpriteAnchor* anchor,
-    double totalRotateDeg) {
+    double sinNegRotation,
+    double cosNegRotation) {
   if (halfWidthMeters <= 0.0 || halfHeightMeters <= 0.0) {
     return {0.0, 0.0};
   }
@@ -627,9 +738,8 @@ static inline SurfaceCorner calculateSurfaceAnchorShiftMeters(
   if (anchorEast == 0.0 && anchorNorth == 0.0) {
     return {0.0, 0.0};
   }
-  const double rad = -totalRotateDeg * DEG2RAD;
-  const double cosR = std::cos(rad);
-  const double sinR = std::sin(rad);
+  const double cosR = cosNegRotation;
+  const double sinR = sinNegRotation;
   const double east = -anchorEast * cosR + anchorNorth * sinR;
   const double north = -anchorEast * sinR - anchorNorth * cosR;
   return {east, north};
@@ -803,6 +913,9 @@ static inline SurfaceCorner calculateWorldToMercatorScale(
   return {east.x - origin.x, north.y - origin.y};
 }
 
+/**
+ * @brief Bundle of surface shader uniforms derived from CPU-side calculations.
+ */
 struct SurfaceShaderInputsData {
   SpriteMercatorCoordinate mercatorCenter;
   SurfaceCorner worldToMercatorScale;
@@ -817,20 +930,24 @@ struct SurfaceShaderInputsData {
   SpriteLocation baseLngLat;
   SpriteLocation displacedCenter;
   double scaleAdjustment = 1.0;
-  std::vector<SurfaceShaderCornerModel> corners;
+  std::array<SurfaceShaderCornerModel, SURFACE_CLIP_CORNER_COUNT> corners{};
   std::array<double, 4> clipCenter = {0.0, 0.0, 0.0, 1.0};
   std::array<double, 4> clipBasisEast = {0.0, 0.0, 0.0, 0.0};
   std::array<double, 4> clipBasisNorth = {0.0, 0.0, 0.0, 0.0};
-  std::vector<std::array<double, 4>> clipCorners;
+  std::array<std::array<double, 4>, SURFACE_CLIP_CORNER_COUNT> clipCorners{};
+  std::size_t clipCornerCount = 0;
 };
 
+/**
+ * @brief Prepares per-surface shader inputs using cached rotation data.
+ */
 static inline SurfaceShaderInputsData prepareSurfaceShaderInputs(
     const ProjectionContext& projection,
     const SpriteLocation& baseLngLat,
     double worldWidthMeters,
     double worldHeightMeters,
     const SpriteAnchor* anchor,
-    double totalRotateDeg,
+    const RotationCache& rotation,
     const SurfaceCorner& offsetMeters,
     const SpriteLocation& displacedCenter,
     double depthBiasNdc,
@@ -838,9 +955,8 @@ static inline SurfaceShaderInputsData prepareSurfaceShaderInputs(
     const SurfaceCorner& centerDisplacement) {
   const double halfWidth = worldWidthMeters * 0.5;
   const double halfHeight = worldHeightMeters * 0.5;
-  const double rotationRad = -totalRotateDeg * DEG2RAD;
-  const double sinR = std::sin(rotationRad);
-  const double cosR = std::cos(rotationRad);
+  const double sinR = rotation.sinNegativeRad;
+  const double cosR = rotation.cosNegativeRad;
 
   SurfaceShaderInputsData data;
   calculateMercatorCoordinate(displacedCenter, data.mercatorCenter);
@@ -851,7 +967,7 @@ static inline SurfaceShaderInputsData prepareSurfaceShaderInputs(
   data.offsetMeters = offsetMeters;
   data.sinValue = sinR;
   data.cosValue = cosR;
-  data.totalRotateDeg = totalRotateDeg;
+  data.totalRotateDeg = rotation.degrees;
   data.depthBiasNdc = depthBiasNdc;
   data.centerDisplacement = centerDisplacement;
   data.baseLngLat = baseLngLat;
@@ -861,10 +977,10 @@ static inline SurfaceShaderInputsData prepareSurfaceShaderInputs(
                                                  worldWidthMeters,
                                                  worldHeightMeters,
                                                  anchor,
-                                                 totalRotateDeg,
+                                                 sinR,
+                                                 cosR,
                                                  offsetMeters);
-  data.clipCorners.clear();
-  data.clipCorners.reserve(SURFACE_BASE_CORNERS.size());
+  data.clipCornerCount = 0;
   return data;
 }
 
@@ -878,6 +994,13 @@ static inline bool hasOriginLocation(const InputItemEntry& entry) {
   return false;
 }
 
+/**
+ * @brief Resolves the on-screen center of an item, honoring anchors/origins.
+ *
+ * The function now consumes rotation cache data indirectly through the
+ * `BucketItem`, so recomputing trigonometric values while walking origin chains
+ * is unnecessary.
+ */
 static SpriteScreenPoint computeImageCenter(
     const BucketItem& bucketItem,
     bool useResolvedAnchor,
@@ -886,14 +1009,14 @@ static SpriteScreenPoint computeImageCenter(
     SpriteCenterCacheMap& cache,
     const ResourceInfo& resource,
     double effectivePixelsPerMeter,
-    const ResolveOriginFn& resolveOrigin,
+    const std::vector<BucketItem>& bucketItems,
     bool clipContextAvailable) {
   SpriteScreenPoint fallbackCenter = bucketItem.projected;
 
   const int64_t spriteKey = bucketItem.spriteHandle;
   auto& spriteCache = cache[spriteKey];
-  const ImageCenterCacheKey cacheKey{bucketItem.entry->subLayer,
-                                     bucketItem.entry->order};
+  const uint64_t cacheKey = makeSpriteCenterCacheKey(
+      bucketItem.entry->subLayer, bucketItem.entry->order);
   auto cacheFound = spriteCache.find(cacheKey);
   if (cacheFound != spriteCache.end()) {
     const ImageCenterCacheEntry& entry = cacheFound->second;
@@ -907,8 +1030,9 @@ static SpriteScreenPoint computeImageCenter(
 
   SpriteScreenPoint basePoint = bucketItem.projected;
 
-  if (hasOriginLocation(*bucketItem.entry) && resolveOrigin) {
-    const BucketItem* reference = resolveOrigin(bucketItem);
+  if (hasOriginLocation(*bucketItem.entry)) {
+    const BucketItem* reference =
+        resolveOriginBucketItem(bucketItem, bucketItems);
     if (reference && reference->resource) {
       const bool resolvedAnchor = toBool(bucketItem.entry->originUseResolvedAnchor);
       basePoint = computeImageCenter(*reference,
@@ -918,7 +1042,7 @@ static SpriteScreenPoint computeImageCenter(
                                      cache,
                                      *reference->resource,
                                      effectivePixelsPerMeter,
-                                     resolveOrigin,
+                                     bucketItems,
                                      clipContextAvailable);
     }
   }
@@ -930,11 +1054,7 @@ static SpriteScreenPoint computeImageCenter(
   const double imageScale = bucketItem.entry->scale != 0.0
                                 ? bucketItem.entry->scale
                                 : 1.0;
-  const double displayedRotate = bucketItem.entry->displayedRotateDeg;
-  const double totalRotateDeg = std::isfinite(displayedRotate)
-      ? displayedRotate
-      : normalizeAngleDeg(bucketItem.entry->resolvedBaseRotateDeg +
-                          bucketItem.entry->rotateDeg);
+  const double totalRotateDeg = bucketItem.rotation.degrees;
 
   const bool isSurface = std::lround(bucketItem.entry->mode) == 0;
 
@@ -956,20 +1076,6 @@ static SpriteScreenPoint computeImageCenter(
       }
     }
 
-    ProjectToClipSpaceFn clipProjector;
-    ProjectLngLatFn screenProjector;
-    if (clipContextAvailable) {
-      clipProjector = [&projection](const SpriteLocation& location,
-                                    std::array<double, 4>& out) -> bool {
-        return projectLngLatToClip(projection, location, out);
-      };
-    } else {
-      screenProjector = [&projection](const SpriteLocation& location,
-                                      SpriteScreenPoint& out) -> bool {
-        return projectSpritePoint(projection, location, out);
-      };
-    }
-
     SurfaceCenterParams params;
     params.baseLngLat = baseLngLat;
     params.imageWidth = resource.width;
@@ -978,17 +1084,20 @@ static SpriteScreenPoint computeImageCenter(
     params.imageScale = imageScale;
     params.zoomScaleFactor = frame.zoomScaleFactor;
     params.totalRotateDeg = totalRotateDeg;
+    params.sinNegativeRotation = bucketItem.rotation.sinNegativeRad;
+    params.cosNegativeRotation = bucketItem.rotation.cosNegativeRad;
     params.anchor = &anchor;
     params.offset = &offset;
     params.effectivePixelsPerMeter = effectivePixelsPerMeter;
     params.spriteMinPixel = frame.spriteMinPixel;
     params.spriteMaxPixel = frame.spriteMaxPixel;
-    params.projectToClipSpace = clipProjector;
+    params.projection = &projection;
+    params.enableClipProjection = clipContextAvailable;
+    params.enableScreenProjection = !clipContextAvailable;
     params.drawingBufferWidth = frame.drawingBufferWidth;
     params.drawingBufferHeight = frame.drawingBufferHeight;
     params.pixelRatio = frame.pixelRatio;
     params.resolveAnchorless = true;
-    params.project = clipContextAvailable ? ProjectLngLatFn() : screenProjector;
 
     const SurfaceCenterResult placement =
         calculateSurfaceCenterPosition(params);
@@ -1014,7 +1123,7 @@ static SpriteScreenPoint computeImageCenter(
                                          effectivePixelsPerMeter,
                                          frame.spriteMinPixel,
                                          frame.spriteMaxPixel,
-                                         totalRotateDeg,
+                                         bucketItem.rotation,
                                          &anchor,
                                          &offset);
     anchorAppliedCenter = placement.center;
@@ -1032,13 +1141,53 @@ static SpriteScreenPoint computeImageCenter(
   return useResolvedAnchor ? anchorAppliedCenter : anchorlessCenter;
 }
 
+/**
+ * @brief Lazily computes per-sprite meters/pixel and perspective ratio.
+ *
+ * Result is cached on the BucketItem so depth collection and draw prep share it.
+ */
+static inline bool ensureBucketEffectivePixelsPerMeter(
+    BucketItem& bucketItem,
+    const ProjectionContext& projectionContext,
+    const FrameConstants& frame) {
+  if (bucketItem.hasEffectivePixelsPerMeter &&
+      bucketItem.effectivePixelsPerMeter > 0.0 &&
+      std::isfinite(bucketItem.effectivePixelsPerMeter)) {
+    return true;
+  }
+
+  const double metersPerPixelAtLat =
+      calculateMetersPerPixelAtLatitude(frame.zoom,
+                                        bucketItem.spriteLocation.lat);
+  if (!std::isfinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0.0) {
+    return false;
+  }
+
+  const double perspectiveRatio = calculatePerspectiveRatio(
+      projectionContext,
+      bucketItem.spriteLocation,
+      bucketItem.hasMercator ? &bucketItem.mercator : nullptr);
+
+  const double effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
+      metersPerPixelAtLat, perspectiveRatio);
+  if (!std::isfinite(effectivePixelsPerMeter) ||
+      effectivePixelsPerMeter <= 0.0) {
+    return false;
+  }
+
+  bucketItem.metersPerPixelAtLat = metersPerPixelAtLat;
+  bucketItem.perspectiveRatio = perspectiveRatio;
+  bucketItem.effectivePixelsPerMeter = effectivePixelsPerMeter;
+  bucketItem.hasEffectivePixelsPerMeter = true;
+  return true;
+}
+
 static DepthCollectionResult collectDepthSortedItemsInternal(
-    const std::vector<BucketItem>& bucketItems,
+    std::vector<BucketItem>& bucketItems,
     const ProjectionContext& projectionContext,
     const FrameConstants& frame,
     bool clipContextAvailable,
-    bool enableSurfaceBias,
-    const ResolveOriginFn& resolveOrigin) {
+    bool enableSurfaceBias) {
   DepthCollectionResult result;
   auto& centerCache = result.centerCache;
   std::vector<DepthItem> depthItems;
@@ -1048,7 +1197,7 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
   const int triangleIndexCount =
       static_cast<int>(TRIANGLE_INDICES.size());
 
-  for (const BucketItem& bucketItem : bucketItems) {
+  for (BucketItem& bucketItem : bucketItems) {
     if (bucketItem.entry == nullptr || bucketItem.resource == nullptr) {
       continue;
     }
@@ -1059,23 +1208,13 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
       continue;
     }
 
-    const double metersPerPixelAtLat =
-        calculateMetersPerPixelAtLatitude(frame.zoom,
-                                          bucketItem.spriteLocation.lat);
-    if (!std::isfinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0.0) {
+    if (!ensureBucketEffectivePixelsPerMeter(bucketItem,
+                                             projectionContext,
+                                             frame)) {
       continue;
     }
 
-    const double perspectiveRatio = calculatePerspectiveRatio(
-        projectionContext,
-        bucketItem.spriteLocation,
-        bucketItem.hasMercator ? &bucketItem.mercator : nullptr);
-
-    const double effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
-        metersPerPixelAtLat, perspectiveRatio);
-    if (effectivePixelsPerMeter <= 0.0) {
-      continue;
-    }
+    const double effectivePixelsPerMeter = bucketItem.effectivePixelsPerMeter;
 
     SpriteScreenPoint depthCenter = computeImageCenter(
         bucketItem,
@@ -1085,11 +1224,13 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
         centerCache,
         *bucketItem.resource,
         effectivePixelsPerMeter,
-        resolveOrigin,
+        bucketItems,
         clipContextAvailable);
 
     double depthKey = 0.0;
     const bool isSurface = std::lround(bucketItem.entry->mode) == 0;
+    DepthItem depthEntry;
+    depthEntry.item = &bucketItem;
 
     if (isSurface) {
       if (!projectionContext.mercatorMatrix) {
@@ -1099,7 +1240,6 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
       const double imageScale = resolveImageScale(*bucketItem.entry);
       const SpriteAnchor anchor = resolveAnchor(*bucketItem.entry);
       const SpriteImageOffset offset = resolveOffset(*bucketItem.entry);
-      const double totalRotateDeg = resolveTotalRotateDeg(*bucketItem.entry);
 
       const SurfaceWorldDimensions worldDims = calculateSurfaceWorldDimensions(
           bucketItem.resource->width,
@@ -1115,16 +1255,18 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
           imageScale,
           frame.zoomScaleFactor,
           worldDims.scaleAdjustment);
-      const std::vector<SurfaceCorner> cornerDisplacements =
+      const auto cornerDisplacements =
           calculateSurfaceCornerDisplacements(worldDims.width,
                                               worldDims.height,
                                               &anchor,
-                                              totalRotateDeg,
+                                              bucketItem.rotation.sinNegativeRad,
+                                              bucketItem.rotation.cosNegativeRad,
                                               offsetMeters);
 
       SpriteLocation baseLngLat = bucketItem.spriteLocation;
       if (hasOriginLocation(*bucketItem.entry)) {
-        const BucketItem* reference = resolveOrigin(bucketItem);
+        const BucketItem* reference =
+            resolveOriginBucketItem(bucketItem, bucketItems);
         if (reference && reference->resource) {
           const bool useAnchorDisplacement =
               toBool(bucketItem.entry->originUseResolvedAnchor);
@@ -1136,7 +1278,7 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
               centerCache,
               *reference->resource,
               effectivePixelsPerMeter,
-              resolveOrigin,
+              bucketItems,
               clipContextAvailable);
           SpriteLocation reprojection{};
           if (unprojectSpritePoint(projectionContext,
@@ -1154,14 +1296,14 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
                                clampedOrder;
       const double depthBiasNdc = applyBias ? -(biasIndex * frame.epsNdc) : 0.0;
 
-      std::vector<double> displacementData(cornerDisplacements.size() * 2);
-      for (std::size_t idx = 0; idx < cornerDisplacements.size(); ++idx) {
+      std::array<double, SURFACE_CLIP_CORNER_COUNT * 2> displacementData{};
+      for (std::size_t idx = 0; idx < SURFACE_CLIP_CORNER_COUNT; ++idx) {
         displacementData[idx * 2 + 0] = cornerDisplacements[idx].east;
         displacementData[idx * 2 + 1] = cornerDisplacements[idx].north;
       }
 
       const int displacementCount =
-          static_cast<int>(cornerDisplacements.size());
+          static_cast<int>(SURFACE_CLIP_CORNER_COUNT);
 
       if (!__calculateSurfaceDepthKey(baseLngLat.lng,
                                       baseLngLat.lat,
@@ -1177,6 +1319,11 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
                                       &depthKey)) {
         continue;
       }
+
+      depthEntry.hasSurfaceData = true;
+      depthEntry.surfaceWorldDimensions = worldDims;
+      depthEntry.surfaceOffsetMeters = offsetMeters;
+      depthEntry.surfaceCornerDisplacements = cornerDisplacements;
     } else {
       if (!projectionContext.pixelMatrixInverse ||
           !projectionContext.mercatorMatrix) {
@@ -1192,7 +1339,8 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
       }
     }
 
-    depthItems.push_back(DepthItem{&bucketItem, depthKey});
+    depthEntry.depthKey = depthKey;
+    depthItems.push_back(depthEntry);
   }
 
   std::sort(depthItems.begin(), depthItems.end(),
@@ -1229,7 +1377,7 @@ static bool prepareDrawSpriteImageInternal(
     bool clipContextAvailable,
     bool useShaderBillboardGeometry,
     bool useShaderSurfaceGeometry,
-    const ResolveOriginFn& resolveOrigin,
+    const std::vector<BucketItem>& bucketItems,
     double* itemBase,
     bool& outHasHitTest,
     bool& outHasSurfaceInputs) {
@@ -1252,44 +1400,35 @@ static bool prepareDrawSpriteImageInternal(
   const bool isSurface = std::lround(entry.mode) == 0;
   const bool enableSurfaceBias = frame.enableNdcBiasSurface;
 
-  const double metersPerPixelAtLat =
-      calculateMetersPerPixelAtLatitude(frame.zoom,
-                                        bucketItem.spriteLocation.lat);
-  if (!std::isfinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0.0) {
+  if (!bucketItem.hasEffectivePixelsPerMeter ||
+      !std::isfinite(bucketItem.effectivePixelsPerMeter) ||
+      bucketItem.effectivePixelsPerMeter <= 0.0) {
     return false;
   }
-
-  const double perspectiveRatio = calculatePerspectiveRatio(
-      projectionContext,
-      bucketItem.spriteLocation,
-      bucketItem.hasMercator ? &bucketItem.mercator : nullptr);
-  const double effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
-      metersPerPixelAtLat, perspectiveRatio);
-  if (effectivePixelsPerMeter <= 0.0) {
-    return false;
-  }
+  const double effectivePixelsPerMeter = bucketItem.effectivePixelsPerMeter;
 
   SpriteScreenPoint baseProjected = bucketItem.projected;
   if (hasOriginLocation(entry)) {
-    const BucketItem* reference = resolveOrigin(bucketItem);
-    if (reference && reference->resource) {
-      const bool useAnchor = toBool(entry.originUseResolvedAnchor);
-      baseProjected = computeImageCenter(*reference,
-                                         useAnchor,
-                                         projectionContext,
-                                         frame,
-                                         centerCache,
-                                         *reference->resource,
-                                         effectivePixelsPerMeter,
-                                         resolveOrigin,
-                                         clipContextAvailable);
+      const BucketItem* reference =
+          resolveOriginBucketItem(bucketItem, bucketItems);
+      if (reference && reference->resource) {
+        const bool useAnchor = toBool(entry.originUseResolvedAnchor);
+        baseProjected = computeImageCenter(*reference,
+                                           useAnchor,
+                                           projectionContext,
+                                           frame,
+                                           centerCache,
+                                           *reference->resource,
+                                           effectivePixelsPerMeter,
+                                           bucketItems,
+                                           clipContextAvailable);
+      }
     }
-  }
 
   const SpriteAnchor anchor = resolveAnchor(entry);
   const SpriteImageOffset offset = resolveOffset(entry);
   const double imageScale = resolveImageScale(entry);
-  const double totalRotateDeg = resolveTotalRotateDeg(entry);
+  const double totalRotateDeg = bucketItem.rotation.degrees;
 
   const double screenScaleX =
       isSurface ? frame.identityScaleX : frame.screenToClipScaleX;
@@ -1338,12 +1477,6 @@ static bool prepareDrawSpriteImageInternal(
       }
     }
 
-    ProjectToClipSpaceFn projectToClipFn =
-        [&projectionContext](const SpriteLocation& location,
-                             std::array<double, 4>& out) -> bool {
-          return projectLngLatToClip(projectionContext, location, out);
-        };
-
     SurfaceCenterParams params{};
     params.baseLngLat = baseLngLat;
     params.imageWidth = resource.width;
@@ -1352,12 +1485,16 @@ static bool prepareDrawSpriteImageInternal(
     params.imageScale = imageScale;
     params.zoomScaleFactor = frame.zoomScaleFactor;
     params.totalRotateDeg = totalRotateDeg;
+    params.sinNegativeRotation = bucketItem.rotation.sinNegativeRad;
+    params.cosNegativeRotation = bucketItem.rotation.cosNegativeRad;
     params.anchor = &anchor;
     params.offset = &offset;
     params.effectivePixelsPerMeter = effectivePixelsPerMeter;
     params.spriteMinPixel = frame.spriteMinPixel;
     params.spriteMaxPixel = frame.spriteMaxPixel;
-    params.projectToClipSpace = projectToClipFn;
+    params.projection = &projectionContext;
+    params.enableClipProjection = true;
+    params.enableScreenProjection = false;
     params.drawingBufferWidth = frame.drawingBufferWidth;
     params.drawingBufferHeight = frame.drawingBufferHeight;
     params.pixelRatio = frame.pixelRatio;
@@ -1369,17 +1506,13 @@ static bool prepareDrawSpriteImageInternal(
       return false;
     }
 
-    const SurfaceCorner offsetMeters = calculateSurfaceOffsetMeters(
-        &offset,
-        imageScale,
-        frame.zoomScaleFactor,
-        surfaceCenter.worldDimensions.scaleAdjustment);
-    const std::vector<SurfaceCorner> cornerDisplacements =
-        calculateSurfaceCornerDisplacements(surfaceCenter.worldDimensions.width,
-                                            surfaceCenter.worldDimensions.height,
-                                            &anchor,
-                                            totalRotateDeg,
-                                            offsetMeters);
+    if (!depth.hasSurfaceData) {
+      return false;
+    }
+    const SurfaceWorldDimensions& cachedWorldDims =
+        depth.surfaceWorldDimensions;
+    const SurfaceCorner offsetMeters = depth.surfaceOffsetMeters;
+    const auto& cornerDisplacements = depth.surfaceCornerDisplacements;
 
     const double orderIndex =
         std::fmin(entry.order, frame.orderMax - 1.0);
@@ -1392,14 +1525,14 @@ static bool prepareDrawSpriteImageInternal(
     SurfaceShaderInputsData surfaceInputs = prepareSurfaceShaderInputs(
         projectionContext,
         baseLngLat,
-        surfaceCenter.worldDimensions.width,
-        surfaceCenter.worldDimensions.height,
+        cachedWorldDims.width,
+        cachedWorldDims.height,
         &anchor,
-        totalRotateDeg,
+        bucketItem.rotation,
         offsetMeters,
         displacedCenter,
         depthBiasNdc,
-        surfaceCenter.worldDimensions.scaleAdjustment,
+        cachedWorldDims.scaleAdjustment,
         surfaceCenter.totalDisplacement);
 
     const bool useShaderSurface = useShaderSurfaceGeometry && clipContextAvailable;
@@ -1490,9 +1623,9 @@ static bool prepareDrawSpriteImageInternal(
       surfaceInputs.clipCenter = clipCenterPosition;
       surfaceInputs.clipBasisEast = clipBasisEast;
       surfaceInputs.clipBasisNorth = clipBasisNorth;
-      surfaceInputs.clipCorners.clear();
+      surfaceInputs.clipCornerCount = clipCornerPositions.size();
       for (std::size_t i = 0; i < clipCornerPositions.size(); ++i) {
-        surfaceInputs.clipCorners.push_back(clipCornerPositions[i]);
+        surfaceInputs.clipCorners[i] = clipCornerPositions[i];
       }
       clipUniformEnabled = true;
     }
@@ -1530,11 +1663,12 @@ static bool prepareDrawSpriteImageInternal(
       writeVec4(surfaceInputs.clipCenter);
       writeVec4(surfaceInputs.clipBasisEast);
       writeVec4(surfaceInputs.clipBasisNorth);
-      for (std::size_t i = 0; i < 4; ++i) {
-        std::array<double, 4> corner =
-            i < surfaceInputs.clipCorners.size()
+      const std::array<double, 4> defaultCorner{0.0, 0.0, 0.0, 1.0};
+      for (std::size_t i = 0; i < SURFACE_CLIP_CORNER_COUNT; ++i) {
+        const std::array<double, 4>& corner =
+            (i < surfaceInputs.clipCornerCount)
                 ? surfaceInputs.clipCorners[i]
-                : std::array<double, 4>{0.0, 0.0, 0.0, 1.0};
+                : defaultCorner;
         writeVec4(corner);
       }
       surfaceBlock[surfaceCursor++] = surfaceInputs.baseLngLat.lng;
@@ -1566,7 +1700,7 @@ static bool prepareDrawSpriteImageInternal(
         effectivePixelsPerMeter,
         frame.spriteMinPixel,
         frame.spriteMaxPixel,
-        totalRotateDeg,
+        bucketItem.rotation,
         &anchor,
         &offset);
 
@@ -1575,7 +1709,7 @@ static bool prepareDrawSpriteImageInternal(
                                                 placement.halfWidth,
                                                 placement.halfHeight,
                                                 &anchor,
-                                                totalRotateDeg);
+                                                bucketItem.rotation);
 
     const bool useShaderBillboard = useShaderBillboardGeometry;
     useShaderBillboardValue = useShaderBillboard ? 1.0 : 0.0;
@@ -1585,8 +1719,8 @@ static bool prepareDrawSpriteImageInternal(
     billboardHalfHeight = placement.halfHeight;
     billboardAnchorX = anchor.x;
     billboardAnchorY = anchor.y;
-    billboardSin = std::sin(-totalRotateDeg * DEG2RAD);
-    billboardCos = std::cos(-totalRotateDeg * DEG2RAD);
+    billboardSin = bucketItem.rotation.sinNegativeRad;
+    billboardCos = bucketItem.rotation.cosNegativeRad;
 
     std::size_t vertexCursor = 0;
     for (int idx : TRIANGLE_INDICES) {
@@ -1687,62 +1821,69 @@ static inline SurfaceWorldDimensions calculateSurfaceWorldDimensions(
   return {width, height, scaleAdjustment};
 }
 
-static inline std::vector<SurfaceCorner> calculateSurfaceCornerDisplacements(
+/**
+ * @brief Generates the rotated displacement for each surface corner.
+ */
+static inline std::array<SurfaceCorner, SURFACE_CLIP_CORNER_COUNT>
+    calculateSurfaceCornerDisplacements(
     double worldWidthMeters,
     double worldHeightMeters,
     const SpriteAnchor* anchor,
-    double totalRotateDeg,
+    double sinNegativeRotation,
+    double cosNegativeRotation,
     const SurfaceCorner& offsetMeters) {
+  std::array<SurfaceCorner, SURFACE_CLIP_CORNER_COUNT> corners{};
   if (worldWidthMeters <= 0.0 || worldHeightMeters <= 0.0) {
-    return std::vector<SurfaceCorner>(
-        SURFACE_BASE_CORNERS.size(), offsetMeters);
+    corners.fill(offsetMeters);
+    return corners;
   }
 
   const double halfWidth = worldWidthMeters / 2.0;
   const double halfHeight = worldHeightMeters / 2.0;
   const double anchorEast = (anchor ? anchor->x : 0.0) * halfWidth;
   const double anchorNorth = (anchor ? anchor->y : 0.0) * halfHeight;
-  const double rad = -totalRotateDeg * DEG2RAD;
-  const double cosR = std::cos(rad);
-  const double sinR = std::sin(rad);
+  const double cosR = cosNegativeRotation;
+  const double sinR = sinNegativeRotation;
 
-  std::vector<SurfaceCorner> corners;
-  corners.reserve(SURFACE_BASE_CORNERS.size());
-  for (const auto& baseCorner : SURFACE_BASE_CORNERS) {
+  for (std::size_t idx = 0; idx < SURFACE_BASE_CORNERS.size(); ++idx) {
+    const auto& baseCorner = SURFACE_BASE_CORNERS[idx];
     const double cornerEast = baseCorner[0] * halfWidth;
     const double cornerNorth = baseCorner[1] * halfHeight;
     const double localEast = cornerEast - anchorEast;
     const double localNorth = cornerNorth - anchorNorth;
     const double rotatedEast = localEast * cosR - localNorth * sinR;
     const double rotatedNorth = localEast * sinR + localNorth * cosR;
-    corners.push_back({rotatedEast + offsetMeters.east,
-                       rotatedNorth + offsetMeters.north});
+    corners[idx] = {rotatedEast + offsetMeters.east,
+                    rotatedNorth + offsetMeters.north};
   }
   return corners;
 }
 
-static inline std::vector<SurfaceShaderCornerModel>
+/**
+ * @brief Builds shader-friendly geodetic data for each rotated surface corner.
+ */
+static inline std::array<SurfaceShaderCornerModel, SURFACE_CLIP_CORNER_COUNT>
 computeSurfaceCornerShaderModel(const SpriteLocation& baseLngLat,
                                 double worldWidthMeters,
                                 double worldHeightMeters,
                                 const SpriteAnchor* anchor,
-                                double totalRotateDeg,
+                                double sinNegativeRotation,
+                                double cosNegativeRotation,
                                 const SurfaceCorner& offsetMeters) {
   const double halfWidth = worldWidthMeters / 2.0;
   const double halfHeight = worldHeightMeters / 2.0;
-  const double rad = -totalRotateDeg * DEG2RAD;
-  const double sinR = std::sin(rad);
-  const double cosR = std::cos(rad);
+  const double sinR = sinNegativeRotation;
+  const double cosR = cosNegativeRotation;
   const double cosLat = std::cos(baseLngLat.lat * DEG2RAD);
   const double cosLatClamped = std::max(cosLat, MIN_COS_LAT);
 
-  std::vector<SurfaceShaderCornerModel> corners;
-  corners.reserve(SURFACE_BASE_CORNERS.size());
+  std::array<SurfaceShaderCornerModel, SURFACE_CLIP_CORNER_COUNT> corners{};
 
   const double anchorEast = (anchor ? anchor->x : 0.0) * halfWidth;
   const double anchorNorth = (anchor ? anchor->y : 0.0) * halfHeight;
 
-  for (const auto& baseCorner : SURFACE_BASE_CORNERS) {
+  for (std::size_t idx = 0; idx < SURFACE_BASE_CORNERS.size(); ++idx) {
+    const auto& baseCorner = SURFACE_BASE_CORNERS[idx];
     const double cornerEast = baseCorner[0] * halfWidth;
     const double cornerNorth = baseCorner[1] * halfHeight;
 
@@ -1759,10 +1900,10 @@ computeSurfaceCornerShaderModel(const SpriteLocation& baseLngLat,
     const double deltaLng =
         (east / (EARTH_RADIUS_METERS * cosLatClamped)) * RAD2DEG;
 
-    corners.push_back({east,
-                       north,
-                       baseLngLat.lng + deltaLng,
-                       baseLngLat.lat + deltaLat});
+    corners[idx] = {east,
+                    north,
+                    baseLngLat.lng + deltaLng,
+                    baseLngLat.lat + deltaLat};
   }
 
   return corners;
@@ -1770,16 +1911,18 @@ computeSurfaceCornerShaderModel(const SpriteLocation& baseLngLat,
 
 static inline SurfaceCenterResult calculateSurfaceCenterPosition(
     const SurfaceCenterParams& params) {
-  const bool hasClipProjection =
+  const bool clipProjectionAvailable =
+      params.enableClipProjection && params.projection &&
       params.drawingBufferWidth > 0.0 && params.drawingBufferHeight > 0.0 &&
-      params.pixelRatio != 0.0 && std::isfinite(params.pixelRatio) &&
-      static_cast<bool>(params.projectToClipSpace);
+      params.pixelRatio != 0.0 && std::isfinite(params.pixelRatio);
+  const bool screenProjectionAvailable =
+      params.enableScreenProjection && params.projection;
 
   auto projectPoint = [&](const SpriteLocation& lngLat,
                           SpriteScreenPoint& out) -> bool {
-    if (hasClipProjection && params.projectToClipSpace) {
+    if (clipProjectionAvailable) {
       std::array<double, 4> clip{};
-      if (params.projectToClipSpace(lngLat, clip) &&
+      if (projectLngLatToClip(*params.projection, lngLat, clip) &&
           clipToScreen(clip,
                        params.drawingBufferWidth,
                        params.drawingBufferHeight,
@@ -1788,8 +1931,8 @@ static inline SurfaceCenterResult calculateSurfaceCenterPosition(
         return true;
       }
     }
-    if (params.project) {
-      return params.project(lngLat, out);
+    if (screenProjectionAvailable) {
+      return projectSpritePoint(*params.projection, lngLat, out);
     }
     return false;
   };
@@ -1808,7 +1951,11 @@ static inline SurfaceCenterResult calculateSurfaceCenterPosition(
   const double halfHeightMeters = worldDims.height * 0.5;
 
   const SurfaceCorner anchorShiftMeters = calculateSurfaceAnchorShiftMeters(
-      halfWidthMeters, halfHeightMeters, params.anchor, params.totalRotateDeg);
+      halfWidthMeters,
+      halfHeightMeters,
+      params.anchor,
+      params.sinNegativeRotation,
+      params.cosNegativeRotation);
   const SurfaceCorner offsetMeters = calculateSurfaceOffsetMeters(
       params.offset,
       params.imageScale,
@@ -1862,7 +2009,7 @@ static inline BillboardCenterResult calculateBillboardCenterPosition(
     double effectivePixelsPerMeter,
     double spriteMinPixel,
     double spriteMaxPixel,
-    double totalRotateDeg,
+    const RotationCache& rotation,
     const SpriteAnchor* anchor,
     const SpriteImageOffset* offset) {
   const auto pixelDims = calculateBillboardPixelDimensions(
@@ -1879,7 +2026,7 @@ static inline BillboardCenterResult calculateBillboardCenterPosition(
 
   const SpritePoint anchorShift =
       calculateBillboardAnchorShiftPixels(halfWidth, halfHeight, anchor,
-                                          totalRotateDeg);
+                                          rotation);
   const SpritePoint offsetShift = calculateBillboardOffsetPixels(
       offset,
       imageScale,
@@ -1904,7 +2051,7 @@ static inline std::array<QuadCorner, 4> calculateBillboardCornerScreenPositions(
     double halfWidth,
     double halfHeight,
     const SpriteAnchor* anchor,
-    double totalRotateDeg) {
+    const RotationCache& rotation) {
   std::array<QuadCorner, 4> corners{};
   if (halfWidth <= 0.0 || halfHeight <= 0.0) {
     for (std::size_t i = 0; i < corners.size(); ++i) {
@@ -1915,9 +2062,8 @@ static inline std::array<QuadCorner, 4> calculateBillboardCornerScreenPositions(
 
   const double anchorOffsetX = (anchor ? anchor->x : 0.0) * halfWidth;
   const double anchorOffsetY = (anchor ? anchor->y : 0.0) * halfHeight;
-  const double rad = -totalRotateDeg * DEG2RAD;
-  const double cosR = std::cos(rad);
-  const double sinR = std::sin(rad);
+  const double cosR = rotation.cosNegativeRad;
+  const double sinR = rotation.sinNegativeRad;
 
   for (std::size_t i = 0; i < BILLBOARD_BASE_CORNERS.size(); ++i) {
     const double cornerX = BILLBOARD_BASE_CORNERS[i][0] * halfWidth;
@@ -2303,40 +2449,17 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
     if (!convertToInt64(bucket.entry->spriteHandle, bucket.spriteHandle)) {
       bucket.spriteHandle = 0;
     }
+    const double resolvedRotate = resolveTotalRotateDeg(*bucket.entry);
+    bucket.rotation = buildRotationCache(resolvedRotate);
     bucketItems[i] = bucket;
   }
-
-  ResolveOriginFn resolveOrigin =
-      [&bucketItems](const BucketItem& current) -> const BucketItem* {
-    int64_t originIndex = 0;
-    if (!convertToInt64(current.entry->originTargetIndex, originIndex)) {
-      return nullptr;
-    }
-    if (originIndex == SPRITE_ORIGIN_REFERENCE_INDEX_NONE) {
-      return nullptr;
-    }
-    if (originIndex < 0 ||
-        static_cast<std::size_t>(originIndex) >= bucketItems.size()) {
-      return nullptr;
-    }
-    const BucketItem& candidate =
-        bucketItems[static_cast<std::size_t>(originIndex)];
-    if (candidate.entry == nullptr) {
-      return nullptr;
-    }
-    if (candidate.spriteHandle != current.spriteHandle) {
-      return nullptr;
-    }
-    return &candidate;
-  };
 
   DepthCollectionResult depthResult = collectDepthSortedItemsInternal(
       bucketItems,
       projectionContext,
       frame,
       clipContextAvailable,
-      enableSurfaceBias,
-      resolveOrigin);
+      enableSurfaceBias);
 
   double* writePtr = resultPtr + RESULT_HEADER_LENGTH;
   std::size_t preparedCount = 0;
@@ -2357,7 +2480,7 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
                                        clipContextAvailable,
                                        useShaderBillboardGeometry,
                                        useShaderSurfaceGeometry,
-                                       resolveOrigin,
+                                       bucketItems,
                                        itemBase,
                                        itemHasHitTest,
                                        itemHasSurfaceInputs)) {
