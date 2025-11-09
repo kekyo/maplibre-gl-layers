@@ -600,11 +600,6 @@ export interface SpriteLayerOptions {
   /** Optional texture filtering configuration. */
   textureFiltering?: SpriteTextureFilteringOptions;
   /**
-   * Preferred calculation variant. Defaults to `simd`. When the requested variant is unavailable,
-   * the loader automatically falls back to `nosimd`, then to the JavaScript implementation.
-   */
-  calculationVariant?: SpriteLayerCalculationVariant;
-  /**
    * When true, renders red outlines around sprite hit-test regions to aid debugging.
    * Defaults to false.
    */
@@ -726,9 +721,12 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   /**
    * Initializes used by the layer.
    * Safe to call multiple times; subsequent invocations resolve immediately.
+   * @param calculationVariant - Preferred calculation variant. Defaults to `simd`. When the requested variant is unavailable, the loader automatically falls back to `nosimd`, then to the JavaScript implementation.
    * @returns Applied calculation variant.
    */
-  readonly initialize: () => Promise<SpriteLayerCalculationVariant>;
+  readonly initialize: (
+    calculationVariant?: SpriteLayerCalculationVariant
+  ) => Promise<SpriteLayerCalculationVariant>;
   /**
    * Registers an image or glyph so it can be referenced by sprite images.
    *
@@ -829,23 +827,6 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    * @param {boolean} enabled - When false, hit testing is skipped and the internal data structure is cleared.
    */
   readonly setHitTestEnabled: (enabled: boolean) => void;
-  /**
-   * Updates the sprite scaling options applied by the layer.
-   * @param options New scaling configuration.
-   */
-  readonly setSpriteScalingOptions: (options: SpriteScalingOptions) => void;
-  /**
-   * Returns the currently resolved WASM variant in use.
-   */
-  readonly getWasmVariant: () => SpriteLayerCalculationVariant;
-  /**
-   * Reinitializes the WASM host with the requested variant. Resolves with the actual variant in use
-   * after applying fallbacks (nosimd, then disabled).
-   */
-  readonly setWasmVariant: (
-    variant: SpriteLayerCalculationVariant
-  ) => Promise<SpriteLayerCalculationVariant>;
-
   ////////////////////////////////////////////////////////////////////////////////
 
   /**

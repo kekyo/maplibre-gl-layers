@@ -276,9 +276,9 @@ export interface PrepareDrawSpriteImageParamsBase {
 export interface PrepareDrawSpriteImageParamsBefore<TTag>
   extends PrepareDrawSpriteImageParamsBase {
   readonly bucket: readonly Readonly<RenderTargetEntryLike<TTag>>[];
-  readonly bucketBuffers?: Readonly<RenderTargetBucketBuffers>;
+  readonly bucketBuffers: Readonly<RenderTargetBucketBuffers>;
   readonly resolvedScaling: ResolvedSpriteScalingOptions;
-  readonly zoomScaleFactor?: number;
+  readonly zoomScaleFactor: number;
 }
 
 export interface PrepareDrawSpriteImageParamsAfter

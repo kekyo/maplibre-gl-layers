@@ -18,7 +18,6 @@ import type { CustomRenderMethodInput } from 'maplibre-gl';
 import {
   type SpriteInit,
   type SpriteInitCollection,
-  type SpriteScalingOptions,
   type SpriteLayerInterface,
   type SpriteLayerOptions,
   type SpriteTextureFilteringOptions,
@@ -1105,12 +1104,16 @@ export const createSpriteLayer = <T = any>(
     options?.textureFiltering
   );
   const showDebugBounds = options?.showDebugBounds === true;
-  let requestedWasmVariant: WasmVariant = options?.calculationVariant ?? 'simd';
 
   let wasmInitializationSucceeded = false;
   let wasmInitializationVariant: WasmVariant = 'disabled';
-  const initialize = async (): Promise<SpriteLayerCalculationVariant> => {
-    wasmInitializationVariant = await initializeWasmHost(requestedWasmVariant);
+  const initialize = async (
+    calculationVariant?: SpriteLayerCalculationVariant
+  ): Promise<SpriteLayerCalculationVariant> => {
+    const forceReload = calculationVariant !== undefined;
+    wasmInitializationVariant = await initializeWasmHost(calculationVariant, {
+      force: forceReload,
+    });
     wasmInitializationSucceeded = wasmInitializationVariant !== 'disabled';
     return wasmInitializationVariant;
   };
@@ -3155,6 +3158,9 @@ export const createSpriteLayer = <T = any>(
         return;
       }
 
+      const zoom = projectionHost.getZoom();
+      const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
+
       // Enable blending and avoid depth-buffer interference.
       glContext.enable(glContext.BLEND);
       glContext.blendFunc(glContext.SRC_ALPHA, glContext.ONE_MINUS_SRC_ALPHA);
@@ -3401,6 +3407,7 @@ export const createSpriteLayer = <T = any>(
             drawingBufferWidth,
             drawingBufferHeight,
             pixelRatio,
+            zoomScaleFactor,
             identityScaleX,
             identityScaleY,
             identityOffsetX,
@@ -3411,21 +3418,35 @@ export const createSpriteLayer = <T = any>(
             screenToClipOffsetY,
           });
 
-          const preparedByImage = new Map<
-            InternalSpriteImageState,
-            PreparedDrawSpriteImageParams<T>
+          const preparedBySubLayer = new Map<
+            number,
+            PreparedDrawSpriteImageParams<T>[]
           >();
           for (const prepared of preparedItems) {
-            preparedByImage.set(prepared.imageEntry, prepared);
+            const subLayer = prepared.imageEntry.subLayer;
+            let list = preparedBySubLayer.get(subLayer);
+            if (!list) {
+              list = [];
+              preparedBySubLayer.set(subLayer, list);
+            }
+            list.push(prepared);
           }
 
-          for (const [, bucket] of sortedSubLayerBuckets) {
-            // Process buckets in ascending sub-layer order so draw order respects configuration.
+          for (const [subLayer, bucket] of sortedSubLayerBuckets) {
+            const preparedBucket = preparedBySubLayer.get(subLayer);
+            if (!preparedBucket) {
+              continue;
+            }
+            const bucketImages = new Set<InternalSpriteImageState>();
             for (const [, image] of bucket) {
-              const prepared = preparedByImage.get(image);
-              if (prepared) {
-                issueSpriteDraw(prepared);
+              bucketImages.add(image);
+            }
+            for (const prepared of preparedBucket) {
+              if (!bucketImages.has(prepared.imageEntry)) {
+                continue;
               }
+              bucketImages.delete(prepared.imageEntry);
+              issueSpriteDraw(prepared);
             }
           }
         } finally {
@@ -5141,26 +5162,6 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
-  const getWasmVariant = (): WasmVariant => wasmInitializationVariant;
-
-  const setWasmVariant = async (variant: WasmVariant): Promise<WasmVariant> => {
-    requestedWasmVariant = variant;
-    wasmInitializationSucceeded = false;
-    wasmInitializationVariant = 'disabled';
-    const resolved = await initializeWasmHost(variant, {
-      force: true,
-    });
-    wasmInitializationVariant = resolved;
-    wasmInitializationSucceeded = resolved !== 'disabled';
-    return resolved;
-  };
-
-  const setSpriteScalingOptions = (options: SpriteScalingOptions): void => {
-    resolvedScaling = resolveScalingOptions(options);
-    ensureRenderTargetEntries();
-    scheduleRender();
-  };
-
   /**
    * MapLibre CustomLayerInterface-compatible object exposing sprite management APIs.
    */
@@ -5191,9 +5192,6 @@ export const createSpriteLayer = <T = any>(
     mutateSprites,
     updateForEach,
     setHitTestEnabled,
-    setSpriteScalingOptions,
-    getWasmVariant,
-    setWasmVariant,
     on: addEventListener,
     off: removeEventListener,
   };

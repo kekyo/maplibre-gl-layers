@@ -1,3 +1,9 @@
+// maplibre-gl-layers - MapLibre's layer extension library enabling
+// the display, movement, and modification of large numbers of dynamic sprite images
+// Copyright (c) Kouji Matsui (@kekyo@mi.kekyo.net)
+// Under MIT
+// https://github.com/kekyo/maplibre-gl-layers
+
 import './style.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -7,7 +13,6 @@ import {
   STANDARD_SPRITE_SCALING_OPTIONS,
   UNLIMITED_SPRITE_SCALING_OPTIONS,
   type SpriteLayerCalculationVariant,
-  type SpriteLayerWasmVariant,
 } from 'maplibre-gl-layers';
 import type {
   SpriteMode,
@@ -20,6 +25,7 @@ import type {
   SpriteInitEntry,
   SpriteTextGlyphOptions,
   SpriteImageRegisterOptions,
+  SpriteLayerInterface,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -37,6 +43,9 @@ const INITIAL_NUMBER_OF_SPRITES = 1000;
  * Interval in milliseconds between movement updates.
  */
 const MOVEMENT_INTERVAL_MS = 500;
+
+/** Identifier assigned to the sprite layer instance registered with MapLibre. */
+const SPRITE_LAYER_ID = 'demo-sprite';
 
 /**
  * Center position used as the demo origin.
@@ -228,9 +237,8 @@ const formatWasmVariantLabel = (
   }
 };
 
-const formatSpriteScalingMode = (
-  mode: 'standard' | 'unlimited'
-): string => (mode === 'standard' ? 'Standard' : 'Unlimited');
+const formatSpriteScalingMode = (mode: 'standard' | 'unlimited'): string =>
+  mode === 'standard' ? 'Standard' : 'Unlimited';
 
 const resolveSpriteScalingOptions = () =>
   spriteScalingMode === 'standard'
@@ -1505,21 +1513,11 @@ const main = async () => {
   updateMapStatus();
 
   /** Sprite layer instance. MapLibre manages the WebGL context, so only the layer ID is needed here. */
-  let spriteLayer = createSpriteLayer<DemoSpriteTag>({
-    id: 'demo-sprite',
-    spriteScaling: resolveSpriteScalingOptions(),
-    textureFiltering: {
-      minFilter: 'linear-mipmap-linear',
-      magFilter: 'linear',
-      generateMipmaps: true,
-      maxAnisotropy: 4,
-    },
-    calculationVariant: requestedCalculationVariant,
-  });
+  let spriteLayer!: SpriteLayerInterface<DemoSpriteTag>;
 
-  await spriteLayer.initialize();
+  // Track the resolved calculation variant applied during initialization.
   let currentCalculationVariant: SpriteLayerCalculationVariant =
-    spriteLayer.getWasmVariant();
+    requestedCalculationVariant;
 
   const clearSpriteDetails = () => {
     renderSpriteDetails({
@@ -1532,6 +1530,9 @@ const main = async () => {
   };
 
   const attachSpriteMouseEvents = () => {
+    if (!spriteLayer) {
+      return;
+    }
     spriteLayer.off('spritehover', renderSpriteDetails);
     spriteLayer.off('spriteclick', handleSpriteClick);
     spriteLayer.on('spritehover', renderSpriteDetails);
@@ -1539,6 +1540,9 @@ const main = async () => {
   };
 
   const detachSpriteMouseEvents = () => {
+    if (!spriteLayer) {
+      return;
+    }
     spriteLayer.off('spritehover', renderSpriteDetails);
     spriteLayer.off('spriteclick', handleSpriteClick);
   };
@@ -1549,7 +1553,9 @@ const main = async () => {
       return;
     }
     isMouseEventsMonitoringEnabled = enabled;
-    spriteLayer.setHitTestEnabled(enabled);
+    if (spriteLayer) {
+      spriteLayer.setHitTestEnabled(enabled);
+    }
     if (enabled) {
       attachSpriteMouseEvents();
     } else {
@@ -1656,29 +1662,31 @@ const main = async () => {
       spriteLimit: INITIAL_NUMBER_OF_SPRITES,
       activeSpriteCount: 0,
     };
-    debugState.spriteLayer = spriteLayer;
     debugState.mapInstance = map;
-    debugState.spriteLimit = INITIAL_NUMBER_OF_SPRITES;
     window.__spriteDemo = debugState;
     // Expose the sprite layer for debugging in the browser console.
     (window as any).__spriteLayerMap = map;
-    (window as any).__spriteLayer = spriteLayer;
   }
 
   // Run the remaining setup once all map resources finish loading.
   map.on('load', async () => {
-    map.addLayer(spriteLayer);
-    spriteLayer.setHitTestEnabled(isMouseEventsMonitoringEnabled);
-    if (isMouseEventsMonitoringEnabled) {
-      attachSpriteMouseEvents();
-    } else {
-      detachSpriteMouseEvents();
-    }
-
     let updateBasemapButtons: (() => void) | undefined;
     let updateWasmModeButtons: (() => void) | undefined;
     let wasmModePending = false;
     let updateScalingModeButtons: (() => void) | undefined;
+    let spriteLayerRebuildPromise: Promise<void> | null = null;
+
+    const createSpriteLayerInstance = () =>
+      createSpriteLayer<DemoSpriteTag>({
+        id: SPRITE_LAYER_ID,
+        spriteScaling: resolveSpriteScalingOptions(),
+        textureFiltering: {
+          minFilter: 'linear-mipmap-linear',
+          magFilter: 'linear',
+          generateMipmaps: true,
+          maxAnisotropy: 4,
+        },
+      });
 
     /**
      * Shows or hides each raster basemap layer to match the current selection.
@@ -1839,7 +1847,6 @@ const main = async () => {
       debugState.spriteLimit = spriteVisibilityLimit;
       debugState.activeSpriteCount = lastVisibleSpriteCount;
       debugState.mapInstance = map;
-      debugState.spriteLayer = spriteLayer;
       window.__spriteDemo = debugState;
       window.dispatchEvent(
         new CustomEvent('sprite-demo-map-loaded', {
@@ -2323,35 +2330,35 @@ const main = async () => {
       updateSecondaryImageButtons?.();
     };
 
-    // Arrow images are generated asynchronously, so wait until every variant is ready.
-    for (const mode of ICON_HEIGHT_MODES) {
-      // Preload arrow bitmaps for each aspect ratio so runtime switches are instant.
-      await Promise.all(
-        ICON_SPECS.map(async (spec) => {
-          const bitmap = await createArrowBitmap(
-            spec.color,
-            ICON_SIZE,
-            ICON_HEIGHT_SCALES[mode]
-          );
-          const imageId = getIconImageId(spec.id, mode);
-          await spriteLayer.registerImage(imageId, bitmap);
-        })
-      );
-    }
+    /**
+     * Pre-registers every primary arrow image variant so sprite creation can reuse cached textures.
+     */
+    const registerPrimaryArrowImages = async (): Promise<void> => {
+      for (const mode of ICON_HEIGHT_MODES) {
+        await Promise.all(
+          ICON_SPECS.map(async (spec) => {
+            const bitmap = await createArrowBitmap(
+              spec.color,
+              ICON_SIZE,
+              ICON_HEIGHT_SCALES[mode]
+            );
+            const imageId = getIconImageId(spec.id, mode);
+            await spriteLayer.registerImage(imageId, bitmap);
+          })
+        );
+      }
+    };
 
-    // Generate the secondary (orbiting satellite) image.
-    const secondaryBitmap = await createSecondaryMarkerBitmap(ICON_SIZE);
-    await spriteLayer.registerImage(SECONDARY_IMAGE_ID, secondaryBitmap);
-
-    isSecondaryImageReady = true;
-    updateSecondaryImageButtons?.();
-    updateSecondaryImageTypeButtons?.();
-    await setSecondaryImageType(currentSecondaryImageType);
-
-    if (currentSecondaryImageOrbitMode !== 'hidden') {
-      // Reapply the stored orbit mode so sprites immediately reflect the persisted state.
-      setSecondaryImageOrbitMode(currentSecondaryImageOrbitMode);
-    }
+    /**
+     * Registers the base secondary marker texture so orbiting sprites share a common resource.
+     */
+    const registerSecondaryBaseImage = async (): Promise<void> => {
+      const secondaryBitmap = await createSecondaryMarkerBitmap(ICON_SIZE);
+      await spriteLayer.registerImage(SECONDARY_IMAGE_ID, secondaryBitmap);
+      isSecondaryImageReady = true;
+      updateSecondaryImageButtons?.();
+      updateSecondaryImageTypeButtons?.();
+    };
 
     // Expand the movement extent based on sprite count.
     /**
@@ -2822,6 +2829,9 @@ const main = async () => {
       );
       if (wasmModeButtons.length > 0) {
         updateWasmModeButtons = () => {
+          const displayedVariant = wasmModePending
+            ? requestedCalculationVariant
+            : currentCalculationVariant;
           wasmModeButtons.forEach((button) => {
             const option = button.dataset.option as
               | SpriteLayerCalculationVariant
@@ -2829,17 +2839,16 @@ const main = async () => {
             if (!option) {
               return;
             }
-            setToggleButtonState(
-              button,
-              currentCalculationVariant === option,
-              'select'
-            );
+            setToggleButtonState(button, displayedVariant === option, 'select');
             button.disabled = wasmModePending;
           });
           if (wasmModeStatusEl) {
-            wasmModeStatusEl.textContent = formatWasmVariantLabel(
-              currentCalculationVariant
-            );
+            if (wasmModePending) {
+              wasmModeStatusEl.textContent = '';
+            } else {
+              wasmModeStatusEl.textContent =
+                formatWasmVariantLabel(displayedVariant);
+            }
           }
         };
         updateWasmModeButtons();
@@ -2851,15 +2860,15 @@ const main = async () => {
             return;
           }
           button.addEventListener('click', async () => {
-            if (wasmModePending) {
+            if (wasmModePending || requestedCalculationVariant === option) {
               return;
             }
             wasmModePending = true;
             requestedCalculationVariant = option;
             updateWasmModeButtons?.();
             try {
-              const resolved = await spriteLayer.setWasmVariant(option);
-              currentCalculationVariant = resolved;
+              await rebuildSpriteLayer();
+              map.triggerRepaint();
             } catch (error) {
               console.error('Failed to switch WASM mode', error);
             } finally {
@@ -2910,13 +2919,17 @@ const main = async () => {
           if (!option) {
             return;
           }
-          button.addEventListener('click', () => {
+          button.addEventListener('click', async () => {
             if (spriteScalingMode === option) {
               return;
             }
             spriteScalingMode = option;
-            spriteLayer.setSpriteScalingOptions(resolveSpriteScalingOptions());
             updateScalingModeButtons?.();
+            try {
+              await rebuildSpriteLayer();
+            } catch (error) {
+              console.error('Failed to switch sprite scaling mode', error);
+            }
           });
         });
       } else if (scalingModeStatusEl) {
@@ -3519,44 +3532,90 @@ const main = async () => {
       return { added, removed };
     };
 
-    const initialSpriteEntries: SpriteInitEntry<DemoSpriteTag>[] = [];
-    for (let i = 0; i < INITIAL_NUMBER_OF_SPRITES; i += 1) {
-      initialSpriteEntries.push(createSpriteInitEntry(i));
-    }
-    if (initialSpriteEntries.length > 0) {
-      spriteLayer.addSprites(initialSpriteEntries);
-    }
+    const rebuildSpriteLayer = async (): Promise<void> => {
+      if (spriteLayerRebuildPromise) {
+        await spriteLayerRebuildPromise;
+        return;
+      }
+      spriteLayerRebuildPromise = (async () => {
+        stopMovementInterval();
+        detachSpriteMouseEvents();
+        if (map.getLayer(SPRITE_LAYER_ID)) {
+          map.removeLayer(SPRITE_LAYER_ID);
+        }
 
-    applyLocationInterpolationToAll();
+        spriteLayer = createSpriteLayerInstance();
+        currentCalculationVariant = await spriteLayer.initialize(
+          requestedCalculationVariant
+        );
+        map.addLayer(spriteLayer);
+        spriteLayer.setHitTestEnabled(isMouseEventsMonitoringEnabled);
+        if (isMouseEventsMonitoringEnabled) {
+          attachSpriteMouseEvents();
+        }
 
-    if (isRotateInterpolationEnabled) {
-      // Apply rotation interpolation immediately so the initial state matches the toggle.
-      applyRotateInterpolationToAll(true);
-    }
-    if (isOrbitDegInterpolationEnabled || isOrbitMetersInterpolationEnabled) {
-      // Ensure orbit interpolation is set when the feature starts enabled.
-      applyOrbitInterpolationToAll();
-    }
-    // Apply the layer visibility flag so initial state matches the toggle.
-    applyLayerVisibility(isActive);
+        if (typeof window !== 'undefined') {
+          const debugState: SpriteDemoDebugState = window.__spriteDemo ?? {
+            mapLoaded: true,
+            spritesReady: false,
+            spriteLimit: INITIAL_NUMBER_OF_SPRITES,
+            activeSpriteCount: 0,
+          };
+          debugState.spriteLayer = spriteLayer;
+          debugState.mapInstance = map;
+          debugState.spriteLimit = spriteVisibilityLimit;
+          debugState.activeSpriteCount = lastVisibleSpriteCount;
+          window.__spriteDemo = debugState;
+          (window as any).__spriteLayerMap = map;
+          (window as any).__spriteLayer = spriteLayer;
+        }
 
-    if (typeof window !== 'undefined' && window.__spriteDemo) {
-      // Broadcast readiness so integration tests or observers can react once sprites are drawn.
-      window.__spriteDemo.spritesReady = true;
-      window.__spriteDemo.activeSpriteCount = lastVisibleSpriteCount;
-      window.__spriteDemo.spriteLimit = spriteVisibilityLimit;
-      window.dispatchEvent(
-        new CustomEvent('sprite-demo-ready', {
-          detail: {
-            activeSpriteCount: lastVisibleSpriteCount,
-            spriteLimit: spriteVisibilityLimit,
-          },
-        })
-      );
-    }
+        isSecondaryImageReady = false;
+        registeredSecondaryTextGlyphs.clear();
+        await registerPrimaryArrowImages();
+        await registerSecondaryBaseImage();
 
-    //////////////////////////////////////////////////////////////////////////////////
-    // Animation loop.
+        allSpriteIds.length = 0;
+        syncSpritePoolWithLimit(spriteVisibilityLimit);
+        await setSecondaryImageType(currentSecondaryImageType);
+        setSecondaryImageOrbitMode(currentSecondaryImageOrbitMode);
+
+        applyIconHeightMode(currentArrowShapeMode);
+        applyAutoRotation(isAutoRotationEnabled);
+        applySpriteMode(currentSpriteMode);
+        applyLocationInterpolationToAll();
+        applyRotateInterpolationToAll(isRotateInterpolationEnabled);
+        applyOrbitInterpolationToAll();
+        applyLayerVisibility(isActive);
+        reconcileSpriteVisibility();
+
+        if (isActive && movementSpeedScale > 0) {
+          startMovementInterval();
+        }
+
+        if (typeof window !== 'undefined' && window.__spriteDemo) {
+          window.__spriteDemo.spritesReady = true;
+          window.dispatchEvent(
+            new CustomEvent('sprite-demo-ready', {
+              detail: {
+                activeSpriteCount: lastVisibleSpriteCount,
+                spriteLimit: spriteVisibilityLimit,
+              },
+            })
+          );
+        }
+
+        updateWasmModeButtons?.();
+        updateScalingModeButtons?.();
+      })();
+      try {
+        await spriteLayerRebuildPromise;
+      } finally {
+        spriteLayerRebuildPromise = null;
+      }
+    };
+
+    await rebuildSpriteLayer();
 
     /**
      * Step handler that updates sprite positions at fixed intervals.
