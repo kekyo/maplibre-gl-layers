@@ -213,7 +213,9 @@ const formatMovementSpeedScale = (scale: number): string => {
   return `${scale.toFixed(2)}×`;
 };
 
-const formatWasmVariantLabel = (variant: SpriteLayerCalculationVariant): string => {
+const formatWasmVariantLabel = (
+  variant: SpriteLayerCalculationVariant
+): string => {
   switch (variant) {
     case 'simd':
       return 'SIMD';
@@ -454,7 +456,7 @@ let currentSpriteMode: SpriteMode = 'surface';
 let isAutoRotationEnabled = true;
 /** Enables movement interpolation; when false, updates happen per step only. */
 let isMovementInterpolationEnabled = true;
-let requestedWasmVariant: SpriteLayerCalculationVariant = 'simd';
+let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
@@ -522,6 +524,55 @@ const createHud = () => {
         Each sprite stays clamped to the ground and randomly chooses between screen-aligned and map-aligned orientations. Increase the count to as many as ${MAX_NUMBER_OF_SPRITES} sprites when needed.
       </p>
       <p>Pan, tilt, or zoom the map to inspect how the sprites respond.</p>
+      <div class="control-group" data-testid="group-wasm-mode">
+        <div class="status-row">
+          <span class="status-label">Active</span>
+          <span
+            class="status-value"
+            data-status="wasm-mode-status"
+            data-testid="status-wasm-mode"
+          >${formatWasmVariantLabel(requestedCalculationVariant)}</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-button${
+            requestedCalculationVariant === 'simd' ? ' active' : ''
+          }"
+          data-control="wasm-mode"
+          data-option="simd"
+          data-label="Wasm SIMD"
+          aria-pressed="${requestedCalculationVariant === 'simd'}"
+          data-testid="toggle-wasm-simd"
+        >
+          Wasm SIMD
+        </button>
+        <button
+          type="button"
+          class="toggle-button${
+            requestedCalculationVariant === 'nosimd' ? ' active' : ''
+          }"
+          data-control="wasm-mode"
+          data-option="nosimd"
+          data-label="Wasm No SIMD"
+          aria-pressed="${requestedCalculationVariant === 'nosimd'}"
+          data-testid="toggle-wasm-nosimd"
+        >
+          Wasm No SIMD
+        </button>
+        <button
+          type="button"
+          class="toggle-button${
+            requestedCalculationVariant === 'disabled' ? ' active' : ''
+          }"
+          data-control="wasm-mode"
+          data-option="disabled"
+          data-label="Disabled"
+          aria-pressed="${requestedCalculationVariant === 'disabled'}"
+          data-testid="toggle-wasm-disabled"
+        >
+          Disabled
+        </button>
+      </div>
       <section id="map-status" data-testid="section-map-status">
         <h2>Map Status</h2>
         <div class="status-row" data-testid="status-row-zoom">
@@ -680,56 +731,6 @@ const createHud = () => {
           data-testid="toggle-sprite-layer"
         >
           Sprite Layer
-        </button>
-      </div>
-      <div class="control-group" data-testid="group-wasm-mode">
-        <h1>WASM Mode</h1>
-        <div class="status-row">
-          <span class="status-label">Active</span>
-          <span
-            class="status-value"
-            data-status="wasm-mode-status"
-            data-testid="status-wasm-mode"
-          >${formatWasmVariantLabel(requestedWasmVariant)}</span>
-        </div>
-        <button
-          type="button"
-          class="toggle-button${
-            requestedWasmVariant === 'simd' ? ' active' : ''
-          }"
-          data-control="wasm-mode"
-          data-option="simd"
-          data-label="SIMD"
-          aria-pressed="${requestedWasmVariant === 'simd'}"
-          data-testid="toggle-wasm-simd"
-        >
-          SIMD
-        </button>
-        <button
-          type="button"
-          class="toggle-button${
-            requestedWasmVariant === 'nosimd' ? ' active' : ''
-          }"
-          data-control="wasm-mode"
-          data-option="nosimd"
-          data-label="No SIMD"
-          aria-pressed="${requestedWasmVariant === 'nosimd'}"
-          data-testid="toggle-wasm-nosimd"
-        >
-          No SIMD
-        </button>
-        <button
-          type="button"
-          class="toggle-button${
-            requestedWasmVariant === 'disabled' ? ' active' : ''
-          }"
-          data-control="wasm-mode"
-          data-option="disabled"
-          data-label="Disabled"
-          aria-pressed="${requestedWasmVariant === 'disabled'}"
-          data-testid="toggle-wasm-disabled"
-        >
-          Disabled
         </button>
       </div>
       <div class="control-group" data-testid="group-movement-loop">
@@ -1466,11 +1467,12 @@ const main = async () => {
       generateMipmaps: true,
       maxAnisotropy: 4,
     },
-    calculationVariant: requestedWasmVariant,
+    calculationVariant: requestedCalculationVariant,
   });
 
   await spriteLayer.initialize();
-  let currentWasmVariant: SpriteLayerCalculationVariant = spriteLayer.getWasmVariant();
+  let currentCalculationVariant: SpriteLayerCalculationVariant =
+    spriteLayer.getWasmVariant();
 
   const clearSpriteDetails = () => {
     renderSpriteDetails({
@@ -2781,14 +2783,15 @@ const main = async () => {
             }
             setToggleButtonState(
               button,
-              currentWasmVariant === option,
+              currentCalculationVariant === option,
               'select'
             );
             button.disabled = wasmModePending;
           });
           if (wasmModeStatusEl) {
-            wasmModeStatusEl.textContent =
-              formatWasmVariantLabel(currentWasmVariant);
+            wasmModeStatusEl.textContent = formatWasmVariantLabel(
+              currentCalculationVariant
+            );
           }
         };
         updateWasmModeButtons();
@@ -2804,11 +2807,11 @@ const main = async () => {
               return;
             }
             wasmModePending = true;
-            requestedWasmVariant = option;
+            requestedCalculationVariant = option;
             updateWasmModeButtons?.();
             try {
               const resolved = await spriteLayer.setWasmVariant(option);
-              currentWasmVariant = resolved;
+              currentCalculationVariant = resolved;
             } catch (error) {
               console.error('Failed to switch WASM mode', error);
             } finally {
@@ -2818,8 +2821,9 @@ const main = async () => {
           });
         });
       } else if (wasmModeStatusEl) {
-        wasmModeStatusEl.textContent =
-          formatWasmVariantLabel(currentWasmVariant);
+        wasmModeStatusEl.textContent = formatWasmVariantLabel(
+          currentCalculationVariant
+        );
       }
 
       const basemapButtons = Array.from(
