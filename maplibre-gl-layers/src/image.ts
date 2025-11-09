@@ -6,6 +6,8 @@
 
 import type { SpriteImageRegisterOptions } from './types';
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 interface ParsedSvgSize {
   readonly width?: number;
   readonly height?: number;
@@ -367,6 +369,8 @@ const internalReadImageBitmap = async (
     resizeQuality: options?.resizeQuality,
   });
 };
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Helper that read an ImageBitmap from a blob.

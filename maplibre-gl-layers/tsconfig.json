@@ -3,7 +3,7 @@
     "target": "ES2020",
     "module": "ESNext",
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "skipLibCheck": true,
 
     /* Bundler mode */
@@ -14,7 +14,7 @@
     "noEmit": true,
 
     /* Linting */
-    "erasableSyntaxOnly": true,
+    "erasableSyntaxOnly": false,
     "noUncheckedSideEffectImports": true,
     "useDefineForClassFields": true,
     "declaration": true,

@@ -581,6 +581,11 @@ export interface SpriteTextureFilteringOptions {
 }
 
 /**
+ * Calculation variant. It is internal calculation methods.
+ */
+export type SpriteLayerCalculationVariant = 'simd' | 'nosimd' | 'disabled';
+
+/**
  * Options accepted when creating a SpriteLayer.
  *
  * @property {string | undefined} id - Optional layer identifier supplied to MapLibre.
@@ -714,6 +719,15 @@ export interface SpriteTextGlyphOptions {
  */
 export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   /**
+   * Initializes used by the layer.
+   * Safe to call multiple times; subsequent invocations resolve immediately.
+   * @param calculationVariant - Preferred calculation variant. Defaults to `simd`. When the requested variant is unavailable, the loader automatically falls back to `nosimd`, then to the JavaScript implementation.
+   * @returns Applied calculation variant.
+   */
+  readonly initialize: (
+    calculationVariant?: SpriteLayerCalculationVariant
+  ) => Promise<SpriteLayerCalculationVariant>;
+  /**
    * Registers an image or glyph so it can be referenced by sprite images.
    *
    * @param {string} imageId - Unique image identifier.
@@ -813,7 +827,6 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    * @param {boolean} enabled - When false, hit testing is skipped and the internal data structure is cleared.
    */
   readonly setHitTestEnabled: (enabled: boolean) => void;
-
   ////////////////////////////////////////////////////////////////////////////////
 
   /**

@@ -43,6 +43,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // Add the layer after the map finishes loading
 map.on('load', async () => {
+  // Initialize SpriteLayer
+  await spriteLayer.initialize();
   map.addLayer(spriteLayer);
 
   // Register an image that can be referenced by sprites
@@ -116,8 +118,12 @@ const map = new Map({
 // Create the SpriteLayer instance
 const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
-// Add the layer once the map is ready
+// When MapLibre is ready
 map.on('load', async () => {
+  // Initialize SpriteLayer
+  await spriteLayer.initialize();
+
+  // Add the layer once
   map.addLayer(spriteLayer);
 
   // ...

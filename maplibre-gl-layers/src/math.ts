@@ -12,7 +12,12 @@ import type {
   SpriteScalingOptions,
   SpriteScreenPoint,
 } from './types';
-import type { MatrixInput } from './internalTypes';
+import type {
+  InternalSpriteCurrentState,
+  MatrixInput,
+  ProjectionHost,
+  SpriteMercatorCoordinate,
+} from './internalTypes';
 import {
   DEG2RAD,
   EARTH_RADIUS_METERS,
@@ -1443,7 +1448,6 @@ export interface SurfaceCorner {
 
 /**
  * Corner list for a unit, axis-aligned surface quad before rotation and scaling.
- * @constant
  */
 const SURFACE_BASE_CORNERS: ReadonlyArray<readonly [number, number]> = [
   [-1, 1],
@@ -1451,6 +1455,11 @@ const SURFACE_BASE_CORNERS: ReadonlyArray<readonly [number, number]> = [
   [-1, -1],
   [1, -1],
 ] as const;
+
+/**
+ * Number of surface corners returns from `calculateSurfaceCornerDisplacements`.
+ */
+export const SURFACE_CORNER_DISPLACEMENT_COUNT = SURFACE_BASE_CORNERS.length;
 
 /**
  * Converts normalized surface corners into world-space displacements honoring anchor, rotation, and offsets.
@@ -1500,4 +1509,32 @@ export const calculateSurfaceCornerDisplacements = (
   }
 
   return corners;
+};
+
+/**
+ * Ensures the sprite's cached Mercator coordinate matches its current location.
+ * Recomputes the coordinate lazily when longitude/latitude/altitude change.
+ * @param {ProjectionHost} projectionHost - Projection host.
+ * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
+ * @returns {SpriteMercatorCoordinate} Cached Mercator coordinate representing the current location.
+ */
+export const resolveSpriteMercator = <T>(
+  projectionHost: ProjectionHost,
+  sprite: InternalSpriteCurrentState<T>
+): SpriteMercatorCoordinate => {
+  const location = sprite.currentLocation;
+  if (
+    sprite.cachedMercator &&
+    sprite.cachedMercatorLng === location.lng &&
+    sprite.cachedMercatorLat === location.lat &&
+    sprite.cachedMercatorZ === location.z
+  ) {
+    return sprite.cachedMercator;
+  }
+  const mercator = projectionHost.fromLngLat(location);
+  sprite.cachedMercator = mercator;
+  sprite.cachedMercatorLng = location.lng;
+  sprite.cachedMercatorLat = location.lat;
+  sprite.cachedMercatorZ = location.z;
+  return mercator;
 };

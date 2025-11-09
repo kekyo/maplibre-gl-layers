@@ -12,6 +12,8 @@ import {
   createProjectionHostParamsFromMapLibre,
   type ProjectionHostParams,
 } from '../src/projectionHost';
+import { createWasmProjectionHost } from '../src/wasmProjectionHost';
+import { initializeWasmHost } from '../src/wasmHost';
 import { createMapLibreProjectionHost } from '../src/mapLibreProjectionHost';
 import type { ProjectionHost } from '../src/internalTypes';
 import type { SpriteLocation } from '../src/types';
@@ -79,6 +81,22 @@ const expectLocationClose = (
     expectClose(actual.z ?? 0, expected.z, epsilon);
   }
 };
+
+it('createWasmProjectionHost produces consistent Mercator coordinates', async () => {
+  expect.hasAssertions();
+  const initialized = await initializeWasmHost();
+  expect(initialized).not.toBe('disabled');
+  const referenceHost = createProjectionHost(BASE_PARAMS);
+  const wasmHost = createWasmProjectionHost(BASE_PARAMS);
+
+  for (const location of TEST_LOCATIONS) {
+    const expected = referenceHost.fromLngLat(location);
+    const actual = wasmHost.fromLngLat(location);
+    expectClose(actual.x, expected.x);
+    expectClose(actual.y, expected.y);
+    expectClose(actual.z, expected.z);
+  }
+});
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -224,10 +242,18 @@ const createStubMap = (params: ProjectionHostParams): StubMap => {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
+const wasmInitialized = await initializeWasmHost();
+if (wasmInitialized === 'disabled') {
+  throw new Error('Failed to initialize projection WASM for projection tests.');
+}
+
 const stubMap = createStubMap(BASE_PARAMS);
 const referenceHost = createProjectionHost(BASE_PARAMS);
+const params = createProjectionHostParamsFromMapLibre(
+  stubMap as unknown as MapLibreMap
+);
 
-const hostVariants: readonly {
+const hostVariants: {
   readonly name: string;
   readonly host: ProjectionHost;
 }[] = [
@@ -237,9 +263,11 @@ const hostVariants: readonly {
   },
   {
     name: 'PureProjectionHostFromMap',
-    host: createProjectionHost(
-      createProjectionHostParamsFromMapLibre(stubMap as unknown as MapLibreMap)
-    ),
+    host: createProjectionHost(params),
+  },
+  {
+    name: 'WasmProjectionHost',
+    host: createWasmProjectionHost(params),
   },
 ];
 

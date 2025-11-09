@@ -47,6 +47,7 @@ import {
   type SpriteTextGlyphPaddingPixel,
   type SpriteTextGlyphBorderSide,
   type SpriteImageRegisterOptions,
+  type SpriteLayerCalculationVariant,
 } from './types';
 import type {
   ResolvedTextureFilteringOptions,
@@ -54,19 +55,22 @@ import type {
   ResolvedTextGlyphPadding,
   ResolvedBorderSides,
   ResolvedTextGlyphOptions,
-  MutableSpriteScreenPoint,
   Canvas2DContext,
   Canvas2DSource,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
   SurfaceShaderInputs,
   ProjectionHost,
-  SpriteMercatorCoordinate,
   PreparedDrawSpriteImageParams,
-  ImageCenterCache,
   RenderCalculationHost,
+  SpriteOriginReference,
+  SpriteOriginReferenceKey,
 } from './internalTypes';
-import { loadImageBitmap, SvgSizeResolutionError } from './loadImage';
+import {
+  SPRITE_ORIGIN_REFERENCE_KEY_NONE,
+  SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+} from './internalTypes';
+import { loadImageBitmap, SvgSizeResolutionError } from './image';
 import {
   createInterpolationState,
   evaluateInterpolation,
@@ -88,6 +92,7 @@ import {
   calculateSurfaceCornerDisplacements,
   cloneSpriteLocation,
   spriteLocationsEqual,
+  resolveSpriteMercator,
 } from './math';
 import {
   applyOffsetUpdate,
@@ -122,7 +127,14 @@ import {
   DEBUG_OUTLINE_CORNER_ORDER,
   createShaderProgram,
 } from './shader';
-import { createCalculationHost } from './calculation';
+import { createCalculationHost } from './calculationHost';
+import {
+  createProjectionHost,
+  createProjectionHostParamsFromMapLibre,
+} from './projectionHost';
+import { initializeWasmHost, type WasmVariant } from './wasmHost';
+import { createWasmProjectionHost } from './wasmProjectionHost';
+import { createWasmCalculationHost } from './wasmCalculationHost';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_IMAGE_OFFSET,
@@ -140,9 +152,11 @@ import {
 } from './const';
 import { SL_DEBUG } from './config';
 import {
-  createProjectionHost,
-  createProjectionHostParamsFromMapLibre,
-} from './projectionHost';
+  createImageHandleBufferController,
+  createIdHandler,
+  createSpriteOriginReference,
+  createRenderTargetBucketBuffers,
+} from './utils';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -311,22 +325,6 @@ const resolveGlMagFilter = (
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
-
-const createProjectionHostForMap = (
-  mapInstance: MapLibreMap
-): ProjectionHost => {
-  const params = createProjectionHostParamsFromMapLibre(mapInstance);
-  return createProjectionHost(params);
-  // return createMapLibreProjectionHost(mapInstance);
-};
-
-const createCalculationHostForMap = <TTag>(
-  mapInstance: MapLibreMap
-): RenderCalculationHost<TTag> => {
-  const params = createProjectionHostParamsFromMapLibre(mapInstance);
-  return createCalculationHost<TTag>(params);
-  // return createMapLibreCalculationHost<TTag>(mapInstance);
-};
 
 /**
  * Applies auto-rotation to all images within a sprite when movement exceeds the configured threshold.
@@ -1026,21 +1024,29 @@ export const cloneInterpolationOptions = (
  * @param {SpriteImageDefinitionInit} imageInit - Caller-provided image definition.
  * @param {number} subLayer - Sub-layer index the image belongs to.
  * @param {number} order - Ordering slot within the sub-layer.
+ * @param {SpriteOriginReference} originReference - Encode/Decode origin reference.
  * @returns {InternalSpriteImageState} Normalized internal state ready for rendering.
  */
 export const createImageStateFromInit = (
   imageInit: SpriteImageDefinitionInit,
   subLayer: number,
-  order: number
+  order: number,
+  originReference: SpriteOriginReference
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
   const initialOffset = cloneOffset(imageInit.offset);
   const initialRotateDeg = normalizeAngleDeg(imageInit.rotateDeg ?? 0);
+  const originLocation = cloneOriginLocation(imageInit.originLocation);
+  const originReferenceKey =
+    originLocation !== undefined
+      ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
+      : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
   const state: InternalSpriteImageState = {
     subLayer,
     order,
     imageId: imageInit.imageId,
+    imageHandle: 0,
     mode,
     opacity: imageInit.opacity ?? 1.0,
     scale: imageInit.scale ?? 1.0,
@@ -1053,7 +1059,9 @@ export const createImageStateFromInit = (
       imageInit.autoRotationMinDistanceMeters ??
       DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
     resolvedBaseRotateDeg: 0,
-    originLocation: cloneOriginLocation(imageInit.originLocation),
+    originLocation,
+    originReferenceKey,
+    originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
     rotationInterpolationState: null,
     rotationInterpolationOptions: null,
     offsetDegInterpolationState: null,
@@ -1091,11 +1099,51 @@ export const createSpriteLayer = <T = any>(
 ): SpriteLayerInterface<T> => {
   // Use caller-supplied layer ID when provided, otherwise fall back to a default identifier.
   const id = options?.id ?? 'sprite-layer';
-  const resolvedScaling = resolveScalingOptions(options?.spriteScaling);
+  let resolvedScaling = resolveScalingOptions(options?.spriteScaling);
   const resolvedTextureFiltering = resolveTextureFilteringOptions(
     options?.textureFiltering
   );
   const showDebugBounds = options?.showDebugBounds === true;
+
+  let wasmInitializationSucceeded = false;
+  let wasmInitializationVariant: WasmVariant = 'disabled';
+  const initialize = async (
+    calculationVariant?: SpriteLayerCalculationVariant
+  ): Promise<SpriteLayerCalculationVariant> => {
+    const forceReload = calculationVariant !== undefined;
+    wasmInitializationVariant = await initializeWasmHost(calculationVariant, {
+      force: forceReload,
+    });
+    wasmInitializationSucceeded = wasmInitializationVariant !== 'disabled';
+    return wasmInitializationVariant;
+  };
+
+  const createProjectionHostForMap = (
+    mapInstance: MapLibreMap
+  ): ProjectionHost => {
+    const params = createProjectionHostParamsFromMapLibre(mapInstance);
+    if (wasmInitializationSucceeded) {
+      return createWasmProjectionHost(params);
+    }
+    return createProjectionHost(params);
+    // return createMapLibreProjectionHost(mapInstance);
+  };
+
+  const createCalculationHostForMap = (
+    mapInstance: MapLibreMap
+  ): RenderCalculationHost<T> => {
+    const params = createProjectionHostParamsFromMapLibre(mapInstance);
+    if (wasmInitializationSucceeded) {
+      return createWasmCalculationHost<T>(params, {
+        imageIdHandler,
+        imageHandleBuffersController,
+        originReference,
+        spriteIdHandler,
+      });
+    }
+    return createCalculationHost<T>(params);
+    // return createMapLibreCalculationHost<TTag>(mapInstance);
+  };
 
   /** WebGL context supplied by MapLibre, assigned during onAdd. */
   let gl: WebGLRenderingContext | null = null;
@@ -1165,6 +1213,39 @@ export const createSpriteLayer = <T = any>(
   const images = new Map<string, RegisteredImage>();
 
   /**
+   * Maps image identifiers to their numeric handles.
+   * @remarks It is used for (wasm) interoperability for image identity.
+   */
+  const imageIdHandler = createIdHandler<RegisteredImage>();
+
+  /**
+   * Maps sprite identifiers to numeric handles for wasm interop.
+   */
+  const spriteIdHandler = createIdHandler<InternalSpriteCurrentState<T>>();
+
+  /**
+   * Create image handle buffer controller.
+   * @remarks It is used for (wasm) interoperability for image identity.
+   */
+  const imageHandleBuffersController = createImageHandleBufferController();
+
+  /**
+   * Resolve registered image handle for specified identifier.
+   * @param imageId Image identifier.
+   * @returns Image handle or 0 when not registered.
+   * @remarks It is used for (wasm) interoperability for image identity.
+   */
+  const resolveImageHandle = (imageId: string): number => {
+    const resource = images.get(imageId);
+    return resource ? resource.handle : 0;
+  };
+
+  /**
+   * Encode/Decode for a (subLayer, order) pair into a compact numeric key.
+   */
+  const originReference = createSpriteOriginReference();
+
+  /**
    * Tracks queued image IDs to avoid duplicated uploads.
    */
   const queuedTextureIds = new Set<string>();
@@ -1201,31 +1282,20 @@ export const createSpriteLayer = <T = any>(
   const sprites = new Map<string, InternalSpriteCurrentState<T>>();
 
   /**
-   * Ensures the sprite's cached Mercator coordinate matches its current location.
-   * Recomputes the coordinate lazily when longitude/latitude/altitude change.
-   * @param {ProjectionHost} projectionHost - Projection host.
-   * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
-   * @returns {SpriteMercatorCoordinate} Cached Mercator coordinate representing the current location.
+   * Updates image handle for every sprite image referencing the specified identifier.
+   * @param imageId Image identifier.
+   * @param handle Resolved handle (0 when not registered).
    */
-  const resolveSpriteMercator = (
-    projectionHost: ProjectionHost,
-    sprite: InternalSpriteCurrentState<T>
-  ): SpriteMercatorCoordinate => {
-    const location = sprite.currentLocation;
-    if (
-      sprite.cachedMercator &&
-      sprite.cachedMercatorLng === location.lng &&
-      sprite.cachedMercatorLat === location.lat &&
-      sprite.cachedMercatorZ === location.z
-    ) {
-      return sprite.cachedMercator;
-    }
-    const mercator = projectionHost.fromLngLat(location);
-    sprite.cachedMercator = mercator;
-    sprite.cachedMercatorLng = location.lng;
-    sprite.cachedMercatorLat = location.lat;
-    sprite.cachedMercatorZ = location.z;
-    return mercator;
+  const updateSpriteImageHandles = (imageId: string, handle: number): void => {
+    sprites.forEach((sprite) => {
+      sprite.images.forEach((orderMap) => {
+        orderMap.forEach((imageState) => {
+          if (imageState.imageId === imageId) {
+            imageState.imageHandle = handle;
+          }
+        });
+      });
+    });
   };
 
   /**
@@ -1889,30 +1959,6 @@ export const createSpriteLayer = <T = any>(
   >();
 
   /**
-   * Ensures an image has a reusable hit-test corner buffer.
-   * @param {InternalSpriteImageState} imageEntry - Image requiring a corner buffer.
-   * @returns {[SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint]}
-   */
-  const ensureHitTestCorners = (
-    imageEntry: InternalSpriteImageState
-  ): [
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-  ] => {
-    if (!imageEntry.hitTestCorners) {
-      imageEntry.hitTestCorners = [
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-      ];
-    }
-    return imageEntry.hitTestCorners;
-  };
-
-  /**
    * Adds a hit-test entry to the cache, computing its axis-aligned bounding box.
    * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image.
    * @param {InternalSpriteImageState} imageEntry - Image reference.
@@ -2365,6 +2411,7 @@ export const createSpriteLayer = <T = any>(
         // Delete existing textures to avoid stale GPU data.
         glContext.deleteTexture(image.texture);
         image.texture = undefined;
+        imageHandleBuffersController.markDirty(images);
       }
       const texture = glContext.createTexture();
       if (!texture) {
@@ -2459,6 +2506,7 @@ export const createSpriteLayer = <T = any>(
       }
 
       image.texture = texture;
+      imageHandleBuffersController.markDirty(images);
     });
   };
 
@@ -2468,9 +2516,14 @@ export const createSpriteLayer = <T = any>(
    * Ensure this runs after animations or style updates so the render loop reflects changes.
    * @returns {void}
    */
+  let isRenderScheduled = false;
+
   const scheduleRender = (): void => {
-    // Only attempt to repaint when the MapLibre instance is available.
-    map?.triggerRepaint();
+    if (!map || isRenderScheduled) {
+      return;
+    }
+    isRenderScheduled = true;
+    map.triggerRepaint();
   };
 
   /**
@@ -2499,12 +2552,30 @@ export const createSpriteLayer = <T = any>(
         orderMap.forEach((image) => {
           // Fully transparent images contribute nothing and can be ignored.
           if (image.opacity <= 0) {
+            image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+            image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
           }
+          const imageResource = images.get(image.imageId);
           // Skip images referencing texture IDs that are not registered.
-          if (!images.has(image.imageId)) {
+          if (!imageResource) {
+            image.imageHandle = 0;
+            image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+            image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
           }
+
+          if (image.originLocation !== undefined) {
+            image.originReferenceKey = originReference.encodeKey(
+              image.originLocation.subLayer,
+              image.originLocation.order
+            );
+          } else {
+            image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
+          }
+          image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+
+          image.imageHandle = imageResource.handle;
           renderTargetEntries.push([sprite, image]);
         });
       });
@@ -2522,6 +2593,34 @@ export const createSpriteLayer = <T = any>(
       }
       return aImage.imageId.localeCompare(bImage.imageId);
     });
+
+    const originIndexBySprite = new Map<
+      string,
+      Map<SpriteOriginReferenceKey, number>
+    >();
+
+    for (let index = 0; index < renderTargetEntries.length; index++) {
+      const [sprite, image] = renderTargetEntries[index]!;
+      let indexMap = originIndexBySprite.get(sprite.spriteId);
+      if (!indexMap) {
+        indexMap = new Map<SpriteOriginReferenceKey, number>();
+        originIndexBySprite.set(sprite.spriteId, indexMap);
+      }
+      const selfKey = originReference.encodeKey(image.subLayer, image.order);
+      indexMap.set(selfKey, index);
+    }
+
+    for (const [sprite, image] of renderTargetEntries) {
+      if (image.originReferenceKey === SPRITE_ORIGIN_REFERENCE_KEY_NONE) {
+        image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+        continue;
+      }
+      const indexMap = originIndexBySprite.get(sprite.spriteId);
+      const targetIndex =
+        indexMap?.get(image.originReferenceKey) ??
+        SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+      image.originRenderTargetIndex = targetIndex;
+    }
   };
 
   //////////////////////////////////////////////////////////////////////////
@@ -2948,6 +3047,7 @@ export const createSpriteLayer = <T = any>(
     glContext: WebGLRenderingContext,
     _options: CustomRenderMethodInput
   ): void => {
+    isRenderScheduled = false;
     hitTestEntries.length = 0;
     hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
 
@@ -2956,9 +3056,6 @@ export const createSpriteLayer = <T = any>(
     if (!mapInstance || !program || !vertexBuffer) {
       return;
     }
-
-    // Prepare to create projection host (From MapLibre, TODO)
-    const projectionHost = createProjectionHostForMap(mapInstance);
 
     // Uniform locations must be resolved before drawing; skip the frame otherwise.
     if (
@@ -3051,376 +3148,388 @@ export const createSpriteLayer = <T = any>(
     const baseMetersPerPixel = resolvedScaling.metersPerPixel;
     const spriteMinPixel = resolvedScaling.spriteMinPixel;
     const spriteMaxPixel = resolvedScaling.spriteMaxPixel;
-    const clipContext = projectionHost.getClipContext();
-    // Without a clip context we cannot project to clip space; skip rendering.
-    if (!clipContext) {
-      return;
-    }
-    // Enable blending and avoid depth-buffer interference.
-    glContext.enable(glContext.BLEND);
-    glContext.blendFunc(glContext.SRC_ALPHA, glContext.ONE_MINUS_SRC_ALPHA);
-    glContext.disable(glContext.DEPTH_TEST);
-    glContext.depthMask(false);
 
-    glContext.useProgram(program);
-    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
-    glContext.enableVertexAttribArray(attribPositionLocation);
-    glContext.vertexAttribPointer(
-      attribPositionLocation,
-      POSITION_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      0
-    );
-    glContext.enableVertexAttribArray(attribUvLocation);
-    glContext.vertexAttribPointer(
-      attribUvLocation,
-      UV_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      UV_OFFSET
-    );
-    glContext.uniform1i(uniformTextureLocation, 0);
-    const screenToClipScaleLocation = uniformScreenToClipScaleLocation!;
-    const screenToClipOffsetLocation = uniformScreenToClipOffsetLocation!;
-
-    let currentScaleX = Number.NaN;
-    let currentScaleY = Number.NaN;
-    let currentOffsetX = Number.NaN;
-    let currentOffsetY = Number.NaN;
-    const applyScreenToClipUniforms = (
-      scaleX: number,
-      scaleY: number,
-      offsetX: number,
-      offsetY: number
-    ): void => {
-      if (
-        scaleX !== currentScaleX ||
-        scaleY !== currentScaleY ||
-        offsetX !== currentOffsetX ||
-        offsetY !== currentOffsetY
-      ) {
-        glContext.uniform2f(screenToClipScaleLocation, scaleX, scaleY);
-        glContext.uniform2f(screenToClipOffsetLocation, offsetX, offsetY);
-        currentScaleX = scaleX;
-        currentScaleY = scaleY;
-        currentOffsetX = offsetX;
-        currentOffsetY = offsetY;
-      }
-    };
-
-    let currentSurfaceMode = Number.NaN;
-    const applySurfaceMode = (enabled: boolean): void => {
-      if (!uniformSurfaceModeLocation) {
-        return;
-      }
-      const value = enabled ? 1 : 0;
-      if (value !== currentSurfaceMode) {
-        glContext.uniform1f(uniformSurfaceModeLocation, value);
-        currentSurfaceMode = value;
-      }
-    };
-
-    let currentSurfaceClipEnabled = Number.NaN;
-    const applySurfaceClipUniforms = (
-      enabled: boolean,
-      inputs: SurfaceShaderInputs | null
-    ): void => {
-      if (
-        !uniformSurfaceClipEnabledLocation ||
-        !uniformSurfaceClipCenterLocation ||
-        !uniformSurfaceClipBasisEastLocation ||
-        !uniformSurfaceClipBasisNorthLocation
-      ) {
-        return;
-      }
-      const value = enabled ? 1 : 0;
-      if (value !== currentSurfaceClipEnabled) {
-        glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
-        currentSurfaceClipEnabled = value;
-      }
-      const clipCenter =
-        enabled && inputs ? inputs.clipCenter : { x: 0, y: 0, z: 0, w: 1 };
-      glContext.uniform4f(
-        uniformSurfaceClipCenterLocation,
-        clipCenter.x,
-        clipCenter.y,
-        clipCenter.z,
-        clipCenter.w
-      );
-      const clipBasisEast =
-        enabled && inputs ? inputs.clipBasisEast : { x: 0, y: 0, z: 0, w: 0 };
-      glContext.uniform4f(
-        uniformSurfaceClipBasisEastLocation,
-        clipBasisEast.x,
-        clipBasisEast.y,
-        clipBasisEast.z,
-        clipBasisEast.w
-      );
-      const clipBasisNorth =
-        enabled && inputs ? inputs.clipBasisNorth : { x: 0, y: 0, z: 0, w: 0 };
-      glContext.uniform4f(
-        uniformSurfaceClipBasisNorthLocation,
-        clipBasisNorth.x,
-        clipBasisNorth.y,
-        clipBasisNorth.z,
-        clipBasisNorth.w
-      );
-    };
-
-    /**
-     * Prepares quad data for a single sprite image before issuing the draw call.
-     * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image being drawn.
-     * @param {InternalSpriteImageState} imageEntry - Image state describing rendering parameters.
-     * @param {RegisteredImage} imageResource - GPU-backed image resource.
-     * @param {ImageCenterCache} originCenterCache - Cache for resolving origin references quickly.
-     * @returns {boolean} `true` when the sprite image is ready to draw; `false` when skipped.
-     */
-    let drawOrderCounter = 0;
-
-    const issueSpriteDraw = (
-      prepared: PreparedDrawSpriteImageParams<T>
-    ): void => {
-      const { screenToClip } = prepared;
-      applyScreenToClipUniforms(
-        screenToClip.scaleX,
-        screenToClip.scaleY,
-        screenToClip.offsetX,
-        screenToClip.offsetY
-      );
-
-      applySurfaceMode(prepared.useShaderSurface);
-
-      const surfaceInputs = prepared.surfaceShaderInputs;
-      if (prepared.useShaderSurface && surfaceInputs) {
-        if (uniformSurfaceDepthBiasLocation) {
-          glContext.uniform1f(
-            uniformSurfaceDepthBiasLocation,
-            surfaceInputs.depthBiasNdc
-          );
-        }
-        applySurfaceClipUniforms(
-          prepared.surfaceClipEnabled,
-          prepared.surfaceClipEnabled ? surfaceInputs : null
-        );
-      } else {
-        if (uniformSurfaceDepthBiasLocation) {
-          glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
-        }
-        applySurfaceClipUniforms(false, null);
-      }
-
-      if (uniformBillboardModeLocation) {
-        glContext.uniform1f(
-          uniformBillboardModeLocation,
-          prepared.useShaderBillboard ? 1 : 0
-        );
-      }
-      if (prepared.useShaderBillboard && prepared.billboardUniforms) {
-        const uniforms = prepared.billboardUniforms;
-        if (uniformBillboardCenterLocation) {
-          glContext.uniform2f(
-            uniformBillboardCenterLocation,
-            uniforms.center.x,
-            uniforms.center.y
-          );
-        }
-        if (uniformBillboardHalfSizeLocation) {
-          glContext.uniform2f(
-            uniformBillboardHalfSizeLocation,
-            uniforms.halfWidth,
-            uniforms.halfHeight
-          );
-        }
-        if (uniformBillboardAnchorLocation) {
-          glContext.uniform2f(
-            uniformBillboardAnchorLocation,
-            uniforms.anchor.x,
-            uniforms.anchor.y
-          );
-        }
-        if (uniformBillboardSinCosLocation) {
-          glContext.uniform2f(
-            uniformBillboardSinCosLocation,
-            uniforms.sin,
-            uniforms.cos
-          );
-        }
-      }
-
-      const texture = prepared.imageResource.texture;
-      if (!texture) {
+    // Prepare to create projection host
+    const projectionHost = createProjectionHostForMap(mapInstance);
+    try {
+      const clipContext = projectionHost.getClipContext();
+      // Without a clip context we cannot project to clip space; skip rendering.
+      if (!clipContext) {
         return;
       }
 
-      glContext.bufferSubData(glContext.ARRAY_BUFFER, 0, prepared.vertexData);
-      glContext.uniform1f(uniformOpacityLocation, prepared.opacity);
-      glContext.activeTexture(glContext.TEXTURE0);
-      glContext.bindTexture(glContext.TEXTURE_2D, texture);
-      glContext.drawArrays(glContext.TRIANGLES, 0, QUAD_VERTEX_COUNT);
+      const zoom = projectionHost.getZoom();
+      const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
 
-      prepared.imageEntry.surfaceShaderInputs = surfaceInputs ?? undefined;
-
-      if (prepared.hitTestCorners && prepared.hitTestCorners.length === 4) {
-        registerHitTestEntry(
-          prepared.spriteEntry,
-          prepared.imageEntry,
-          prepared.hitTestCorners as [
-            SpriteScreenPoint,
-            SpriteScreenPoint,
-            SpriteScreenPoint,
-            SpriteScreenPoint,
-          ],
-          drawOrderCounter
-        );
-      }
-
-      drawOrderCounter += 1;
-    };
-
-    // Render sprite images. The renderTargetEntries list is already filtered to visible items.
-    // Cache of sprite-specific reference origins (center pixel coordinates).
-    const originCenterCache: ImageCenterCache = new Map();
-
-    const sortedSubLayerBuckets =
-      buildSortedSubLayerBuckets(renderTargetEntries);
-
-    /**
-     * Renders every image within the provided sub-layer bucket after calculating depth.
-     * @param {RenderTargetEntry[]} bucket - Sprite/image pairs belonging to a single sub-layer.
-     */
-    const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
-      const calculationHost = createCalculationHostForMap<T>(mapInstance);
-
-      const itemsWithDepth = calculationHost.collectDepthSortedItems({
-        bucket,
-        images,
-        resolvedScaling,
-        clipContext,
-        baseMetersPerPixel,
-        spriteMinPixel,
-        spriteMaxPixel,
-        drawingBufferWidth,
-        drawingBufferHeight,
-        pixelRatio,
-        originCenterCache,
-        resolveSpriteMercator,
-      });
-
-      const preparedItems = calculationHost.prepareDrawSpriteImages(
-        itemsWithDepth,
-        {
-          originCenterCache,
-          images,
-          resolvedScaling,
-          baseMetersPerPixel,
-          spriteMinPixel,
-          spriteMaxPixel,
-          drawingBufferWidth,
-          drawingBufferHeight,
-          pixelRatio,
-          clipContext,
-          identityScaleX,
-          identityScaleY,
-          identityOffsetX,
-          identityOffsetY,
-          screenToClipScaleX,
-          screenToClipScaleY,
-          screenToClipOffsetX,
-          screenToClipOffsetY,
-          ensureHitTestCorners,
-          resolveSpriteMercator,
-        }
-      );
-
-      for (const prepared of preparedItems) {
-        issueSpriteDraw(prepared);
-      }
-    };
-
-    for (const [, bucket] of sortedSubLayerBuckets) {
-      // Process buckets in ascending sub-layer order so draw order respects configuration.
-      renderSortedBucket(bucket);
-    }
-
-    if (
-      showDebugBounds &&
-      debugProgram &&
-      debugVertexBuffer &&
-      debugUniformColorLocation &&
-      debugAttribPositionLocation !== -1
-    ) {
-      glContext.useProgram(debugProgram);
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
-      glContext.enableVertexAttribArray(debugAttribPositionLocation);
-      glContext.vertexAttribPointer(
-        debugAttribPositionLocation,
-        DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
-        glContext.FLOAT,
-        false,
-        DEBUG_OUTLINE_VERTEX_STRIDE,
-        0
-      );
+      // Enable blending and avoid depth-buffer interference.
+      glContext.enable(glContext.BLEND);
+      glContext.blendFunc(glContext.SRC_ALPHA, glContext.ONE_MINUS_SRC_ALPHA);
       glContext.disable(glContext.DEPTH_TEST);
       glContext.depthMask(false);
-      glContext.uniform4f(
-        debugUniformColorLocation,
-        DEBUG_OUTLINE_COLOR[0],
-        DEBUG_OUTLINE_COLOR[1],
-        DEBUG_OUTLINE_COLOR[2],
-        DEBUG_OUTLINE_COLOR[3]
+
+      glContext.useProgram(program);
+      glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+      glContext.enableVertexAttribArray(attribPositionLocation);
+      glContext.vertexAttribPointer(
+        attribPositionLocation,
+        POSITION_COMPONENT_COUNT,
+        glContext.FLOAT,
+        false,
+        VERTEX_STRIDE,
+        0
       );
-      if (
-        debugUniformScreenToClipScaleLocation &&
-        debugUniformScreenToClipOffsetLocation
-      ) {
-        glContext.uniform2f(
-          debugUniformScreenToClipScaleLocation,
-          screenToClipScaleX,
-          screenToClipScaleY
-        );
-        glContext.uniform2f(
-          debugUniformScreenToClipOffsetLocation,
-          screenToClipOffsetX,
-          screenToClipOffsetY
-        );
-      }
+      glContext.enableVertexAttribArray(attribUvLocation);
+      glContext.vertexAttribPointer(
+        attribUvLocation,
+        UV_COMPONENT_COUNT,
+        glContext.FLOAT,
+        false,
+        VERTEX_STRIDE,
+        UV_OFFSET
+      );
+      glContext.uniform1i(uniformTextureLocation, 0);
+      const screenToClipScaleLocation = uniformScreenToClipScaleLocation!;
+      const screenToClipOffsetLocation = uniformScreenToClipOffsetLocation!;
 
-      for (const entry of hitTestEntries) {
-        let writeOffset = 0;
-        for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
-          const corner = entry.corners[cornerIndex]!;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+      let currentScaleX = Number.NaN;
+      let currentScaleY = Number.NaN;
+      let currentOffsetX = Number.NaN;
+      let currentOffsetY = Number.NaN;
+      const applyScreenToClipUniforms = (
+        scaleX: number,
+        scaleY: number,
+        offsetX: number,
+        offsetY: number
+      ): void => {
+        if (
+          scaleX !== currentScaleX ||
+          scaleY !== currentScaleY ||
+          offsetX !== currentOffsetX ||
+          offsetY !== currentOffsetY
+        ) {
+          glContext.uniform2f(screenToClipScaleLocation, scaleX, scaleY);
+          glContext.uniform2f(screenToClipOffsetLocation, offsetX, offsetY);
+          currentScaleX = scaleX;
+          currentScaleY = scaleY;
+          currentOffsetX = offsetX;
+          currentOffsetY = offsetY;
         }
-        glContext.bufferSubData(
-          glContext.ARRAY_BUFFER,
-          0,
-          DEBUG_OUTLINE_VERTEX_SCRATCH
+      };
+
+      let currentSurfaceMode = Number.NaN;
+      const applySurfaceMode = (enabled: boolean): void => {
+        if (!uniformSurfaceModeLocation) {
+          return;
+        }
+        const value = enabled ? 1 : 0;
+        if (value !== currentSurfaceMode) {
+          glContext.uniform1f(uniformSurfaceModeLocation, value);
+          currentSurfaceMode = value;
+        }
+      };
+
+      let currentSurfaceClipEnabled = Number.NaN;
+      const applySurfaceClipUniforms = (
+        enabled: boolean,
+        inputs: SurfaceShaderInputs | null
+      ): void => {
+        if (
+          !uniformSurfaceClipEnabledLocation ||
+          !uniformSurfaceClipCenterLocation ||
+          !uniformSurfaceClipBasisEastLocation ||
+          !uniformSurfaceClipBasisNorthLocation
+        ) {
+          return;
+        }
+        const value = enabled ? 1 : 0;
+        if (value !== currentSurfaceClipEnabled) {
+          glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
+          currentSurfaceClipEnabled = value;
+        }
+        const clipCenter =
+          enabled && inputs ? inputs.clipCenter : { x: 0, y: 0, z: 0, w: 1 };
+        glContext.uniform4f(
+          uniformSurfaceClipCenterLocation,
+          clipCenter.x,
+          clipCenter.y,
+          clipCenter.z,
+          clipCenter.w
         );
-        glContext.drawArrays(
-          glContext.LINE_LOOP,
-          0,
-          DEBUG_OUTLINE_VERTEX_COUNT
+        const clipBasisEast =
+          enabled && inputs ? inputs.clipBasisEast : { x: 0, y: 0, z: 0, w: 0 };
+        glContext.uniform4f(
+          uniformSurfaceClipBasisEastLocation,
+          clipBasisEast.x,
+          clipBasisEast.y,
+          clipBasisEast.z,
+          clipBasisEast.w
         );
+        const clipBasisNorth =
+          enabled && inputs
+            ? inputs.clipBasisNorth
+            : { x: 0, y: 0, z: 0, w: 0 };
+        glContext.uniform4f(
+          uniformSurfaceClipBasisNorthLocation,
+          clipBasisNorth.x,
+          clipBasisNorth.y,
+          clipBasisNorth.z,
+          clipBasisNorth.w
+        );
+      };
+
+      let drawOrderCounter = 0;
+
+      const issueSpriteDraw = (
+        prepared: PreparedDrawSpriteImageParams<T>
+      ): void => {
+        const { screenToClip } = prepared;
+        applyScreenToClipUniforms(
+          screenToClip.scaleX,
+          screenToClip.scaleY,
+          screenToClip.offsetX,
+          screenToClip.offsetY
+        );
+
+        applySurfaceMode(prepared.useShaderSurface);
+
+        const surfaceInputs = prepared.surfaceShaderInputs;
+        if (prepared.useShaderSurface && surfaceInputs) {
+          if (uniformSurfaceDepthBiasLocation) {
+            glContext.uniform1f(
+              uniformSurfaceDepthBiasLocation,
+              surfaceInputs.depthBiasNdc
+            );
+          }
+          applySurfaceClipUniforms(
+            prepared.surfaceClipEnabled,
+            prepared.surfaceClipEnabled ? surfaceInputs : null
+          );
+        } else {
+          if (uniformSurfaceDepthBiasLocation) {
+            glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
+          }
+          applySurfaceClipUniforms(false, null);
+        }
+
+        if (uniformBillboardModeLocation) {
+          glContext.uniform1f(
+            uniformBillboardModeLocation,
+            prepared.useShaderBillboard ? 1 : 0
+          );
+        }
+        if (prepared.useShaderBillboard && prepared.billboardUniforms) {
+          const uniforms = prepared.billboardUniforms;
+          if (uniformBillboardCenterLocation) {
+            glContext.uniform2f(
+              uniformBillboardCenterLocation,
+              uniforms.center.x,
+              uniforms.center.y
+            );
+          }
+          if (uniformBillboardHalfSizeLocation) {
+            glContext.uniform2f(
+              uniformBillboardHalfSizeLocation,
+              uniforms.halfWidth,
+              uniforms.halfHeight
+            );
+          }
+          if (uniformBillboardAnchorLocation) {
+            glContext.uniform2f(
+              uniformBillboardAnchorLocation,
+              uniforms.anchor.x,
+              uniforms.anchor.y
+            );
+          }
+          if (uniformBillboardSinCosLocation) {
+            glContext.uniform2f(
+              uniformBillboardSinCosLocation,
+              uniforms.sin,
+              uniforms.cos
+            );
+          }
+        }
+
+        const texture = prepared.imageResource.texture;
+        if (!texture) {
+          return;
+        }
+
+        glContext.bufferSubData(glContext.ARRAY_BUFFER, 0, prepared.vertexData);
+        glContext.uniform1f(uniformOpacityLocation, prepared.opacity);
+        glContext.activeTexture(glContext.TEXTURE0);
+        glContext.bindTexture(glContext.TEXTURE_2D, texture);
+        glContext.drawArrays(glContext.TRIANGLES, 0, QUAD_VERTEX_COUNT);
+
+        prepared.imageEntry.surfaceShaderInputs = surfaceInputs ?? undefined;
+
+        if (prepared.hitTestCorners && prepared.hitTestCorners.length === 4) {
+          registerHitTestEntry(
+            prepared.spriteEntry,
+            prepared.imageEntry,
+            prepared.hitTestCorners as [
+              SpriteScreenPoint,
+              SpriteScreenPoint,
+              SpriteScreenPoint,
+              SpriteScreenPoint,
+            ],
+            drawOrderCounter
+          );
+        }
+
+        drawOrderCounter += 1;
+      };
+
+      const sortedSubLayerBuckets =
+        buildSortedSubLayerBuckets(renderTargetEntries);
+
+      if (renderTargetEntries.length > 0) {
+        const calculationHost = createCalculationHostForMap(mapInstance);
+        try {
+          const imageHandleBuffers = imageHandleBuffersController.ensure();
+          const imageResources =
+            imageHandleBuffersController.getResourcesByHandle();
+          const bucketBuffers = createRenderTargetBucketBuffers(
+            renderTargetEntries,
+            {
+              originReference,
+            }
+          );
+          const preparedItems = calculationHost.prepareDrawSpriteImages({
+            bucket: renderTargetEntries,
+            bucketBuffers,
+            imageResources,
+            imageHandleBuffers,
+            resolvedScaling,
+            clipContext,
+            baseMetersPerPixel,
+            spriteMinPixel,
+            spriteMaxPixel,
+            drawingBufferWidth,
+            drawingBufferHeight,
+            pixelRatio,
+            zoomScaleFactor,
+            identityScaleX,
+            identityScaleY,
+            identityOffsetX,
+            identityOffsetY,
+            screenToClipScaleX,
+            screenToClipScaleY,
+            screenToClipOffsetX,
+            screenToClipOffsetY,
+          });
+
+          const preparedBySubLayer = new Map<
+            number,
+            PreparedDrawSpriteImageParams<T>[]
+          >();
+          for (const prepared of preparedItems) {
+            const subLayer = prepared.imageEntry.subLayer;
+            let list = preparedBySubLayer.get(subLayer);
+            if (!list) {
+              list = [];
+              preparedBySubLayer.set(subLayer, list);
+            }
+            list.push(prepared);
+          }
+
+          for (const [subLayer, bucket] of sortedSubLayerBuckets) {
+            const preparedBucket = preparedBySubLayer.get(subLayer);
+            if (!preparedBucket) {
+              continue;
+            }
+            const bucketImages = new Set<InternalSpriteImageState>();
+            for (const [, image] of bucket) {
+              bucketImages.add(image);
+            }
+            for (const prepared of preparedBucket) {
+              if (!bucketImages.has(prepared.imageEntry)) {
+                continue;
+              }
+              bucketImages.delete(prepared.imageEntry);
+              issueSpriteDraw(prepared);
+            }
+          }
+        } finally {
+          calculationHost.release();
+        }
       }
 
-      glContext.depthMask(true);
-      glContext.enable(glContext.DEPTH_TEST);
-      glContext.disableVertexAttribArray(debugAttribPositionLocation);
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+      if (
+        showDebugBounds &&
+        debugProgram &&
+        debugVertexBuffer &&
+        debugUniformColorLocation &&
+        debugAttribPositionLocation !== -1
+      ) {
+        glContext.useProgram(debugProgram);
+        glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
+        glContext.enableVertexAttribArray(debugAttribPositionLocation);
+        glContext.vertexAttribPointer(
+          debugAttribPositionLocation,
+          DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
+          glContext.FLOAT,
+          false,
+          DEBUG_OUTLINE_VERTEX_STRIDE,
+          0
+        );
+        glContext.disable(glContext.DEPTH_TEST);
+        glContext.depthMask(false);
+        glContext.uniform4f(
+          debugUniformColorLocation,
+          DEBUG_OUTLINE_COLOR[0],
+          DEBUG_OUTLINE_COLOR[1],
+          DEBUG_OUTLINE_COLOR[2],
+          DEBUG_OUTLINE_COLOR[3]
+        );
+        if (
+          debugUniformScreenToClipScaleLocation &&
+          debugUniformScreenToClipOffsetLocation
+        ) {
+          glContext.uniform2f(
+            debugUniformScreenToClipScaleLocation,
+            screenToClipScaleX,
+            screenToClipScaleY
+          );
+          glContext.uniform2f(
+            debugUniformScreenToClipOffsetLocation,
+            screenToClipOffsetX,
+            screenToClipOffsetY
+          );
+        }
+
+        for (const entry of hitTestEntries) {
+          let writeOffset = 0;
+          for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
+            const corner = entry.corners[cornerIndex]!;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+          }
+          glContext.bufferSubData(
+            glContext.ARRAY_BUFFER,
+            0,
+            DEBUG_OUTLINE_VERTEX_SCRATCH
+          );
+          glContext.drawArrays(
+            glContext.LINE_LOOP,
+            0,
+            DEBUG_OUTLINE_VERTEX_COUNT
+          );
+        }
+
+        glContext.depthMask(true);
+        glContext.enable(glContext.DEPTH_TEST);
+        glContext.disableVertexAttribArray(debugAttribPositionLocation);
+        glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+      }
+    } finally {
+      projectionHost.release();
     }
 
     glContext.depthMask(true);
     glContext.enable(glContext.DEPTH_TEST);
     glContext.disable(glContext.BLEND);
-
-    // Queue another render pass.
-    scheduleRender();
   };
 
   //////////////////////////////////////////////////////////////////////////
@@ -3461,15 +3570,20 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    const handle = imageIdHandler.allocate(imageId);
     // Store the image metadata.
     const image: RegisteredImage = {
       id: imageId,
+      handle,
       width: bitmap.width,
       height: bitmap.height,
       bitmap,
       texture: undefined,
     };
     images.set(imageId, image);
+    imageIdHandler.store(handle, image);
+    updateSpriteImageHandles(imageId, handle);
+    imageHandleBuffersController.markDirty(images);
 
     // Queue the upload so the next draw refreshes the texture.
     queueTextureUpload(image);
@@ -3711,14 +3825,19 @@ export const createSpriteLayer = <T = any>(
       renderPixelRatio
     );
 
+    const handle = imageIdHandler.allocate(textGlyphId);
     const image: RegisteredImage = {
       id: textGlyphId,
+      handle,
       width: totalWidth,
       height: totalHeight,
       bitmap,
       texture: undefined,
     };
     images.set(textGlyphId, image);
+    imageIdHandler.store(handle, image);
+    updateSpriteImageHandles(textGlyphId, handle);
+    imageHandleBuffersController.markDirty(images);
 
     queueTextureUpload(image);
     ensureTextures();
@@ -3739,6 +3858,7 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    // Remove image bounds
     sprites.forEach((sprite) => {
       sprite.images.forEach((orderMap) => {
         orderMap.forEach((imageState) => {
@@ -3756,8 +3876,12 @@ export const createSpriteLayer = <T = any>(
     }
 
     cancelQueuedTextureUpload(imageId);
+
     // Remove the image entry.
     images.delete(imageId);
+    imageIdHandler.release(imageId);
+    updateSpriteImageHandles(imageId, 0);
+    imageHandleBuffersController.markDirty(images);
 
     // Rebuild render targets now that the image is gone.
     ensureRenderTargetEntries();
@@ -3781,6 +3905,15 @@ export const createSpriteLayer = <T = any>(
       }
     });
     images.clear();
+    imageIdHandler.reset();
+    imageHandleBuffersController.markDirty(images);
+    sprites.forEach((sprite) => {
+      sprite.images.forEach((orderMap) => {
+        orderMap.forEach((imageState) => {
+          imageState.imageHandle = 0;
+        });
+      });
+    });
     hitTestTree.clear();
     hitTestTreeItems = new WeakMap<
       InternalSpriteImageState,
@@ -3825,8 +3958,10 @@ export const createSpriteLayer = <T = any>(
       const state = createImageStateFromInit(
         imageInit,
         imageInit.subLayer,
-        imageInit.order
+        imageInit.order,
+        originReference
       );
+      state.imageHandle = resolveImageHandle(state.imageId);
       let inner = images.get(imageInit.subLayer);
       if (!inner) {
         // First entry for this sub-layer; allocate a map for subsequent inserts.
@@ -3887,8 +4022,11 @@ export const createSpriteLayer = <T = any>(
     const currentLocation = cloneSpriteLocation(init.location);
     const initialAltitude = currentLocation.z ?? 0;
     const initialMercator = projectionHost.fromLngLat(currentLocation);
+    const spriteHandle = spriteIdHandler.allocate(spriteId);
+
     const spriteState: InternalSpriteCurrentState<T> = {
       spriteId,
+      handle: spriteHandle,
       // Sprites default to enabled unless explicitly disabled in the init payload.
       isEnabled: init.isEnabled ?? true,
       currentLocation,
@@ -3910,6 +4048,7 @@ export const createSpriteLayer = <T = any>(
 
     // Store the sprite state.
     sprites.set(spriteId, spriteState);
+    spriteIdHandler.store(spriteHandle, spriteState);
 
     refreshSpriteHitTestBounds(projectionHost, spriteState);
 
@@ -3919,18 +4058,18 @@ export const createSpriteLayer = <T = any>(
   /**
    * Expands a batch sprite payload into iterable entries.
    * @param {SpriteInitCollection<T>} collection - Batch payload.
-   * @returns {Array<[string, SpriteInit<T>]>} Normalized entries.
+   * @returns {Array<[string, Readonly<SpriteInit<T>>]>} Normalized entries.
    */
   const resolveSpriteInitCollection = (
     collection: SpriteInitCollection<T>
-  ): Array<[string, SpriteInit<T>]> => {
+  ): readonly [string, Readonly<SpriteInit<T>>][] => {
     if (Array.isArray(collection)) {
-      return collection.map((entry): [string, SpriteInit<T>] => [
+      return collection.map((entry): [string, Readonly<SpriteInit<T>>] => [
         entry.spriteId,
         entry,
       ]);
     }
-    return Object.entries(collection) as Array<[string, SpriteInit<T>]>;
+    return Object.entries(collection);
   };
 
   /**
@@ -3944,17 +4083,19 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
-
-    const isAdded = addSpriteInternal(projectionHost, spriteId, init);
-    if (isAdded) {
-      // Rebuild render target entries.
-      ensureRenderTargetEntries();
-      // Request a redraw so the new sprite appears immediately.
-      scheduleRender();
+    try {
+      const isAdded = addSpriteInternal(projectionHost, spriteId, init);
+      if (isAdded) {
+        // Rebuild render target entries.
+        ensureRenderTargetEntries();
+        // Request a redraw so the new sprite appears immediately.
+        scheduleRender();
+      }
+      return isAdded;
+    } finally {
+      projectionHost.release();
     }
-    return isAdded;
   };
 
   /**
@@ -3967,24 +4108,26 @@ export const createSpriteLayer = <T = any>(
       return 0;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
-
-    let addedCount = 0;
-    for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
-      collection
-    )) {
-      if (addSpriteInternal(projectionHost, spriteId, spriteInit)) {
-        addedCount++;
+    try {
+      let addedCount = 0;
+      for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
+        collection
+      )) {
+        if (addSpriteInternal(projectionHost, spriteId, spriteInit)) {
+          addedCount++;
+        }
       }
+      if (addedCount > 0) {
+        // Rebuild render target entries.
+        ensureRenderTargetEntries();
+        // Request a redraw so the new sprite appears immediately.
+        scheduleRender();
+      }
+      return addedCount;
+    } finally {
+      projectionHost.release();
     }
-    if (addedCount > 0) {
-      // Rebuild render target entries.
-      ensureRenderTargetEntries();
-      // Request a redraw so the new sprite appears immediately.
-      scheduleRender();
-    }
-    return addedCount;
   };
 
   /**
@@ -4003,6 +4146,7 @@ export const createSpriteLayer = <T = any>(
       });
     });
     sprites.delete(spriteId);
+    spriteIdHandler.release(spriteId);
     return true;
   };
 
@@ -4062,6 +4206,7 @@ export const createSpriteLayer = <T = any>(
     hitTestTreeItems = new WeakMap();
     hitTestEntryByImage = new WeakMap();
     sprites.clear();
+    spriteIdHandler.reset();
 
     // Rebuild render target entries.
     ensureRenderTargetEntries();
@@ -4142,7 +4287,13 @@ export const createSpriteLayer = <T = any>(
     }
 
     // Create and add the internal image state.
-    const state = createImageStateFromInit(imageInit, subLayer, order);
+    const state = createImageStateFromInit(
+      imageInit,
+      subLayer,
+      order,
+      originReference
+    );
+    state.imageHandle = resolveImageHandle(state.imageId);
 
     // Verify references: ensure targets exist and no cycles occur.
     if (state.originLocation !== undefined) {
@@ -4213,29 +4364,31 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      // Insert the image definition.
+      const result: SpriteImageOperationInternalResult = { isUpdated: false };
+      addSpriteImageInternal(
+        projectionHost,
+        sprite,
+        subLayer,
+        order,
+        imageInit,
+        result
+      );
+      if (!result.isUpdated) {
+        return false;
+      }
 
-    // Insert the image definition.
-    const result: SpriteImageOperationInternalResult = { isUpdated: false };
-    addSpriteImageInternal(
-      projectionHost,
-      sprite,
-      subLayer,
-      order,
-      imageInit,
-      result
-    );
-    if (!result.isUpdated) {
-      return false;
+      // Refresh render targets.
+      ensureRenderTargetEntries();
+      // Request a redraw so the new image appears immediately.
+      scheduleRender();
+
+      return true;
+    } finally {
+      projectionHost.release();
     }
-
-    // Refresh render targets.
-    ensureRenderTargetEntries();
-    // Request a redraw so the new image appears immediately.
-    scheduleRender();
-
-    return true;
   };
 
   /**
@@ -4264,6 +4417,7 @@ export const createSpriteLayer = <T = any>(
     if (imageUpdate.imageId !== undefined) {
       // Swap texture reference when caller points to a new image asset.
       state.imageId = imageUpdate.imageId;
+      state.imageHandle = resolveImageHandle(imageUpdate.imageId);
     }
     if (imageUpdate.mode !== undefined) {
       // Mode changes influence how geometry is generated.
@@ -4397,35 +4551,37 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      // Fail if the sprite cannot be found.
+      const sprite = sprites.get(spriteId);
+      if (!sprite) {
+        return false;
+      }
 
-    // Fail if the sprite cannot be found.
-    const sprite = sprites.get(spriteId);
-    if (!sprite) {
-      return false;
+      // Apply the image update.
+      const result: SpriteImageOperationInternalResult = { isUpdated: false };
+      updateSpriteImageInternal(
+        projectionHost,
+        sprite,
+        subLayer,
+        order,
+        imageUpdate,
+        result
+      );
+      if (!result.isUpdated) {
+        return false;
+      }
+
+      // Refresh render targets.
+      ensureRenderTargetEntries();
+      // Request a redraw so the updated image is displayed immediately.
+      scheduleRender();
+
+      return true;
+    } finally {
+      projectionHost.release();
     }
-
-    // Apply the image update.
-    const result: SpriteImageOperationInternalResult = { isUpdated: false };
-    updateSpriteImageInternal(
-      projectionHost,
-      sprite,
-      subLayer,
-      order,
-      imageUpdate,
-      result
-    );
-    if (!result.isUpdated) {
-      return false;
-    }
-
-    // Refresh render targets.
-    ensureRenderTargetEntries();
-    // Request a redraw so the updated image is displayed immediately.
-    scheduleRender();
-
-    return true;
   };
 
   /**
@@ -4675,29 +4831,32 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      // Perform the update.
+      const result = updateSpriteInternal(projectionHost, spriteId, update);
 
-    // Perform the update.
-    const result = updateSpriteInternal(projectionHost, spriteId, update);
-
-    switch (result) {
-      case 'notfound':
-        // Sprite missing; report no change to the caller.
-        return false;
-      case 'ignored':
-        // Update produced no state difference, so nothing to propagate.
-        return false;
-      case 'updated':
-        // State changed but no redraw is required (e.g., metadata change).
-        return true;
-      case 'isRequiredRender':
-        // State changed in a way that affects rendering; refresh buffers and request repaint.
-        ensureRenderTargetEntries();
-        scheduleRender();
-        return true;
+      switch (result) {
+        case 'notfound':
+          // Sprite missing; report no change to the caller.
+          return false;
+        case 'ignored':
+          // Update produced no state difference, so nothing to propagate.
+          return false;
+        case 'updated':
+          // State changed but no redraw is required (e.g., metadata change).
+          return true;
+        case 'isRequiredRender':
+          // State changed in a way that affects rendering; refresh buffers and request repaint.
+          ensureRenderTargetEntries();
+          scheduleRender();
+          return true;
+      }
+    } finally {
+      projectionHost.release();
     }
   };
+
   /**
    * Adds, updates, or removes sprites based on arbitrary source items.
    * @template TSourceItem Source item type that exposes a sprite identifier.
@@ -4717,149 +4876,152 @@ export const createSpriteLayer = <T = any>(
       return 0;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      let changedCount = 0;
+      let isRequiredRender = false;
 
-    let changedCount = 0;
-    let isRequiredRender = false;
+      // Reuse mutable helpers for efficiency.
+      let currentSprite: InternalSpriteCurrentState<T> = undefined!;
+      let didMutateImages = false;
+      const operationResult: SpriteImageOperationInternalResult = {
+        isUpdated: false,
+      };
+      const updateObject: SpriteUpdaterEntry<T> = {
+        isEnabled: undefined,
+        location: undefined,
+        interpolation: undefined,
+        tag: undefined,
+        getImageIndexMap: () => {
+          const map = new Map<number, Set<number>>();
+          currentSprite.images.forEach((inner, subLayer) => {
+            map.set(subLayer, new Set(inner.keys()));
+          });
+          return map;
+        },
+        addImage: (subLayer, order, imageInit) => {
+          const added = addSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageInit,
+            operationResult
+          );
+          if (added) {
+            didMutateImages = true;
+          }
+          return added;
+        },
+        updateImage: (subLayer, order, imageUpdate) => {
+          const updated = updateSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageUpdate,
+            operationResult
+          );
+          if (updated) {
+            didMutateImages = true;
+          }
+          return updated;
+        },
+        removeImage: (subLayer, order) => {
+          const removed = removeSpriteImageInternal(
+            currentSprite,
+            subLayer,
+            order,
+            operationResult
+          );
+          if (removed) {
+            didMutateImages = true;
+          }
+          return removed;
+        },
+      } as SpriteUpdaterEntry<T>;
 
-    // Reuse mutable helpers for efficiency.
-    let currentSprite: InternalSpriteCurrentState<T> = undefined!;
-    let didMutateImages = false;
-    const operationResult: SpriteImageOperationInternalResult = {
-      isUpdated: false,
-    };
-    const updateObject: SpriteUpdaterEntry<T> = {
-      isEnabled: undefined,
-      location: undefined,
-      interpolation: undefined,
-      tag: undefined,
-      getImageIndexMap: () => {
-        const map = new Map<number, Set<number>>();
-        currentSprite.images.forEach((inner, subLayer) => {
-          map.set(subLayer, new Set(inner.keys()));
-        });
-        return map;
-      },
-      addImage: (subLayer, order, imageInit) => {
-        const added = addSpriteImageInternal(
-          projectionHost,
-          currentSprite,
-          subLayer,
-          order,
-          imageInit,
-          operationResult
-        );
-        if (added) {
-          didMutateImages = true;
-        }
-        return added;
-      },
-      updateImage: (subLayer, order, imageUpdate) => {
-        const updated = updateSpriteImageInternal(
-          projectionHost,
-          currentSprite,
-          subLayer,
-          order,
-          imageUpdate,
-          operationResult
-        );
-        if (updated) {
-          didMutateImages = true;
-        }
-        return updated;
-      },
-      removeImage: (subLayer, order) => {
-        const removed = removeSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          operationResult
-        );
-        if (removed) {
-          didMutateImages = true;
-        }
-        return removed;
-      },
-    } as SpriteUpdaterEntry<T>;
+      for (const sourceItem of sourceItems) {
+        const spriteId = sourceItem.spriteId;
+        const sprite = sprites.get(spriteId);
 
-    for (const sourceItem of sourceItems) {
-      const spriteId = sourceItem.spriteId;
-      const sprite = sprites.get(spriteId);
-
-      if (!sprite) {
-        const init = mutator.add(sourceItem);
-        if (!init) {
+        if (!sprite) {
+          const init = mutator.add(sourceItem);
+          if (!init) {
+            continue;
+          }
+          if (addSpriteInternal(projectionHost, spriteId, init)) {
+            changedCount++;
+            isRequiredRender = true;
+          }
           continue;
         }
-        if (addSpriteInternal(projectionHost, spriteId, init)) {
-          changedCount++;
-          isRequiredRender = true;
-        }
-        continue;
-      }
 
-      currentSprite = sprite;
-      operationResult.isUpdated = false;
-      didMutateImages = false;
+        currentSprite = sprite;
+        operationResult.isUpdated = false;
+        didMutateImages = false;
 
-      const decision = mutator.modify(
-        sourceItem,
-        sprite as SpriteCurrentState<T>,
-        updateObject
-      );
-
-      if (decision === 'remove') {
-        if (removeSpriteInternal(spriteId)) {
-          changedCount++;
-          isRequiredRender = true;
-        }
-      } else {
-        const updateResult = updateSpriteInternal(
-          projectionHost,
-          spriteId,
+        const decision = mutator.modify(
+          sourceItem,
+          sprite as SpriteCurrentState<T>,
           updateObject
         );
-        let spriteChanged = false;
 
-        switch (updateResult) {
-          case 'updated':
-            spriteChanged = true;
-            break;
-          case 'isRequiredRender':
+        if (decision === 'remove') {
+          if (removeSpriteInternal(spriteId)) {
+            changedCount++;
+            isRequiredRender = true;
+          }
+        } else {
+          const updateResult = updateSpriteInternal(
+            projectionHost,
+            spriteId,
+            updateObject
+          );
+          let spriteChanged = false;
+
+          switch (updateResult) {
+            case 'updated':
+              spriteChanged = true;
+              break;
+            case 'isRequiredRender':
+              spriteChanged = true;
+              isRequiredRender = true;
+              break;
+          }
+
+          if (didMutateImages) {
             spriteChanged = true;
             isRequiredRender = true;
-            break;
+          }
+
+          if (spriteChanged) {
+            changedCount++;
+          }
         }
 
-        if (didMutateImages) {
-          spriteChanged = true;
-          isRequiredRender = true;
-        }
-
-        if (spriteChanged) {
-          changedCount++;
-        }
+        // Reset reusable fields on the shared update object.
+        updateObject.isEnabled = undefined;
+        updateObject.location = undefined;
+        updateObject.interpolation = undefined;
+        updateObject.tag = undefined;
+        operationResult.isUpdated = false;
+        didMutateImages = false;
       }
 
-      // Reset reusable fields on the shared update object.
-      updateObject.isEnabled = undefined;
-      updateObject.location = undefined;
-      updateObject.interpolation = undefined;
-      updateObject.tag = undefined;
-      operationResult.isUpdated = false;
-      didMutateImages = false;
-    }
+      // Request rendering
+      if (isRequiredRender) {
+        // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
+        ensureRenderTargetEntries();
+        scheduleRender();
+      }
 
-    // Request rendering
-    if (isRequiredRender) {
-      // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
-      ensureRenderTargetEntries();
-      scheduleRender();
+      return changedCount;
+    } finally {
+      projectionHost.release();
     }
-
-    return changedCount;
   };
+
   /**
    * Iterates over every sprite and attempts to update it via the provided callback.
    * @param {(sprite: SpriteCurrentState<T>, update: SpriteUpdaterEntry<T>) => boolean} updater - Callback invoked per sprite; return `false` to abort iteration.
@@ -4875,98 +5037,100 @@ export const createSpriteLayer = <T = any>(
       return 0;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
+    try {
+      let updatedCount = 0;
+      let isRequiredRender = false;
 
-    let updatedCount = 0;
-    let isRequiredRender = false;
+      // Reuse allocation-heavy objects.
+      let currentSprite: InternalSpriteCurrentState<T> = undefined!;
+      const operationResult: SpriteImageOperationInternalResult = {
+        isUpdated: false,
+      };
+      const updateObject: SpriteUpdaterEntry<T> = {
+        getImageIndexMap: () => {
+          const map = new Map<number, Set<number>>();
+          currentSprite.images.forEach((inner, subLayer) => {
+            map.set(subLayer, new Set(inner.keys()));
+          });
+          return map;
+        },
+        addImage: (subLayer, order, imageInit) =>
+          addSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageInit,
+            operationResult
+          ),
+        updateImage: (subLayer, order, imageUpdate) =>
+          updateSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageUpdate,
+            operationResult
+          ),
+        removeImage: (subLayer, order) =>
+          removeSpriteImageInternal(
+            currentSprite,
+            subLayer,
+            order,
+            operationResult
+          ),
+      } as SpriteUpdaterEntry<T>;
 
-    // Reuse allocation-heavy objects.
-    let currentSprite: InternalSpriteCurrentState<T> = undefined!;
-    const operationResult: SpriteImageOperationInternalResult = {
-      isUpdated: false,
-    };
-    const updateObject: SpriteUpdaterEntry<T> = {
-      getImageIndexMap: () => {
-        const map = new Map<number, Set<number>>();
-        currentSprite.images.forEach((inner, subLayer) => {
-          map.set(subLayer, new Set(inner.keys()));
-        });
-        return map;
-      },
-      addImage: (subLayer, order, imageInit) =>
-        addSpriteImageInternal(
+      // Process every sprite.
+      sprites.forEach((sprite) => {
+        currentSprite = sprite;
+
+        // Invoke the user-supplied updater to populate updateObject.
+        updater(sprite as SpriteCurrentState<T>, updateObject);
+
+        // Apply the update.
+        const result = updateSpriteInternal(
           projectionHost,
-          currentSprite,
-          subLayer,
-          order,
-          imageInit,
-          operationResult
-        ),
-      updateImage: (subLayer, order, imageUpdate) =>
-        updateSpriteImageInternal(
-          projectionHost,
-          currentSprite,
-          subLayer,
-          order,
-          imageUpdate,
-          operationResult
-        ),
-      removeImage: (subLayer, order) =>
-        removeSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          operationResult
-        ),
-    } as SpriteUpdaterEntry<T>;
+          sprite.spriteId,
+          updateObject
+        );
 
-    // Process every sprite.
-    sprites.forEach((sprite) => {
-      currentSprite = sprite;
+        switch (result) {
+          case 'notfound':
+            // Sprite vanished during iteration; skip it.
+            break;
+          case 'ignored':
+            // Updater made no net changes.
+            break;
+          case 'updated':
+            updatedCount++;
+            break;
+          case 'isRequiredRender':
+            // Changes require a redraw after iteration completes.
+            isRequiredRender = true;
+            updatedCount++;
+            break;
+        }
 
-      // Invoke the user-supplied updater to populate updateObject.
-      updater(sprite as SpriteCurrentState<T>, updateObject);
+        // Reset reusable fields on the shared update object.
+        updateObject.isEnabled = undefined;
+        updateObject.location = undefined;
+        updateObject.interpolation = undefined;
+        updateObject.tag = undefined;
+      });
 
-      // Apply the update.
-      const result = updateSpriteInternal(
-        projectionHost,
-        sprite.spriteId,
-        updateObject
-      );
-
-      switch (result) {
-        case 'notfound':
-          // Sprite vanished during iteration; skip it.
-          break;
-        case 'ignored':
-          // Updater made no net changes.
-          break;
-        case 'updated':
-          updatedCount++;
-          break;
-        case 'isRequiredRender':
-          // Changes require a redraw after iteration completes.
-          isRequiredRender = true;
-          updatedCount++;
-          break;
+      // Request rendering if any sprite or image changed.
+      if (isRequiredRender || operationResult.isUpdated) {
+        // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
+        ensureRenderTargetEntries();
+        scheduleRender();
       }
 
-      // Reset reusable fields on the shared update object.
-      updateObject.isEnabled = undefined;
-      updateObject.location = undefined;
-      updateObject.interpolation = undefined;
-      updateObject.tag = undefined;
-    });
-
-    // Request rendering if any sprite or image changed.
-    if (isRequiredRender || operationResult.isUpdated) {
-      // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
-      ensureRenderTargetEntries();
-      scheduleRender();
+      return updatedCount;
+    } finally {
+      projectionHost.release();
     }
-
-    return updatedCount;
   };
 
   const setHitTestEnabled = (enabled: boolean) => {
@@ -4988,12 +5152,14 @@ export const createSpriteLayer = <T = any>(
       return;
     }
 
-    // TODO: Replace to createProjectionHost
     const projectionHost = createProjectionHostForMap(map);
-
-    sprites.forEach((sprite) => {
-      refreshSpriteHitTestBounds(projectionHost, sprite);
-    });
+    try {
+      sprites.forEach((sprite) => {
+        refreshSpriteHitTestBounds(projectionHost, sprite);
+      });
+    } finally {
+      projectionHost.release();
+    }
   };
 
   /**
@@ -5003,6 +5169,7 @@ export const createSpriteLayer = <T = any>(
     id,
     type: 'custom' as const,
     renderingMode: '2d' as const,
+    initialize,
     onAdd,
     onRemove,
     render,

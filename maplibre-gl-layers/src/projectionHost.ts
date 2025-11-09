@@ -51,7 +51,7 @@ export interface ProjectionHostParams {
   readonly farZOverride?: number;
 }
 
-interface PreparedProjectionState {
+export interface PreparedProjectionState {
   readonly zoom: number;
   readonly mercatorMatrix: Mat4 | null;
   readonly pixelMatrix: Mat4 | null;
@@ -102,6 +102,14 @@ const projectToWorldCoordinates = (
   x: mercatorXfromLng(lng) * worldSize,
   y: mercatorYfromLat(lat) * worldSize,
 });
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+// Force using float64 precision on the mat4.
+const createMat4f64 = (): Mat4 => new Float64Array(16) as unknown as Mat4;
+const createIdentityMat4f64 = (): Mat4 => mat4.identity(createMat4f64());
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 const getMercatorHorizon = (
   cameraToCenterDistance: number,
@@ -233,7 +241,7 @@ const calculateNearFarZ = (
   };
 };
 
-const prepareProjectionState = (
+export const prepareProjectionState = (
   params: ProjectionHostParams
 ): PreparedProjectionState => {
   const width = Math.max(0, params.width);
@@ -318,7 +326,7 @@ const prepareProjectionState = (
   );
 
   const perspective = mat4.perspective(
-    mat4.create(),
+    createMat4f64(),
     fovRad,
     width / height,
     Math.max(nearZ, 1e-6),
@@ -328,7 +336,7 @@ const prepareProjectionState = (
   perspective[8] = (-offsetX * 2) / width;
   perspective[9] = (offsetY * 2) / height;
 
-  const worldMatrix = mat4.clone(perspective);
+  const worldMatrix = mat4.copy(createMat4f64(), perspective);
   mat4.scale(worldMatrix, worldMatrix, [1, -1, 1]);
   mat4.translate(worldMatrix, worldMatrix, [0, 0, -cameraToCenterDistance]);
   mat4.rotateZ(worldMatrix, worldMatrix, -rollRad);
@@ -336,7 +344,7 @@ const prepareProjectionState = (
   mat4.rotateZ(worldMatrix, worldMatrix, -bearingRad);
   mat4.translate(worldMatrix, worldMatrix, [-centerWorld.x, -centerWorld.y, 0]);
 
-  const mercatorMatrix = mat4.scale(mat4.create(), worldMatrix, [
+  const mercatorMatrix = mat4.scale(createMat4f64(), worldMatrix, [
     worldSize,
     worldSize,
     worldSize,
@@ -344,7 +352,7 @@ const prepareProjectionState = (
 
   mat4.scale(worldMatrix, worldMatrix, [1, 1, pixelPerMeter]);
 
-  const clipSpaceToPixelsMatrix = mat4.create();
+  const clipSpaceToPixelsMatrix = createIdentityMat4f64();
   mat4.scale(clipSpaceToPixelsMatrix, clipSpaceToPixelsMatrix, [
     width / 2,
     -height / 2,
@@ -353,12 +361,12 @@ const prepareProjectionState = (
   mat4.translate(clipSpaceToPixelsMatrix, clipSpaceToPixelsMatrix, [1, -1, 0]);
 
   const pixelMatrix = mat4.multiply(
-    mat4.create(),
+    createMat4f64(),
     clipSpaceToPixelsMatrix,
     worldMatrix
   );
 
-  const pixelMatrixInverse = mat4.invert(mat4.create(), pixelMatrix) ?? null;
+  const pixelMatrixInverse = mat4.invert(createMat4f64(), pixelMatrix) ?? null;
 
   const clipContext: ClipContext | null = mercatorMatrix
     ? { mercatorMatrix }
@@ -386,7 +394,7 @@ const prepareProjectionState = (
 export const createProjectionHost = (
   params: ProjectionHostParams
 ): ProjectionHost => {
-  const state = prepareProjectionState(params);
+  let state = prepareProjectionState(params);
 
   /**
    * Get current zoom level.
@@ -553,6 +561,10 @@ export const createProjectionHost = (
     }
   };
 
+  const release = () => {
+    state = undefined!;
+  };
+
   return {
     getZoom,
     getClipContext,
@@ -560,10 +572,9 @@ export const createProjectionHost = (
     project,
     unproject,
     calculatePerspectiveRatio,
+    release,
   };
 };
-
-//////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Extract current MapLibre transform parameters into {@link ProjectionHostParams}.

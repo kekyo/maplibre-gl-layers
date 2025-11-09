@@ -28,6 +28,176 @@ import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './math';
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * The handle value that using the instance.
+ */
+export type IdHandle = number;
+
+/**
+ * Id handler interface.
+ * @param T Identified instance type
+ * @remarks It is used for (wasm) interoperability for identity.
+ */
+export interface IdHandler<T> {
+  /**
+   * Allocates a numeric handle for the specified identifier.
+   * @param {string} rawId - Raw identifier.
+   * @returns {IdHandle} Allocated handle.
+   */
+  readonly allocate: (rawId: string) => IdHandle;
+  /**
+   * Stores an instance reference at the given handle index.
+   * @param {IdHandle} handle - Numeric handle.
+   * @param {T} instance - Registered instance.
+   */
+  readonly store: (handle: IdHandle, instance: T) => void;
+  /**
+   * Get instance by handle.
+   * @param handle Numeric handle
+   * @returns Instance.
+   */
+  readonly get: (handle: IdHandle) => T;
+  /**
+   * Releases the handle associated with the provided identifier.
+   * @param {string} rawId - Raw identifier.
+   */
+  readonly release: (rawId: string) => void;
+  /**
+   * Clears all handle bookkeeping state.
+   */
+  readonly reset: () => void;
+}
+
+/**
+ * Buffers exposing image metadata indexed by handle.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ */
+export interface ImageHandleBuffers {
+  readonly widths: Float32Array;
+  readonly heights: Float32Array;
+  readonly textureReady: Uint8Array;
+}
+
+/**
+ * Registered image references aligned by handle index.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ */
+export type ImageResourceTable = readonly (
+  | Readonly<RegisteredImage>
+  | undefined
+)[];
+
+/**
+ * Image handle buffer controller interface.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ */
+export interface ImageHandleBufferController {
+  /**
+   * Flag metadata buffers for regeneration.
+   * @param images Image map.
+   */
+  readonly markDirty: (images: ReadonlyMap<string, RegisteredImage>) => void;
+  /**
+   * Rebuilds the metadata buffers when flagged as dirty.
+   * @returns {ImageHandleBuffers} Metadata buffers aligned by handle index.
+   */
+  readonly ensure: () => ImageHandleBuffers;
+  /**
+   * Returns registered images aligned by handle index. Ensures buffers are up to date.
+   */
+  readonly getResourcesByHandle: () => ImageResourceTable;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Encoded pointer representing the target of an origin reference.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ *          The high bits encode the sub-layer while the low bits encode the order slot.
+ */
+export type SpriteOriginReferenceKey = number;
+
+/** Sentinel used when the image does not reference another sprite image. */
+export const SPRITE_ORIGIN_REFERENCE_KEY_NONE = -1;
+
+/**
+ * Index into the render target bucket pointing at the resolved origin image.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ *          When no origin is assigned or the reference could not be resolved,
+ *          the value will be {@link SPRITE_ORIGIN_REFERENCE_INDEX_NONE}.
+ */
+export type SpriteOriginReferenceIndex = number;
+
+/** Sentinel indicating that the origin pointer has not been resolved yet. */
+export const SPRITE_ORIGIN_REFERENCE_INDEX_NONE = -1;
+
+/**
+ * Encode/Decode interface for a (subLayer, order) pair into a compact numeric key.
+ * @remarks It is used for (wasm) interoperability for image identity.
+ */
+export interface SpriteOriginReference {
+  /**
+   * Encodes a (subLayer, order) pair into a compact numeric key.
+   * @param subLayer Sub-layer identifier within the sprite.
+   * @param order Order slot inside the sub-layer.
+   * @returns Encoded origin reference key.
+   */
+  readonly encodeKey: (
+    subLayer: number,
+    order: number
+  ) => SpriteOriginReferenceKey;
+  /**
+   * Decodes an origin reference key back into the sub-layer and order pair.
+   * @param key Encoded origin reference key.
+   * @returns `subLayer` and `order` components; when the key is invalid, both values are set to `-1`.
+   */
+  readonly decodeKey: (key: SpriteOriginReferenceKey) => {
+    readonly subLayer: number;
+    readonly order: number;
+  };
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Tuple representing a single entry in a render target bucket.
+ * @remarks It is used for (wasm) interoperability for sprite origin.
+ *          The first item is the sprite's frame-level state and the second item is
+ *          the specific image being rendered,
+ *          mirroring how the renderer stores draw calls on the CPU side.
+ *          Keeping the pair immutable prevents accidental divergence between cached data
+ *          and the GPU buffers derived from it.
+ */
+export type RenderTargetEntryLike<TTag> = readonly [
+  InternalSpriteCurrentState<TTag>, // Sprite-level state shared by all of its images.
+  InternalSpriteImageState, // Concrete image variant queued for rendering.
+];
+
+/**
+ * Parallel typed arrays that expose bucket metadata in a WASM-friendly layout.
+ * @remarks It is used for (wasm) interoperability for sprite origin.
+ *          Both arrays always share the same length as the bucket, allowing shader-side
+ *          code (or WASM helpers) to traverse origin reference metadata without touching
+ *          the heavyweight tuple objects.
+ */
+export interface RenderTargetBucketBuffers {
+  /**
+   * Encoded origin metadata (sub-layer/order pairs) for each queued image,
+   * mirroring `image.originReferenceKey`. A value of
+   * `SPRITE_ORIGIN_REFERENCE_KEY_NONE` denotes that the entry is self-originating.
+   */
+  readonly originReferenceKeys: Int32Array;
+  /**
+   * Bucket index pointing to the entry that should provide the origin image for
+   * the current sprite. Values equal to
+   * `SPRITE_ORIGIN_REFERENCE_INDEX_NONE` or outside the bucket range mark the
+   * origin as unresolved.
+   */
+  readonly originTargetIndices: Int32Array;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
  * Represents a projected three dimensional position.
  * `MercatorCoordinate` uses the web mercator projection ([EPSG:3857](https://epsg.io/3857)) with slightly different units:
  * - the size of 1 unit is the width of the projected world instead of the "mercator meter"
@@ -39,10 +209,14 @@ export interface SpriteMercatorCoordinate {
   readonly z: number;
 }
 
+export interface Releaseable {
+  readonly release: () => void;
+}
+
 /**
  * Abstraction that exposes projection-related helpers.
  */
-export interface ProjectionHost {
+export interface ProjectionHost extends Releaseable {
   /**
    * Get current zoom level.
    * @returns Zoom level.
@@ -87,58 +261,9 @@ export interface ProjectionHost {
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * Cache entry storing anchor-adjusted and raw centers for a sprite image.
- */
-export interface ImageCenterCacheEntry {
-  readonly anchorApplied?: SpritePoint;
-  readonly anchorless?: SpritePoint;
-}
-
-/**
- * Nested cache keyed by sprite ID and image key to avoid recomputing centers each frame.
- */
-export type ImageCenterCache = Map<string, Map<string, ImageCenterCacheEntry>>;
-
-export type RenderTargetEntryLike<T> = readonly [
-  InternalSpriteCurrentState<T>,
-  InternalSpriteImageState,
-];
-
-export interface DepthSortedItem<T> {
-  readonly sprite: InternalSpriteCurrentState<T>;
-  readonly image: InternalSpriteImageState;
-  readonly resource: Readonly<RegisteredImage>;
-  readonly depthKey: number;
-}
-
-export interface CollectDepthSortedItemsInputs<T> {
-  readonly bucket: readonly Readonly<RenderTargetEntryLike<T>>[];
-  readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
-  readonly resolvedScaling: ResolvedSpriteScalingOptions;
-  readonly zoomScaleFactor?: number;
-  readonly clipContext: Readonly<ClipContext> | null;
-  readonly baseMetersPerPixel: number;
-  readonly spriteMinPixel: number;
-  readonly spriteMaxPixel: number;
-  readonly drawingBufferWidth: number;
-  readonly drawingBufferHeight: number;
-  readonly pixelRatio: number;
-  readonly originCenterCache: ImageCenterCache;
-  readonly resolveSpriteMercator: (
-    projectionHost: ProjectionHost,
-    sprite: Readonly<InternalSpriteCurrentState<T>>
-  ) => SpriteMercatorCoordinate;
-}
-
-/**
- * Prepares WebGL rendering inputs.
- */
-export interface PrepareDrawSpriteImageInputs<T> {
-  readonly originCenterCache: ImageCenterCache;
-  readonly images: ReadonlyMap<string, Readonly<RegisteredImage>>;
-  readonly resolvedScaling: ResolvedSpriteScalingOptions;
-  readonly zoomScaleFactor?: number;
+export interface PrepareDrawSpriteImageParamsBase {
+  readonly imageResources: ImageResourceTable;
+  readonly imageHandleBuffers: Readonly<ImageHandleBuffers>;
   readonly baseMetersPerPixel: number;
   readonly spriteMinPixel: number;
   readonly spriteMaxPixel: number;
@@ -146,6 +271,18 @@ export interface PrepareDrawSpriteImageInputs<T> {
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
   readonly clipContext: Readonly<ClipContext> | null;
+}
+
+export interface PrepareDrawSpriteImageParamsBefore<TTag>
+  extends PrepareDrawSpriteImageParamsBase {
+  readonly bucket: readonly Readonly<RenderTargetEntryLike<TTag>>[];
+  readonly bucketBuffers: Readonly<RenderTargetBucketBuffers>;
+  readonly resolvedScaling: ResolvedSpriteScalingOptions;
+  readonly zoomScaleFactor: number;
+}
+
+export interface PrepareDrawSpriteImageParamsAfter
+  extends PrepareDrawSpriteImageParamsBase {
   readonly identityScaleX: number;
   readonly identityScaleY: number;
   readonly identityOffsetX: number;
@@ -154,19 +291,11 @@ export interface PrepareDrawSpriteImageInputs<T> {
   readonly screenToClipScaleY: number;
   readonly screenToClipOffsetX: number;
   readonly screenToClipOffsetY: number;
-  readonly ensureHitTestCorners: (
-    imageEntry: Readonly<InternalSpriteImageState>
-  ) => [
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-  ];
-  readonly resolveSpriteMercator: (
-    projectionHost: ProjectionHost,
-    sprite: Readonly<InternalSpriteCurrentState<T>>
-  ) => SpriteMercatorCoordinate;
 }
+
+export interface PrepareDrawSpriteImageParams<TTag>
+  extends PrepareDrawSpriteImageParamsBefore<TTag>,
+    PrepareDrawSpriteImageParamsAfter {}
 
 /**
  * Prepared parameters for WebGL rendering.
@@ -210,14 +339,9 @@ export interface PreparedDrawSpriteImageParams<T> {
  * Abstraction that render calculations.
  * @param TTag Tag type.
  */
-export interface RenderCalculationHost<TTag> {
-  readonly collectDepthSortedItems: (
-    inputs: CollectDepthSortedItemsInputs<TTag>
-  ) => DepthSortedItem<TTag>[];
-
+export interface RenderCalculationHost<TTag> extends Releaseable {
   readonly prepareDrawSpriteImages: (
-    items: readonly DepthSortedItem<TTag>[],
-    inputs: PrepareDrawSpriteImageInputs<TTag>
+    params: PrepareDrawSpriteImageParams<TTag>
   ) => PreparedDrawSpriteImageParams<TTag>[];
 }
 
@@ -348,6 +472,10 @@ export interface ResolvedTextureFilteringOptions {
  */
 export interface RegisteredImage {
   readonly id: string;
+  /**
+   * For use (wasm) interoperability id.
+   */
+  readonly handle: number;
   readonly width: number;
   readonly height: number;
   readonly bitmap: ImageBitmap;
@@ -437,6 +565,7 @@ export interface InternalSpriteImageState {
   subLayer: number;
   order: number;
   imageId: string;
+  imageHandle: number;
   mode: SpriteMode;
   opacity: number;
   scale: number;
@@ -448,6 +577,8 @@ export interface InternalSpriteImageState {
   autoRotationMinDistanceMeters: number;
   resolvedBaseRotateDeg: number;
   originLocation?: Readonly<SpriteImageOriginLocation>;
+  originReferenceKey: SpriteOriginReferenceKey;
+  originRenderTargetIndex: SpriteOriginReferenceIndex;
   rotationInterpolationState: Readonly<DegreeInterpolationState> | null;
   rotationInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
   offsetDegInterpolationState: Readonly<DegreeInterpolationState> | null;
@@ -469,6 +600,7 @@ export interface InternalSpriteImageState {
  */
 export interface InternalSpriteCurrentState<TTag> {
   spriteId: string;
+  handle: IdHandle;
   isEnabled: boolean;
   currentLocation: Readonly<SpriteLocation>;
   fromLocation?: Readonly<SpriteLocation>;
