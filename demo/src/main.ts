@@ -5,7 +5,9 @@ import { Map, type MapOptions, type SourceSpecification } from 'maplibre-gl';
 import {
   createSpriteLayer,
   STANDARD_SPRITE_SCALING_OPTIONS,
+  UNLIMITED_SPRITE_SCALING_OPTIONS,
   type SpriteLayerCalculationVariant,
+  type SpriteLayerWasmVariant,
 } from 'maplibre-gl-layers';
 import type {
   SpriteMode,
@@ -225,6 +227,15 @@ const formatWasmVariantLabel = (
       return 'Disabled';
   }
 };
+
+const formatSpriteScalingMode = (
+  mode: 'standard' | 'unlimited'
+): string => (mode === 'standard' ? 'Standard' : 'Unlimited');
+
+const resolveSpriteScalingOptions = () =>
+  spriteScalingMode === 'standard'
+    ? STANDARD_SPRITE_SCALING_OPTIONS
+    : UNLIMITED_SPRITE_SCALING_OPTIONS;
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -457,6 +468,7 @@ let isAutoRotationEnabled = true;
 /** Enables movement interpolation; when false, updates happen per step only. */
 let isMovementInterpolationEnabled = true;
 let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
+let spriteScalingMode: 'standard' | 'unlimited' = 'standard';
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
@@ -571,6 +583,42 @@ const createHud = () => {
           data-testid="toggle-wasm-disabled"
         >
           Disabled
+        </button>
+      </div>
+      <div class="control-group" data-testid="group-scaling-mode">
+        <div class="status-row">
+          <span class="status-label">Scaling</span>
+          <span
+            class="status-value"
+            data-status="scaling-mode-status"
+            data-testid="status-scaling-mode"
+          >${formatSpriteScalingMode(spriteScalingMode)}</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-button${
+            spriteScalingMode === 'standard' ? ' active' : ''
+          }"
+          data-control="scaling-mode"
+          data-option="standard"
+          data-label="Standard"
+          aria-pressed="${spriteScalingMode === 'standard'}"
+          data-testid="toggle-scaling-standard"
+        >
+          Standard
+        </button>
+        <button
+          type="button"
+          class="toggle-button${
+            spriteScalingMode === 'unlimited' ? ' active' : ''
+          }"
+          data-control="scaling-mode"
+          data-option="unlimited"
+          data-label="Unlimited"
+          aria-pressed="${spriteScalingMode === 'unlimited'}"
+          data-testid="toggle-scaling-unlimited"
+        >
+          Unlimited
         </button>
       </div>
       <section id="map-status" data-testid="section-map-status">
@@ -1457,10 +1505,9 @@ const main = async () => {
   updateMapStatus();
 
   /** Sprite layer instance. MapLibre manages the WebGL context, so only the layer ID is needed here. */
-  const spriteLayer = createSpriteLayer<DemoSpriteTag>({
+  let spriteLayer = createSpriteLayer<DemoSpriteTag>({
     id: 'demo-sprite',
-    spriteScaling: STANDARD_SPRITE_SCALING_OPTIONS,
-    //    spriteScaling: UNLIMITED_SPRITE_SCALING_OPTIONS,
+    spriteScaling: resolveSpriteScalingOptions(),
     textureFiltering: {
       minFilter: 'linear-mipmap-linear',
       magFilter: 'linear',
@@ -1631,6 +1678,7 @@ const main = async () => {
     let updateBasemapButtons: (() => void) | undefined;
     let updateWasmModeButtons: (() => void) | undefined;
     let wasmModePending = false;
+    let updateScalingModeButtons: (() => void) | undefined;
 
     /**
      * Shows or hides each raster basemap layer to match the current selection.
@@ -2824,6 +2872,56 @@ const main = async () => {
         wasmModeStatusEl.textContent = formatWasmVariantLabel(
           currentCalculationVariant
         );
+      }
+
+      const scalingModeButtons = Array.from(
+        queryAll<HTMLButtonElement>('[data-control="scaling-mode"]')
+      );
+      const scalingModeStatusEl = queryFirst<HTMLElement>(
+        '[data-status="scaling-mode-status"]'
+      );
+      if (scalingModeButtons.length > 0) {
+        updateScalingModeButtons = () => {
+          scalingModeButtons.forEach((button) => {
+            const option = button.dataset.option as
+              | 'standard'
+              | 'unlimited'
+              | undefined;
+            if (!option) {
+              return;
+            }
+            setToggleButtonState(
+              button,
+              spriteScalingMode === option,
+              'select'
+            );
+          });
+          if (scalingModeStatusEl) {
+            scalingModeStatusEl.textContent =
+              formatSpriteScalingMode(spriteScalingMode);
+          }
+        };
+        updateScalingModeButtons();
+        scalingModeButtons.forEach((button) => {
+          const option = button.dataset.option as
+            | 'standard'
+            | 'unlimited'
+            | undefined;
+          if (!option) {
+            return;
+          }
+          button.addEventListener('click', () => {
+            if (spriteScalingMode === option) {
+              return;
+            }
+            spriteScalingMode = option;
+            spriteLayer.setSpriteScalingOptions(resolveSpriteScalingOptions());
+            updateScalingModeButtons?.();
+          });
+        });
+      } else if (scalingModeStatusEl) {
+        scalingModeStatusEl.textContent =
+          formatSpriteScalingMode(spriteScalingMode);
       }
 
       const basemapButtons = Array.from(

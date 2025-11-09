@@ -830,6 +830,11 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    */
   readonly setHitTestEnabled: (enabled: boolean) => void;
   /**
+   * Updates the sprite scaling options applied by the layer.
+   * @param options New scaling configuration.
+   */
+  readonly setSpriteScalingOptions: (options: SpriteScalingOptions) => void;
+  /**
    * Returns the currently resolved WASM variant in use.
    */
   readonly getWasmVariant: () => SpriteLayerCalculationVariant;

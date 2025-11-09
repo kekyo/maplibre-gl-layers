@@ -18,6 +18,7 @@ import type { CustomRenderMethodInput } from 'maplibre-gl';
 import {
   type SpriteInit,
   type SpriteInitCollection,
+  type SpriteScalingOptions,
   type SpriteLayerInterface,
   type SpriteLayerOptions,
   type SpriteTextureFilteringOptions,
@@ -1099,7 +1100,7 @@ export const createSpriteLayer = <T = any>(
 ): SpriteLayerInterface<T> => {
   // Use caller-supplied layer ID when provided, otherwise fall back to a default identifier.
   const id = options?.id ?? 'sprite-layer';
-  const resolvedScaling = resolveScalingOptions(options?.spriteScaling);
+  let resolvedScaling = resolveScalingOptions(options?.spriteScaling);
   const resolvedTextureFiltering = resolveTextureFilteringOptions(
     options?.textureFiltering
   );
@@ -5154,6 +5155,12 @@ export const createSpriteLayer = <T = any>(
     return resolved;
   };
 
+  const setSpriteScalingOptions = (options: SpriteScalingOptions): void => {
+    resolvedScaling = resolveScalingOptions(options);
+    ensureRenderTargetEntries();
+    scheduleRender();
+  };
+
   /**
    * MapLibre CustomLayerInterface-compatible object exposing sprite management APIs.
    */
@@ -5184,6 +5191,7 @@ export const createSpriteLayer = <T = any>(
     mutateSprites,
     updateForEach,
     setHitTestEnabled,
+    setSpriteScalingOptions,
     getWasmVariant,
     setWasmVariant,
     on: addEventListener,
