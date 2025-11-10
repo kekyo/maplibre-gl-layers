@@ -8,7 +8,7 @@ import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync, mkdirSync, copyFileSync } from 'fs';
+import { existsSync, mkdirSync, copyFileSync, readdirSync } from 'fs';
 import dts from 'vite-plugin-dts';
 import prettierMax from 'prettier-max';
 import screwUp from 'screw-up';
@@ -42,6 +42,29 @@ const copyImagesPlugin = (): Plugin => ({
   },
 });
 
+const copyWasmArtifactsPlugin = (): Plugin => ({
+  name: 'copy-wasm-artifacts',
+  apply: 'build',
+  writeBundle() {
+    const wasmSourceDir = resolve(__dirname, 'src/wasm');
+    const wasmDestDir = resolve(__dirname, 'dist/wasm');
+    if (!existsSync(wasmSourceDir)) {
+      return;
+    }
+    if (!existsSync(wasmDestDir)) {
+      mkdirSync(wasmDestDir, { recursive: true });
+    }
+    for (const entry of readdirSync(wasmSourceDir)) {
+      if (!entry.endsWith('.wasm')) {
+        continue;
+      }
+      const src = resolve(wasmSourceDir, entry);
+      const dest = resolve(wasmDestDir, entry);
+      copyFileSync(src, dest);
+    }
+  },
+});
+
 export default defineConfig({
   plugins: [
     dts({
@@ -50,6 +73,7 @@ export default defineConfig({
     prettierMax(),
     screwUp(),
     copyImagesPlugin(),
+    copyWasmArtifactsPlugin(),
   ],
   build: {
     lib: {

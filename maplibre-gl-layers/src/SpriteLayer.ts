@@ -171,19 +171,29 @@ let spriteLayerHostVariant: WasmVariant = 'disabled';
 
 const isSpriteLayerHostEnabled = () => spriteLayerHostVariant !== 'disabled';
 
+export interface SpriteLayerHostOptions {
+  readonly variant?: SpriteLayerCalculationVariant;
+  readonly wasmBaseUrl?: string;
+}
+
 export const initializeSpriteLayerHost = async (
-  calculationVariant?: SpriteLayerCalculationVariant
+  variantOrOptions?: SpriteLayerCalculationVariant | SpriteLayerHostOptions
 ): Promise<SpriteLayerCalculationVariant> => {
+  const hostOptions =
+    typeof variantOrOptions === 'string' || variantOrOptions === undefined
+      ? { variant: variantOrOptions }
+      : variantOrOptions;
   const locker = await spriteLayerHostInitializationMutex.lock();
   try {
-    const requestedVariant = calculationVariant ?? 'simd';
+    const requestedVariant = hostOptions.variant ?? 'simd';
     if (requestedVariant === 'disabled') {
       releaseSpriteLayerHost();
       return 'disabled';
     }
-    const forceReload = calculationVariant !== undefined;
+    const forceReload = variantOrOptions !== undefined;
     spriteLayerHostVariant = await initializeWasmHost(requestedVariant, {
       force: forceReload,
+      wasmBaseUrl: hostOptions.wasmBaseUrl,
     });
     return spriteLayerHostVariant;
   } finally {

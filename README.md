@@ -140,7 +140,16 @@ That is all you need for the initial setup. After this, prepare the images and t
 
 ### Enabling and releasing WASM acceleration
 
-SpriteLayer uses the JavaScript implementation by default. Call `initializeSpriteLayerHost()` once (optionally passing `'simd' | 'nosimd' | 'disabled'`) to attempt loading the WebAssembly host. When initialization fails or is skipped, the layer continues to operate via CPU calculations.
+SpriteLayer uses the JavaScript implementation by default. Call `initializeSpriteLayerHost()` once—optionally passing either a variant (`'simd' | 'nosimd' | 'disabled'`) or an options object `{ variant?, wasmBaseUrl? }`—to attempt loading the WebAssembly host. When initialization fails or is skipped, the layer continues to operate via CPU calculations.
+
+```typescript
+await initializeSpriteLayerHost({
+  variant: 'simd',
+  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
+});
+```
+
+Use `wasmBaseUrl` when you copy the packaged `dist/wasm` directory to a different location (for example, a CDN or a custom public path). If it is omitted, the loader fetches the `.wasm` files directly next to the distributed `dist` files, allowing Vite/Rollup/webpack users to consume the npm package without extra configuration.
 
 When you no longer need the WebAssembly host—such as when the entire application is shutting down—call `releaseSpriteLayerHost()`. After releasing, the layer automatically falls back to the JavaScript implementation until `initializeSpriteLayerHost()` is called again.
 
