@@ -1414,8 +1414,7 @@ export const createCalculationHost = <TTag>(
   };
 };
 
-// TODO: For testing purpose, will be removed
-export const __createWasmProjectionCalculationHost = <TTag>(
+const __createWasmProjectionCalculationTestHost = <TTag>(
   params: ProjectionHostParams
 ): RenderCalculationHost<TTag> => {
   const projectionHost = createWasmProjectionHost(params);
@@ -1424,4 +1423,9 @@ export const __createWasmProjectionCalculationHost = <TTag>(
       prepareDrawSpriteImages(projectionHost, params),
     release: projectionHost.release,
   };
+};
+
+// Only testing purpose, DO NOT USE in production code.
+export const __wasmProjectionCalculationTestInternals = {
+  __createWasmProjectionCalculationTestHost,
 };

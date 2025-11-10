@@ -15,6 +15,8 @@
 
 import { type Map as MapLibreMap } from 'maplibre-gl';
 import type { CustomRenderMethodInput } from 'maplibre-gl';
+import { createMutex } from 'async-primitives';
+
 import {
   type SpriteInit,
   type SpriteInitCollection,
@@ -132,7 +134,11 @@ import {
   createProjectionHost,
   createProjectionHostParamsFromMapLibre,
 } from './projectionHost';
-import { initializeWasmHost, type WasmVariant } from './wasmHost';
+import {
+  initializeWasmHost,
+  releaseWasmHost,
+  type WasmVariant,
+} from './wasmHost';
 import { createWasmProjectionHost } from './wasmProjectionHost';
 import { createWasmCalculationHost } from './wasmCalculationHost';
 import {
@@ -157,6 +163,41 @@ import {
   createSpriteOriginReference,
   createRenderTargetBucketBuffers,
 } from './utils';
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+const spriteLayerHostInitializationMutex = createMutex();
+let spriteLayerHostVariant: WasmVariant = 'disabled';
+
+const isSpriteLayerHostEnabled = () => spriteLayerHostVariant !== 'disabled';
+
+export const initializeSpriteLayerHost = async (
+  calculationVariant?: SpriteLayerCalculationVariant
+): Promise<SpriteLayerCalculationVariant> => {
+  const locker = await spriteLayerHostInitializationMutex.lock();
+  try {
+    const requestedVariant = calculationVariant ?? 'simd';
+    if (requestedVariant === 'disabled') {
+      releaseSpriteLayerHost();
+      return 'disabled';
+    }
+    const forceReload = calculationVariant !== undefined;
+    spriteLayerHostVariant = await initializeWasmHost(requestedVariant, {
+      force: forceReload,
+    });
+    return spriteLayerHostVariant;
+  } finally {
+    locker.release();
+  }
+};
+
+export const releaseSpriteLayerHost = (): void => {
+  if (spriteLayerHostVariant === 'disabled') {
+    return;
+  }
+  spriteLayerHostVariant = 'disabled';
+  releaseWasmHost();
+};
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -1105,24 +1146,11 @@ export const createSpriteLayer = <T = any>(
   );
   const showDebugBounds = options?.showDebugBounds === true;
 
-  let wasmInitializationSucceeded = false;
-  let wasmInitializationVariant: WasmVariant = 'disabled';
-  const initialize = async (
-    calculationVariant?: SpriteLayerCalculationVariant
-  ): Promise<SpriteLayerCalculationVariant> => {
-    const forceReload = calculationVariant !== undefined;
-    wasmInitializationVariant = await initializeWasmHost(calculationVariant, {
-      force: forceReload,
-    });
-    wasmInitializationSucceeded = wasmInitializationVariant !== 'disabled';
-    return wasmInitializationVariant;
-  };
-
   const createProjectionHostForMap = (
     mapInstance: MapLibreMap
   ): ProjectionHost => {
     const params = createProjectionHostParamsFromMapLibre(mapInstance);
-    if (wasmInitializationSucceeded) {
+    if (isSpriteLayerHostEnabled()) {
       return createWasmProjectionHost(params);
     }
     return createProjectionHost(params);
@@ -1133,7 +1161,7 @@ export const createSpriteLayer = <T = any>(
     mapInstance: MapLibreMap
   ): RenderCalculationHost<T> => {
     const params = createProjectionHostParamsFromMapLibre(mapInstance);
-    if (wasmInitializationSucceeded) {
+    if (isSpriteLayerHostEnabled()) {
       return createWasmCalculationHost<T>(params, {
         imageIdHandler,
         imageHandleBuffersController,
@@ -5169,7 +5197,6 @@ export const createSpriteLayer = <T = any>(
     id,
     type: 'custom' as const,
     renderingMode: '2d' as const,
-    initialize,
     onAdd,
     onRemove,
     render,

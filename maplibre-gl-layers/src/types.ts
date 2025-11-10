@@ -719,15 +719,6 @@ export interface SpriteTextGlyphOptions {
  */
 export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   /**
-   * Initializes used by the layer.
-   * Safe to call multiple times; subsequent invocations resolve immediately.
-   * @param calculationVariant - Preferred calculation variant. Defaults to `simd`. When the requested variant is unavailable, the loader automatically falls back to `nosimd`, then to the JavaScript implementation.
-   * @returns Applied calculation variant.
-   */
-  readonly initialize: (
-    calculationVariant?: SpriteLayerCalculationVariant
-  ) => Promise<SpriteLayerCalculationVariant>;
-  /**
    * Registers an image or glyph so it can be referenced by sprite images.
    *
    * @param {string} imageId - Unique image identifier.

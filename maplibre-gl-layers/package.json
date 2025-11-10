@@ -37,6 +37,7 @@
     "pack": "npm run build && screw-up pack --pack-destination ../artifacts"
   },
   "dependencies": {
+    "async-primitives": ">=1.4.0",
     "maplibre-gl": ">=5.0.0"
   },
   "devDependencies": {
