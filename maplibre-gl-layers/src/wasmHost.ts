@@ -4,6 +4,7 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
+import type { Releaseable } from './internalTypes';
 import type { SpriteLayerCalculationVariant } from './types';
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -91,13 +92,76 @@ export type WasmPrepareDrawSpriteImages = (
   resultPtr: number
 ) => boolean;
 
+//////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Wasm raw pointer type.
+ */
+export type Pointer = number;
+
+/**
+ * An array element type that createTypedBuffer.
+ * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+ */
+export type TypedArrayElement<TArray> = TArray extends {
+  [index: number]: infer T;
+}
+  ? T
+  : never;
+
+/**
+ * Typed ArrayBufferView.
+ * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+ */
+export interface TypedArrayBufferView<TArray> extends ArrayBufferView {
+  /**
+   * Copy in an array.
+   * @param from An array.
+   */
+  readonly set: (from: ArrayLike<TypedArrayElement<TArray>>) => void;
+}
+
+/**
+ * TypedArrayBuffer view constructor type.
+ * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+ */
+export type TypedArrayConstructor<TArray extends TypedArrayBufferView<TArray>> =
+  {
+    readonly BYTES_PER_ELEMENT: number;
+    new (buffer: ArrayBuffer, byteOffset: number, length: number): TArray;
+  };
+
+/**
+ * The BufferHolder, capsule both wasm raw memory pointer and ArrayBufferBuffer.
+ * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+ */
+export interface BufferHolder<TArray extends TypedArrayBufferView<TArray>> {
+  /**
+   * Prepare and get the raw pointer and the buffer reference.
+   * @returns The raw pointer and the buffer reference.
+   */
+  readonly prepare: () => { ptr: Pointer; buffer: TArray };
+  /**
+   * Release the buffer.
+   * @returns
+   */
+  readonly release: () => void;
+}
+
 /**
  * Wasm host reference.
  */
 export interface WasmHost {
-  readonly memory: WebAssembly.Memory;
-  readonly malloc: (size: number) => number;
-  readonly free: (ptr: number) => void;
+  /**
+   * Helper for wasm interoperation buffer.
+   * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+   * @param ArrayType - ArrayBufferView constructor
+   * @param elements - Buffer element count or copy in data array.
+   */
+  readonly allocateTypedBuffer: <TArray extends TypedArrayBufferView<TArray>>(
+    ArrayType: TypedArrayConstructor<TArray>,
+    elements: number | ArrayLike<TypedArrayElement<TArray>>
+  ) => BufferHolder<TArray>;
 
   // ProjectionHost related functions.
   readonly fromLngLat: WasmFromLngLat;
@@ -112,14 +176,14 @@ export interface WasmHost {
 
 export type WasmVariant = SpriteLayerCalculationVariant;
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 type WasmBinaryVariant = Exclude<WasmVariant, 'disabled'>;
 
 const WASM_BINARY_PATHS: Record<WasmBinaryVariant, string> = {
   simd: './wasm/offloads-simd.wasm',
   nosimd: './wasm/offloads-nosimd.wasm',
 };
-
-//////////////////////////////////////////////////////////////////////////////////////
 
 interface RawProjectionWasmExports {
   readonly memory?: WebAssembly.Memory;
@@ -216,13 +280,26 @@ const loadWasmBinary = async (
   return await response.arrayBuffer();
 };
 
+//////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Internal interface of BufferHolder.
+ */
+interface InternalBufferHolder<TArray extends TypedArrayBufferView<TArray>>
+  extends BufferHolder<TArray> {
+  /** Is this pooled? */
+  __pooled: boolean;
+  /** Completely free heap memory */
+  readonly __free: () => void;
+}
+
 /**
  * Load wasm binary, instantiate and refer entry points.
  * @returns WasmHost
  */
 const instantiateProjectionWasm = async (
   variant: WasmBinaryVariant
-): Promise<WasmHost> => {
+): Promise<WasmHost & Releaseable> => {
   // Load wasm binary and instantiate.
   const binary = await loadWasmBinary(variant);
   const imports: WebAssembly.Imports = {};
@@ -308,10 +385,104 @@ const instantiateProjectionWasm = async (
     throw new Error('Projection host WASM exports are incomplete.');
   }
 
+  /** Pooled BufferHolder, grouping by the type and length. */
+  const pool = new Map<
+    TypedArrayConstructor<any>,
+    Map<number, InternalBufferHolder<any>>
+  >();
+
+  /**
+   * Allocate a buffer.
+   * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+   * @param length Buffer length (not size)
+   * @param ArrayType - ArrayBufferView constructor
+   * @returns `InternalBufferHolder<TArray>`
+   */
+  const allocate = <TArray extends TypedArrayBufferView<TArray>>(
+    length: number,
+    ArrayType: TypedArrayConstructor<TArray>
+  ) => {
+    let typedPool = pool.get(ArrayType);
+    if (!typedPool) {
+      typedPool = new Map();
+      pool.set(ArrayType, typedPool);
+    }
+
+    let candidate = typedPool.get(length) as
+      | InternalBufferHolder<TArray>
+      | undefined;
+    if (!candidate) {
+      let ptr = malloc(length * ArrayType.BYTES_PER_ELEMENT);
+      let buffer: TArray = new ArrayType(memory.buffer, ptr, length);
+      const prepare = () => {
+        if (ptr === 0) {
+          throw new Error('Buffer already freed.');
+        }
+        // Out of dated the buffer
+        if (buffer.buffer !== memory.buffer) {
+          buffer = new ArrayType(memory.buffer, ptr, length);
+        }
+        return { ptr, buffer };
+      };
+      let __pooled = false;
+      const release = () => {
+        if (!__pooled) {
+          __pooled = true;
+          typedPool.set(length, candidate!);
+        }
+      };
+      const __free = () => {
+        free(ptr);
+        ptr = 0;
+        buffer = undefined!;
+      };
+      candidate = { prepare, release, __pooled, __free };
+    } else {
+      typedPool.delete(length);
+      candidate.__pooled = false;
+    }
+
+    return candidate;
+  };
+
+  /**
+   * Helper for wasm interoperation buffer.
+   * @param TArray - A type for ArrayBufferView (ex: Float64Array)
+   * @param ArrayType - ArrayBufferView constructor
+   * @param elements - Buffer element count or copy in data array.
+   */
+  const allocateTypedBuffer = <TArray extends TypedArrayBufferView<TArray>>(
+    ArrayType: TypedArrayConstructor<TArray>,
+    elements: number | ArrayLike<TypedArrayElement<TArray>>
+  ): BufferHolder<TArray> => {
+    const isElementLength = typeof elements === 'number';
+    const length = isElementLength ? elements : elements.length;
+
+    const candidate = allocate(length, ArrayType);
+
+    // Copy in initial values
+    if (!isElementLength) {
+      const { buffer } = candidate.prepare();
+      buffer.set(elements);
+    }
+
+    return candidate;
+  };
+
+  /**
+   * Free overall pooled buffers.
+   */
+  const release = () => {
+    pool.forEach((typedPool) => {
+      typedPool.forEach((holder) => {
+        holder.__free();
+      });
+    });
+    pool.clear();
+  };
+
   return {
-    memory,
-    malloc,
-    free,
+    allocateTypedBuffer,
     fromLngLat,
     project,
     unproject,
@@ -320,23 +491,18 @@ const instantiateProjectionWasm = async (
     calculateBillboardDepthKey,
     calculateSurfaceDepthKey,
     prepareDrawSpriteImages,
+    release,
   };
 };
 
-/** Resolved projection_wasm.cpp */
-let projectionWasmResolved: WasmHost | null = null;
-let wasmInitializationResult: WasmVariant | undefined;
-let wasmInitializationPromise: Promise<WasmVariant> | null = null;
-
-const attemptInitializeWasm = async (
+const initializeWasmHostInternal = async (
   preferredVariant: WasmVariant
-): Promise<WasmVariant> => {
+): Promise<[WasmVariant, (WasmHost & Releaseable) | undefined]> => {
   if (preferredVariant === 'disabled') {
-    projectionWasmResolved = null;
     console.log(
       'maplibre-gl-layers: Wasm execution disabled by configuration.'
     );
-    return 'disabled';
+    return ['disabled', undefined];
   }
 
   const variantsToTry: WasmBinaryVariant[] =
@@ -344,12 +510,11 @@ const attemptInitializeWasm = async (
 
   for (const variant of variantsToTry) {
     try {
-      const host = await instantiateProjectionWasm(variant);
-      projectionWasmResolved = host;
+      const wasmHost = await instantiateProjectionWasm(variant);
       console.log(
         `maplibre-gl-layers: Initialized wasm module (variant: ${variant}).`
       );
-      return variant;
+      return [variant, wasmHost];
     } catch (error) {
       console.warn(
         `maplibre-gl-layers: Failed to initialize ${variant} wasm module.`,
@@ -361,42 +526,55 @@ const attemptInitializeWasm = async (
   console.warn(
     'maplibre-gl-layers: Falling back to JavaScript implementation.'
   );
-  projectionWasmResolved = null;
-  return 'disabled';
+  return ['disabled', undefined];
 };
 
+let currentVariant: WasmVariant = 'disabled';
+let currentWasmHost: (WasmHost & Releaseable) | undefined;
+
 /**
- * Initialize wasm host.
- * @returns The resolved variant.
+ * Wasm initialization options.
  */
-interface InitializeWasmHostOptions {
+export interface InitializeWasmHostOptions {
+  /** Force initialization. Default is false. */
   readonly force?: boolean;
 }
 
+/**
+ * Initialize wasm offload module.
+ * @param preferredVariant Uses wasm offload module variant.
+ * @param options Options.
+ * @returns Initialized WasmHost.
+ */
 export const initializeWasmHost = async (
-  preferredVariant: WasmVariant = 'simd',
+  preferredVariant: WasmVariant,
   options?: InitializeWasmHostOptions
 ): Promise<WasmVariant> => {
+
   if (options?.force) {
-    projectionWasmResolved = null;
-    wasmInitializationResult = undefined;
-    wasmInitializationPromise = null;
+    currentWasmHost = undefined;
   }
 
-  if (wasmInitializationResult !== undefined) {
-    return wasmInitializationResult;
+  if (currentWasmHost !== undefined) {
+    return currentVariant;
   }
 
-  if (!wasmInitializationPromise) {
-    wasmInitializationPromise = attemptInitializeWasm(preferredVariant).finally(
-      () => {
-        wasmInitializationPromise = null;
-      }
-    );
-  }
+  const [variant, wasmHost] = await initializeWasmHostInternal(preferredVariant);
+  currentVariant = variant;
+  currentWasmHost = wasmHost;
 
-  wasmInitializationResult = await wasmInitializationPromise;
-  return wasmInitializationResult;
+  return variant;
+};
+
+/**
+ * Release wasm offload module.
+ */
+export const releaseWasmHost = () => {
+  if (currentWasmHost) {
+    currentWasmHost.release();
+    currentWasmHost = undefined;
+    currentVariant = 'disabled';
+  }
 };
 
 /**
@@ -404,106 +582,8 @@ export const initializeWasmHost = async (
  * @returns Entry points.
  */
 export const prepareWasmHost = (): WasmHost => {
-  if (!projectionWasmResolved) {
+  if (!currentWasmHost) {
     throw new Error('Could not use WasmHost, needs before initialization.');
   }
-  return projectionWasmResolved;
-};
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-/**
- * An array element type that createTypedBuffer.
- * @param TArray - A type for ArrayBufferView (ex: Float64Array)
- */
-export type TypedArrayElement<TArray> = TArray extends {
-  [index: number]: infer T;
-}
-  ? T
-  : never;
-
-/**
- * Typed ArrayBufferView.
- * @param TArray - A type for ArrayBufferView (ex: Float64Array)
- */
-export interface TypedArrayBufferView<TArray> extends ArrayBufferView {
-  /**
-   * Copy in an array.
-   * @param from An array.
-   */
-  readonly set: (from: ArrayLike<TypedArrayElement<TArray>>) => void;
-}
-
-/**
- * TypedArrayBuffer view constructor type.
- * @param TArray - A type for ArrayBufferView (ex: Float64Array)
- */
-export type TypedArrayConstructor<TArray extends TypedArrayBufferView<TArray>> =
-  {
-    readonly BYTES_PER_ELEMENT: number;
-    new (buffer: ArrayBuffer, byteOffset: number, length: number): TArray;
-  };
-
-/**
- * The BufferHolder, capsule both wasm raw memory pointer and ArrayBufferBuffer.
- * @param TArray - A type for ArrayBufferView (ex: Float64Array)
- */
-export interface BufferHolder<TArray extends TypedArrayBufferView<TArray>> {
-  /**
-   * Prepare and get the raw pointer and the buffer reference.
-   * @returns The raw pointer and the buffer reference.
-   */
-  readonly prepare: () => { ptr: number; buffer: TArray };
-  /**
-   * Release the buffer.
-   * @returns
-   */
-  readonly release: () => void;
-}
-
-/**
- * Helper for wasm interoperation buffer.
- * @param TArray - A type for ArrayBufferView (ex: Float64Array)
- * @param wasm - WasmHost
- * @param ArrayType - ArrayBufferView constructor
- * @param elements - Buffer element count or copy in data array.
- */
-export const createTypedBuffer = <TArray extends TypedArrayBufferView<TArray>>(
-  wasm: WasmHost,
-  ArrayType: TypedArrayConstructor<TArray>,
-  elements: number | ArrayLike<TypedArrayElement<TArray>>
-): BufferHolder<TArray> => {
-  const isElementLength = typeof elements === 'number';
-  const length = isElementLength ? elements : elements.length;
-
-  let ptr = wasm.malloc(length * ArrayType.BYTES_PER_ELEMENT);
-  let buffer: TArray = new ArrayType(wasm.memory.buffer, ptr, length);
-
-  if (!isElementLength) {
-    buffer.set(elements);
-  }
-
-  const prepare = () => {
-    if (ptr === 0) {
-      throw new Error('Buffer already freed.');
-    }
-    // Out of dated the buffer
-    if (buffer.buffer !== wasm.memory.buffer) {
-      buffer = new ArrayType(wasm.memory.buffer, ptr, length);
-    }
-    return { ptr, buffer };
-  };
-
-  const release = () => {
-    if (ptr !== 0) {
-      wasm.free(ptr);
-      ptr = 0;
-      buffer = undefined!;
-    }
-  };
-
-  return {
-    prepare,
-    release,
-  };
+  return currentWasmHost;
 };

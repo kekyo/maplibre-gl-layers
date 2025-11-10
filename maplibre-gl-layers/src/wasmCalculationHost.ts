@@ -28,18 +28,12 @@ import type {
   SpriteScreenPoint,
   SpriteMode,
 } from './types';
-import {
-  createTypedBuffer,
-  prepareWasmHost,
-  type BufferHolder,
-  type WasmHost,
-} from './wasmHost';
+import { prepareWasmHost, type BufferHolder, type WasmHost } from './wasmHost';
 import {
   prepareProjectionState,
   type PreparedProjectionState,
   type ProjectionHostParams,
 } from './projectionHost';
-import { __createWasmProjectionCalculationHost } from './calculationHost';
 import {
   MIN_CLIP_Z_EPSILON,
   TRIANGLE_INDICES,
@@ -70,15 +64,13 @@ const WASM_ProjectLngLatToClipSpace_RESULT_ELEMENT_COUNT = 4;
  */
 const createProjectLngLatToClipSpace = (wasm: WasmHost) => {
   // Allocate a matrix buffer.
-  const matrixHolder = createTypedBuffer(
-    wasm,
+  const matrixHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_ProjectLngLatToClipSpace_MATRIX_ELEMENT_COUNT
   );
 
   // Allocate a result buffer.
-  const resultHolder = createTypedBuffer(
-    wasm,
+  const resultHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_ProjectLngLatToClipSpace_RESULT_ELEMENT_COUNT
   );
@@ -165,22 +157,19 @@ const createCalculateBillboardDepthKey = (
   }
 
   // Allocate an inverse matrix buffer.
-  const inverseHolder = createTypedBuffer(
-    wasm,
+  const inverseHolder = wasm.allocateTypedBuffer(
     Float64Array,
     preparedState.pixelMatrixInverse
   );
 
   // Allocate a mercator matrix buffer.
-  const mercatorHolder = createTypedBuffer(
-    wasm,
+  const mercatorHolder = wasm.allocateTypedBuffer(
     Float64Array,
     preparedState.clipContext.mercatorMatrix
   );
 
   // Allocate a result buffer.
-  const resultHolder = createTypedBuffer(
-    wasm,
+  const resultHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_CalculateBillboardDepthKey_RESULT_ELEMENT_COUNT
   );
@@ -267,22 +256,19 @@ const createCalculateSurfaceDepthKey = (
   }
 
   // Allocate buffers for immutable matrices.
-  const mercatorHolder = createTypedBuffer(
-    wasm,
+  const mercatorHolder = wasm.allocateTypedBuffer(
     Float64Array,
     preparedState.clipContext.mercatorMatrix
   );
 
-  const displacementHolder = createTypedBuffer(
-    wasm,
+  const displacementHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_CalculateSurfaceDepthKey_DISPLACEMENT_ELEMENT_COUNT
   );
 
-  const indexHolder = createTypedBuffer(wasm, Int32Array, TRIANGLE_INDICES);
+  const indexHolder = wasm.allocateTypedBuffer(Int32Array, TRIANGLE_INDICES);
 
-  const resultHolder = createTypedBuffer(
-    wasm,
+  const resultHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_CalculateSurfaceDepthKey_RESULT_ELEMENT_COUNT
   );
@@ -823,8 +809,7 @@ const prepareDrawSpriteImagesInternal = <TTag>(
     const resultElementCount = computeResultElementCount(
       inputBuffer.resultItemCount
     );
-    const resultBuffer = createTypedBuffer(
-      wasm,
+    const resultBuffer = wasm.allocateTypedBuffer(
       Float64Array,
       resultElementCount
     );
@@ -918,8 +903,7 @@ const convertToWasmProjectionState = <TTag>(
       resultItemCount
     );
 
-    const parameterHolder = createTypedBuffer(
-      wasm,
+    const parameterHolder = wasm.allocateTypedBuffer(
       Float64Array,
       requiredElements
     );
@@ -1128,7 +1112,6 @@ export const createWasmCalculationHost = <TTag>(
 
   // Prepare parameters.
   const wasmState = convertToWasmProjectionState<TTag>(wasm, params, deps);
-  //let baseHost: RenderCalculationHost<TTag> | null = null;
   try {
     return {
       prepareDrawSpriteImages: (params) =>
@@ -1140,6 +1123,7 @@ export const createWasmCalculationHost = <TTag>(
   }
 };
 
+// Only testing purpose, DO NOT USE in production code.
 export const __wasmCalculationTestInternals = {
   convertToWasmProjectionState,
   converToPreparedDrawImageParams,

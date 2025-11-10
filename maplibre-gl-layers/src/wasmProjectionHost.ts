@@ -11,7 +11,7 @@ import {
 } from './projectionHost';
 import type { ProjectionHost, SpriteMercatorCoordinate } from './internalTypes';
 import type { SpriteLocation, SpritePoint } from './types';
-import { createTypedBuffer, prepareWasmHost, type WasmHost } from './wasmHost';
+import { prepareWasmHost, type WasmHost } from './wasmHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -24,8 +24,7 @@ const WASM_FromLngLat_RESULT_ELEMENT_COUNT = 3;
  */
 const createFromLngLat = (wasm: WasmHost) => {
   // Allocate a result buffer.
-  const resultHolder = createTypedBuffer(
-    wasm,
+  const resultHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_FromLngLat_RESULT_ELEMENT_COUNT
   );
@@ -82,15 +81,13 @@ const createProject = (
   }
 
   // Allocate a matrix buffer.
-  const matrixHolder = createTypedBuffer(
-    wasm,
+  const matrixHolder = wasm.allocateTypedBuffer(
     Float64Array,
     preparedState.pixelMatrix
   );
 
   // Allocate a result buffer.
-  const resultHolder = createTypedBuffer(
-    wasm,
+  const resultHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_Project_RESULT_ELEMENT_COUNT
   );
@@ -159,15 +156,13 @@ const createUnproject = (
   }
 
   // Allocate a matrix buffer.
-  const matrixHolder = createTypedBuffer(
-    wasm,
+  const matrixHolder = wasm.allocateTypedBuffer(
     Float64Array,
     preparedState.pixelMatrixInverse
   );
 
   // Allocate a result buffer.
-  const resultHolder = createTypedBuffer(
-    wasm,
+  const resultHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_Unproject_RESULT_ELEMENT_COUNT
   );
@@ -238,20 +233,17 @@ const createCalculatePerspectiveRatio = (
     return d;
   }
 
-  const matrixHolder = createTypedBuffer(
-    wasm,
+  const matrixHolder = wasm.allocateTypedBuffer(
     Float64Array,
     preparedState.mercatorMatrix
   );
 
-  const cachedMercatorHolder = createTypedBuffer(
-    wasm,
+  const cachedMercatorHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_CalculatePerspectiveRatio_CACHED_MERCATOR_ELEMENT_COUNT
   );
 
-  const resultHolder = createTypedBuffer(
-    wasm,
+  const resultHolder = wasm.allocateTypedBuffer(
     Float64Array,
     WASM_CalculatePerspectiveRatio_RESULT_ELEMENT_COUNT
   );

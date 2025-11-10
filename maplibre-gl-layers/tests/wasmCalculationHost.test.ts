@@ -10,7 +10,13 @@ import {
   __wasmCalculationTestInternals,
   type WasmCalculationInteropDependencies,
 } from '../src/wasmCalculationHost';
-import { createTypedBuffer, type WasmHost } from '../src/wasmHost';
+import {
+  type BufferHolder,
+  type TypedArrayBufferView,
+  type TypedArrayConstructor,
+  type TypedArrayElement,
+  type WasmHost,
+} from '../src/wasmHost';
 import { createIdHandler } from '../src/utils';
 import type {
   InternalSpriteCurrentState,
@@ -48,6 +54,8 @@ class MockWasmHost implements WasmHost {
   readonly memory = new WebAssembly.Memory({ initial: 4 });
   private offset = 8;
 
+  release(): void {}
+
   malloc(size: number): number {
     const aligned = (size + 7) & ~7;
     const ptr = this.offset;
@@ -61,6 +69,38 @@ class MockWasmHost implements WasmHost {
   }
 
   free(_ptr: number): void {}
+
+  allocateTypedBuffer<TArray extends TypedArrayBufferView<TArray>>(
+    ArrayType: TypedArrayConstructor<TArray>,
+    elements: number | ArrayLike<TypedArrayElement<TArray>>
+  ): BufferHolder<TArray> {
+    const length = typeof elements === 'number' ? elements : elements.length;
+    const bytes = length * ArrayType.BYTES_PER_ELEMENT;
+    const ptr = this.malloc(bytes);
+    let buffer = new ArrayType(this.memory.buffer, ptr, length);
+    let released = false;
+    const holder: BufferHolder<TArray> = {
+      prepare: () => {
+        if (released) {
+          throw new Error('Buffer already released.');
+        }
+        if (buffer.buffer !== this.memory.buffer) {
+          buffer = new ArrayType(this.memory.buffer, ptr, length);
+        }
+        return { ptr, buffer };
+      },
+      release: () => {
+        if (!released) {
+          released = true;
+          this.free(ptr);
+        }
+      },
+    };
+    if (typeof elements !== 'number') {
+      holder.prepare().buffer.set(elements);
+    }
+    return holder;
+  }
 
   fromLngLat(): boolean {
     return true;
@@ -311,8 +351,7 @@ describe('converToDrawImageParams', () => {
     const { parameterHolder } = state.prepareInputBuffer(params);
     expect(state.getImageRefs().length).toBe(1);
     try {
-      const resultBuffer = createTypedBuffer(
-        wasm,
+      const resultBuffer = wasm.allocateTypedBuffer(
         Float64Array,
         RESULT_HEADER_LENGTH + RESULT_ITEM_STRIDE
       );

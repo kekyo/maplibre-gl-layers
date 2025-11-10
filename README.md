@@ -28,7 +28,10 @@ Here is a minimal example that adds a single sprite:
 ```typescript
 // Use MapLibre GL JS together with maplibre-gl-layers
 import { Map } from 'maplibre-gl';
-import { createSpriteLayer } from 'maplibre-gl-layers';
+import {
+  createSpriteLayer,
+  initializeSpriteLayerHost,
+} from 'maplibre-gl-layers';
 
 // Create the MapLibre instance
 const map = new Map({
@@ -43,8 +46,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // Add the layer after the map finishes loading
 map.on('load', async () => {
-  // Initialize SpriteLayer
-  await spriteLayer.initialize();
+  // Optional: enable WASM acceleration (falls back to JS when unavailable)
+  await initializeSpriteLayerHost();
   map.addLayer(spriteLayer);
 
   // Register an image that can be referenced by sprites
@@ -105,7 +108,10 @@ First create a `SpriteLayer` instance and add it to the MapLibre map.
 ```typescript
 // Use MapLibre GL JS
 import { Map } from 'maplibre-gl';
-import { createSpriteLayer } from 'maplibre-gl-layers';
+import {
+  createSpriteLayer,
+  initializeSpriteLayerHost,
+} from 'maplibre-gl-layers';
 
 // Create the MapLibre map with your desired style and initial view
 const map = new Map({
@@ -120,8 +126,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // When MapLibre is ready
 map.on('load', async () => {
-  // Initialize SpriteLayer
-  await spriteLayer.initialize();
+  // Enable WASM acceleration (optional, defaults to JS calculations)
+  await initializeSpriteLayerHost();
 
   // Add the layer once
   map.addLayer(spriteLayer);
@@ -131,6 +137,12 @@ map.on('load', async () => {
 ```
 
 That is all you need for the initial setup. After this, prepare the images and text you want to render and start displaying sprites.
+
+### Enabling and releasing WASM acceleration
+
+SpriteLayer uses the JavaScript implementation by default. Call `initializeSpriteLayerHost()` once (optionally passing `'simd' | 'nosimd' | 'disabled'`) to attempt loading the WebAssembly host. When initialization fails or is skipped, the layer continues to operate via CPU calculations.
+
+When you no longer need the WebAssembly host—such as when the entire application is shutting down—call `releaseSpriteLayerHost()`. After releasing, the layer automatically falls back to the JavaScript implementation until `initializeSpriteLayerHost()` is called again.
 
 ## Registering Images and Text
 
