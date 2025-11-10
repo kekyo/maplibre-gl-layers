@@ -305,6 +305,7 @@ const createCalculatePerspectiveRatio = (
   // Attach releaser
   calculatePerspectiveRatio.release = () => {
     matrixHolder.release();
+    cachedMercatorHolder.release();
     resultHolder.release();
   };
 

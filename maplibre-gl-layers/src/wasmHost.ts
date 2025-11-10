@@ -9,6 +9,11 @@ import type { SpriteLayerCalculationVariant } from './types';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
+const BUFFER_POOL_ENTRY_TTL_MS = 5_000;
+const BUFFER_POOL_SWEEP_INTERVAL_MS = 3_000;
+
+//////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * `fromLngLat` function parameter
  */
@@ -287,10 +292,17 @@ const loadWasmBinary = async (
  */
 interface InternalBufferHolder<TArray extends TypedArrayBufferView<TArray>>
   extends BufferHolder<TArray> {
+  __ptr: Pointer;
+  __buffer: TArray;
+  __length: number;
   /** Is this pooled? */
   __pooled: boolean;
+  /** Last time this holder returned to the pool. */
+  __lastReleasedAt: number;
   /** Completely free heap memory */
-  readonly __free: () => void;
+  __free: () => void;
+  prepare: () => { ptr: Pointer; buffer: TArray };
+  release: () => void;
 }
 
 /**
@@ -388,8 +400,70 @@ const instantiateProjectionWasm = async (
   /** Pooled BufferHolder, grouping by the type and length. */
   const pool = new Map<
     TypedArrayConstructor<any>,
-    Map<number, InternalBufferHolder<any>>
+    Map<number, InternalBufferHolder<any>[]>
   >();
+  let destroyed = false;
+  let sweepTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const getNow = () =>
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
+
+  const sweepPool = () => {
+    if (destroyed || pool.size === 0) {
+      return;
+    }
+
+    const limit = getNow() - BUFFER_POOL_ENTRY_TTL_MS;
+    const emptyTypeKeys: TypedArrayConstructor<any>[] = [];
+    pool.forEach((typedPool, typeKey) => {
+      const emptyLengths: number[] = [];
+      typedPool.forEach((stack, length) => {
+        let writeIndex = 0;
+        for (let i = 0; i < stack.length; i++) {
+          const holder = stack[i]!;
+          if (!holder.__pooled) {
+            continue;
+          }
+          if (holder.__lastReleasedAt <= limit) {
+            //console.log(`freed:${holder.__length}`);
+            holder.__free();
+            continue;
+          }
+          stack[writeIndex++] = holder;
+        }
+        if (writeIndex === 0) {
+          stack.length = 0;
+          emptyLengths.push(length);
+        } else {
+          stack.length = writeIndex;
+        }
+      });
+      emptyLengths.forEach((length) => typedPool.delete(length));
+      if (typedPool.size === 0) {
+        emptyTypeKeys.push(typeKey);
+      }
+    });
+    emptyTypeKeys.forEach((typeKey) => pool.delete(typeKey));
+
+    if (!destroyed && pool.size > 0) {
+      sweepTimer = setTimeout(() => {
+        sweepTimer = undefined;
+        sweepPool();
+      }, BUFFER_POOL_SWEEP_INTERVAL_MS);
+    }
+  };
+
+  const schedulePoolSweep = () => {
+    if (destroyed || pool.size === 0 || sweepTimer) {
+      return;
+    }
+    sweepTimer = setTimeout(() => {
+      sweepTimer = undefined;
+      sweepPool();
+    }, BUFFER_POOL_SWEEP_INTERVAL_MS);
+  };
 
   /**
    * Allocate a buffer.
@@ -408,38 +482,85 @@ const instantiateProjectionWasm = async (
       pool.set(ArrayType, typedPool);
     }
 
-    let candidate = typedPool.get(length) as
-      | InternalBufferHolder<TArray>
+    let stack = typedPool.get(length) as
+      | InternalBufferHolder<TArray>[]
       | undefined;
+    let candidate: InternalBufferHolder<TArray> | undefined;
+    if (stack && stack.length > 0) {
+      candidate = stack.pop();
+      if (stack.length === 0) {
+        typedPool.delete(length);
+        if (typedPool.size === 0) {
+          pool.delete(ArrayType);
+        }
+      }
+    }
     if (!candidate) {
+      //console.log(`allocated: ${length}`);
       let ptr = malloc(length * ArrayType.BYTES_PER_ELEMENT);
       let buffer: TArray = new ArrayType(memory.buffer, ptr, length);
       const prepare = () => {
-        if (ptr === 0) {
+        if (candidate!.__ptr === 0) {
           throw new Error('Buffer already freed.');
         }
         // Out of dated the buffer
-        if (buffer.buffer !== memory.buffer) {
-          buffer = new ArrayType(memory.buffer, ptr, length);
+        if (candidate!.__buffer.buffer !== memory.buffer) {
+          candidate!.__buffer = new ArrayType(
+            memory.buffer,
+            candidate!.__ptr,
+            length
+          );
         }
-        return { ptr, buffer };
+        return { ptr: candidate!.__ptr, buffer: candidate!.__buffer };
       };
-      let __pooled = false;
       const release = () => {
-        if (!__pooled) {
-          __pooled = true;
-          typedPool.set(length, candidate!);
+        if (candidate!.__pooled) {
+          return;
         }
+        if (destroyed) {
+          candidate!.__free();
+          return;
+        }
+        candidate!.__pooled = true;
+        candidate!.__lastReleasedAt = getNow();
+        let stack = typedPool!.get(length);
+        if (!stack) {
+          stack = [];
+          typedPool!.set(length, stack);
+        }
+        if (!pool.has(ArrayType)) {
+          pool.set(ArrayType, typedPool!);
+        }
+        stack.push(candidate!);
+        schedulePoolSweep();
       };
       const __free = () => {
-        free(ptr);
-        ptr = 0;
-        buffer = undefined!;
+        if (candidate!.__ptr) {
+          //console.log(`freed: ${length}`);
+          free(candidate!.__ptr);
+          candidate!.__ptr = 0;
+          candidate!.__buffer = undefined!;
+          candidate!.__length = 0;
+          candidate!.__pooled = false;
+          candidate!.__lastReleasedAt = 0;
+          candidate!.__free = undefined!;
+          candidate!.prepare = undefined!;
+          candidate!.release = undefined!;
+        }
       };
-      candidate = { prepare, release, __pooled, __free };
+      candidate = {
+        prepare,
+        release,
+        __ptr: ptr,
+        __buffer: buffer,
+        __length: length,
+        __pooled: false,
+        __lastReleasedAt: 0,
+        __free,
+      };
     } else {
-      typedPool.delete(length);
       candidate.__pooled = false;
+      candidate.__lastReleasedAt = 0;
     }
 
     return candidate;
@@ -473,10 +594,22 @@ const instantiateProjectionWasm = async (
    * Free overall pooled buffers.
    */
   const release = () => {
+    if (destroyed) {
+      return;
+    }
+    destroyed = true;
+    if (sweepTimer) {
+      clearTimeout(sweepTimer);
+      sweepTimer = undefined;
+    }
     pool.forEach((typedPool) => {
-      typedPool.forEach((holder) => {
-        holder.__free();
+      typedPool.forEach((stack) => {
+        stack.forEach((holder) => {
+          holder.__free();
+        });
+        stack.length = 0;
       });
+      typedPool.clear();
     });
     pool.clear();
   };
@@ -550,7 +683,6 @@ export const initializeWasmHost = async (
   preferredVariant: WasmVariant,
   options?: InitializeWasmHostOptions
 ): Promise<WasmVariant> => {
-
   if (options?.force) {
     currentWasmHost = undefined;
   }
@@ -559,7 +691,8 @@ export const initializeWasmHost = async (
     return currentVariant;
   }
 
-  const [variant, wasmHost] = await initializeWasmHostInternal(preferredVariant);
+  const [variant, wasmHost] =
+    await initializeWasmHostInternal(preferredVariant);
   currentVariant = variant;
   currentWasmHost = wasmHost;
 
