@@ -25,7 +25,10 @@ Here is a minimal example that places a single sprite:
 ```typescript
 // Use MapLibre GL JS together with maplibre-gl-layers
 import { Map } from 'maplibre-gl';
-import { createSpriteLayer } from 'maplibre-gl-layers';
+import {
+  createSpriteLayer,
+  initializeSpriteLayerHost,
+} from 'maplibre-gl-layers';
 
 // Create the MapLibre instance
 const map = new Map({
@@ -38,8 +41,10 @@ const map = new Map({
 // Create the SpriteLayer
 const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
-// Add the layer after the map finishes loading
+// When MapLibre is ready
 map.on('load', async () => {
+  // Optional: enable WASM acceleration (falls back to JS when unavailable)
+  await initializeSpriteLayerHost();
   map.addLayer(spriteLayer);
 
   // Register an image that can be referenced by sprites

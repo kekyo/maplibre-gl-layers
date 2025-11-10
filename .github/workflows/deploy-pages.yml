@@ -66,13 +66,38 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Capture Node binary path
+        if: steps.check-merge.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          HOST_NODE_BIN="$(dirname "$(which node)")"
+          echo "HOST_NODE_BIN=${HOST_NODE_BIN}" >> "$GITHUB_ENV"
+
+      - name: Setup Emscripten SDK
+        if: steps.check-merge.outputs.deploy == 'true'
+        env:
+          EMSDK_DIR: ${{ runner.temp }}/emsdk
+        run: |
+          set -euo pipefail
+          ./setup_emsdk.sh --emsdk-dir "${EMSDK_DIR}"
+          echo "EMSDK_DIR=${EMSDK_DIR}" >> "$GITHUB_ENV"
+          echo "EMSDK_ENV_FILE=${EMSDK_DIR}/emsdk_env.sh" >> "$GITHUB_ENV"
+
       - name: Install dependencies
         if: steps.check-merge.outputs.deploy == 'true'
-        run: npm install
+        run: |
+          set -euo pipefail
+          source "${EMSDK_ENV_FILE}"
+          export PATH="${HOST_NODE_BIN}:${PATH}"
+          npm install
 
       - name: Build demo workspace
         if: steps.check-merge.outputs.deploy == 'true'
-        run: npm run build
+        run: |
+          set -euo pipefail
+          source "${EMSDK_ENV_FILE}"
+          export PATH="${HOST_NODE_BIN}:${PATH}"
+          npm run build
 
       - name: Upload Pages artifact
         if: steps.check-merge.outputs.deploy == 'true'

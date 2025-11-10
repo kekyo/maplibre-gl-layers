@@ -1,10 +1,20 @@
+// maplibre-gl-layers - MapLibre's layer extension library enabling
+// the display, movement, and modification of large numbers of dynamic sprite images
+// Copyright (c) Kouji Matsui (@kekyo@mi.kekyo.net)
+// Under MIT
+// https://github.com/kekyo/maplibre-gl-layers
+
 import './style.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { Map, type MapOptions, type SourceSpecification } from 'maplibre-gl';
 import {
   createSpriteLayer,
+  initializeSpriteLayerHost,
+  releaseSpriteLayerHost,
   STANDARD_SPRITE_SCALING_OPTIONS,
+  UNLIMITED_SPRITE_SCALING_OPTIONS,
+  type SpriteLayerCalculationVariant,
 } from 'maplibre-gl-layers';
 import type {
   SpriteMode,
@@ -17,6 +27,7 @@ import type {
   SpriteInitEntry,
   SpriteTextGlyphOptions,
   SpriteImageRegisterOptions,
+  SpriteLayerInterface,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -34,6 +45,9 @@ const INITIAL_NUMBER_OF_SPRITES = 1000;
  * Interval in milliseconds between movement updates.
  */
 const MOVEMENT_INTERVAL_MS = 500;
+
+/** Identifier assigned to the sprite layer instance registered with MapLibre. */
+const SPRITE_LAYER_ID = 'demo-sprite';
 
 /**
  * Center position used as the demo origin.
@@ -169,7 +183,7 @@ const SECONDARY_IMAGE_SCALE = 0.5;
 /** Distance in meters that secondary images orbit from their primary marker. */
 const SECONDARY_ORBIT_RADIUS_METERS = 180;
 /** Angular increment in degrees applied to the orbiting image during each step. */
-const SECONDARY_ORBIT_STEP_DEG = 20;
+const SECONDARY_ORBIT_STEP_DEG = 45;
 /** Fixed angle (deg) used when the orbit mode is set to Shift. */
 const SECONDARY_SHIFT_ANGLE_DEG = 120;
 
@@ -211,6 +225,27 @@ const formatMovementSpeedScale = (scale: number): string => {
   }
   return `${scale.toFixed(2)}×`;
 };
+
+const formatWasmVariantLabel = (
+  variant: SpriteLayerCalculationVariant
+): string => {
+  switch (variant) {
+    case 'simd':
+      return 'SIMD';
+    case 'nosimd':
+      return 'No SIMD';
+    default:
+      return 'Disabled';
+  }
+};
+
+const formatSpriteScalingMode = (mode: 'standard' | 'unlimited'): string =>
+  mode === 'standard' ? 'Standard' : 'Unlimited';
+
+const resolveSpriteScalingOptions = () =>
+  spriteScalingMode === 'standard'
+    ? STANDARD_SPRITE_SCALING_OPTIONS
+    : UNLIMITED_SPRITE_SCALING_OPTIONS;
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -442,6 +477,8 @@ let currentSpriteMode: SpriteMode = 'surface';
 let isAutoRotationEnabled = true;
 /** Enables movement interpolation; when false, updates happen per step only. */
 let isMovementInterpolationEnabled = true;
+let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
+let spriteScalingMode: 'standard' | 'unlimited' = 'standard';
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
@@ -509,6 +546,91 @@ const createHud = () => {
         Each sprite stays clamped to the ground and randomly chooses between screen-aligned and map-aligned orientations. Increase the count to as many as ${MAX_NUMBER_OF_SPRITES} sprites when needed.
       </p>
       <p>Pan, tilt, or zoom the map to inspect how the sprites respond.</p>
+      <div class="control-group" data-testid="group-wasm-mode">
+        <div class="status-row">
+          <span class="status-label">Active</span>
+          <span
+            class="status-value"
+            data-status="wasm-mode-status"
+            data-testid="status-wasm-mode"
+          >${formatWasmVariantLabel(requestedCalculationVariant)}</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-button${
+            requestedCalculationVariant === 'simd' ? ' active' : ''
+          }"
+          data-control="wasm-mode"
+          data-option="simd"
+          data-label="Wasm SIMD"
+          aria-pressed="${requestedCalculationVariant === 'simd'}"
+          data-testid="toggle-wasm-simd"
+        >
+          Wasm SIMD
+        </button>
+        <button
+          type="button"
+          class="toggle-button${
+            requestedCalculationVariant === 'nosimd' ? ' active' : ''
+          }"
+          data-control="wasm-mode"
+          data-option="nosimd"
+          data-label="Wasm No SIMD"
+          aria-pressed="${requestedCalculationVariant === 'nosimd'}"
+          data-testid="toggle-wasm-nosimd"
+        >
+          Wasm No SIMD
+        </button>
+        <button
+          type="button"
+          class="toggle-button${
+            requestedCalculationVariant === 'disabled' ? ' active' : ''
+          }"
+          data-control="wasm-mode"
+          data-option="disabled"
+          data-label="Disabled"
+          aria-pressed="${requestedCalculationVariant === 'disabled'}"
+          data-testid="toggle-wasm-disabled"
+        >
+          Disabled
+        </button>
+      </div>
+      <div class="control-group" data-testid="group-scaling-mode">
+        <div class="status-row">
+          <span class="status-label">Scaling</span>
+          <span
+            class="status-value"
+            data-status="scaling-mode-status"
+            data-testid="status-scaling-mode"
+          >${formatSpriteScalingMode(spriteScalingMode)}</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-button${
+            spriteScalingMode === 'standard' ? ' active' : ''
+          }"
+          data-control="scaling-mode"
+          data-option="standard"
+          data-label="Standard"
+          aria-pressed="${spriteScalingMode === 'standard'}"
+          data-testid="toggle-scaling-standard"
+        >
+          Standard
+        </button>
+        <button
+          type="button"
+          class="toggle-button${
+            spriteScalingMode === 'unlimited' ? ' active' : ''
+          }"
+          data-control="scaling-mode"
+          data-option="unlimited"
+          data-label="Unlimited"
+          aria-pressed="${spriteScalingMode === 'unlimited'}"
+          data-testid="toggle-scaling-unlimited"
+        >
+          Unlimited
+        </button>
+      </div>
       <section id="map-status" data-testid="section-map-status">
         <h2>Map Status</h2>
         <div class="status-row" data-testid="status-row-zoom">
@@ -1393,17 +1515,11 @@ const main = async () => {
   updateMapStatus();
 
   /** Sprite layer instance. MapLibre manages the WebGL context, so only the layer ID is needed here. */
-  const spriteLayer = createSpriteLayer<DemoSpriteTag>({
-    id: 'demo-sprite',
-    spriteScaling: STANDARD_SPRITE_SCALING_OPTIONS,
-    //    spriteScaling: UNLIMITED_SPRITE_SCALING_OPTIONS,
-    textureFiltering: {
-      minFilter: 'linear-mipmap-linear',
-      magFilter: 'linear',
-      generateMipmaps: true,
-      maxAnisotropy: 4,
-    },
-  });
+  let spriteLayer!: SpriteLayerInterface<DemoSpriteTag>;
+
+  // Track the resolved calculation variant applied during initialization.
+  let currentCalculationVariant: SpriteLayerCalculationVariant =
+    requestedCalculationVariant;
 
   const clearSpriteDetails = () => {
     renderSpriteDetails({
@@ -1416,6 +1532,9 @@ const main = async () => {
   };
 
   const attachSpriteMouseEvents = () => {
+    if (!spriteLayer) {
+      return;
+    }
     spriteLayer.off('spritehover', renderSpriteDetails);
     spriteLayer.off('spriteclick', handleSpriteClick);
     spriteLayer.on('spritehover', renderSpriteDetails);
@@ -1423,6 +1542,9 @@ const main = async () => {
   };
 
   const detachSpriteMouseEvents = () => {
+    if (!spriteLayer) {
+      return;
+    }
     spriteLayer.off('spritehover', renderSpriteDetails);
     spriteLayer.off('spriteclick', handleSpriteClick);
   };
@@ -1433,7 +1555,9 @@ const main = async () => {
       return;
     }
     isMouseEventsMonitoringEnabled = enabled;
-    spriteLayer.setHitTestEnabled(enabled);
+    if (spriteLayer) {
+      spriteLayer.setHitTestEnabled(enabled);
+    }
     if (enabled) {
       attachSpriteMouseEvents();
     } else {
@@ -1540,26 +1664,31 @@ const main = async () => {
       spriteLimit: INITIAL_NUMBER_OF_SPRITES,
       activeSpriteCount: 0,
     };
-    debugState.spriteLayer = spriteLayer;
     debugState.mapInstance = map;
-    debugState.spriteLimit = INITIAL_NUMBER_OF_SPRITES;
     window.__spriteDemo = debugState;
     // Expose the sprite layer for debugging in the browser console.
     (window as any).__spriteLayerMap = map;
-    (window as any).__spriteLayer = spriteLayer;
   }
 
   // Run the remaining setup once all map resources finish loading.
   map.on('load', async () => {
-    map.addLayer(spriteLayer);
-    spriteLayer.setHitTestEnabled(isMouseEventsMonitoringEnabled);
-    if (isMouseEventsMonitoringEnabled) {
-      attachSpriteMouseEvents();
-    } else {
-      detachSpriteMouseEvents();
-    }
-
     let updateBasemapButtons: (() => void) | undefined;
+    let updateWasmModeButtons: (() => void) | undefined;
+    let wasmModePending = false;
+    let updateScalingModeButtons: (() => void) | undefined;
+    let spriteLayerRebuildPromise: Promise<void> | null = null;
+
+    const createSpriteLayerInstance = () =>
+      createSpriteLayer<DemoSpriteTag>({
+        id: SPRITE_LAYER_ID,
+        spriteScaling: resolveSpriteScalingOptions(),
+        textureFiltering: {
+          minFilter: 'linear-mipmap-linear',
+          magFilter: 'linear',
+          generateMipmaps: true,
+          maxAnisotropy: 4,
+        },
+      });
 
     /**
      * Shows or hides each raster basemap layer to match the current selection.
@@ -1616,7 +1745,7 @@ const main = async () => {
      */
     const computeMovementExtentScale = (count: number): number => {
       // Use a logarithmic curve so the playground gradually expands without exploding for large counts.
-      return count > 1 ? Math.log(count) / Math.log(4.8) : 1;
+      return count > 1 ? Math.log(count / 5) / Math.log(2) : 1;
     };
 
     let movementExtentScale = computeMovementExtentScale(spriteVisibilityLimit);
@@ -1720,7 +1849,6 @@ const main = async () => {
       debugState.spriteLimit = spriteVisibilityLimit;
       debugState.activeSpriteCount = lastVisibleSpriteCount;
       debugState.mapInstance = map;
-      debugState.spriteLayer = spriteLayer;
       window.__spriteDemo = debugState;
       window.dispatchEvent(
         new CustomEvent('sprite-demo-map-loaded', {
@@ -2204,35 +2332,35 @@ const main = async () => {
       updateSecondaryImageButtons?.();
     };
 
-    // Arrow images are generated asynchronously, so wait until every variant is ready.
-    for (const mode of ICON_HEIGHT_MODES) {
-      // Preload arrow bitmaps for each aspect ratio so runtime switches are instant.
-      await Promise.all(
-        ICON_SPECS.map(async (spec) => {
-          const bitmap = await createArrowBitmap(
-            spec.color,
-            ICON_SIZE,
-            ICON_HEIGHT_SCALES[mode]
-          );
-          const imageId = getIconImageId(spec.id, mode);
-          await spriteLayer.registerImage(imageId, bitmap);
-        })
-      );
-    }
+    /**
+     * Pre-registers every primary arrow image variant so sprite creation can reuse cached textures.
+     */
+    const registerPrimaryArrowImages = async (): Promise<void> => {
+      for (const mode of ICON_HEIGHT_MODES) {
+        await Promise.all(
+          ICON_SPECS.map(async (spec) => {
+            const bitmap = await createArrowBitmap(
+              spec.color,
+              ICON_SIZE,
+              ICON_HEIGHT_SCALES[mode]
+            );
+            const imageId = getIconImageId(spec.id, mode);
+            await spriteLayer.registerImage(imageId, bitmap);
+          })
+        );
+      }
+    };
 
-    // Generate the secondary (orbiting satellite) image.
-    const secondaryBitmap = await createSecondaryMarkerBitmap(ICON_SIZE);
-    await spriteLayer.registerImage(SECONDARY_IMAGE_ID, secondaryBitmap);
-
-    isSecondaryImageReady = true;
-    updateSecondaryImageButtons?.();
-    updateSecondaryImageTypeButtons?.();
-    await setSecondaryImageType(currentSecondaryImageType);
-
-    if (currentSecondaryImageOrbitMode !== 'hidden') {
-      // Reapply the stored orbit mode so sprites immediately reflect the persisted state.
-      setSecondaryImageOrbitMode(currentSecondaryImageOrbitMode);
-    }
+    /**
+     * Registers the base secondary marker texture so orbiting sprites share a common resource.
+     */
+    const registerSecondaryBaseImage = async (): Promise<void> => {
+      const secondaryBitmap = await createSecondaryMarkerBitmap(ICON_SIZE);
+      await spriteLayer.registerImage(SECONDARY_IMAGE_ID, secondaryBitmap);
+      isSecondaryImageReady = true;
+      updateSecondaryImageButtons?.();
+      updateSecondaryImageTypeButtons?.();
+    };
 
     // Expand the movement extent based on sprite count.
     /**
@@ -2693,6 +2821,122 @@ const main = async () => {
         mouseEventsButton.addEventListener('click', () => {
           setMouseEventsEnabled(!isMouseEventsMonitoringEnabled);
         });
+      }
+
+      const wasmModeButtons = Array.from(
+        queryAll<HTMLButtonElement>('[data-control="wasm-mode"]')
+      );
+      const wasmModeStatusEl = queryFirst<HTMLElement>(
+        '[data-status="wasm-mode-status"]'
+      );
+      if (wasmModeButtons.length > 0) {
+        updateWasmModeButtons = () => {
+          const displayedVariant = wasmModePending
+            ? requestedCalculationVariant
+            : currentCalculationVariant;
+          wasmModeButtons.forEach((button) => {
+            const option = button.dataset.option as
+              | SpriteLayerCalculationVariant
+              | undefined;
+            if (!option) {
+              return;
+            }
+            setToggleButtonState(button, displayedVariant === option, 'select');
+            button.disabled = wasmModePending;
+          });
+          if (wasmModeStatusEl) {
+            if (wasmModePending) {
+              wasmModeStatusEl.textContent = '';
+            } else {
+              wasmModeStatusEl.textContent =
+                formatWasmVariantLabel(displayedVariant);
+            }
+          }
+        };
+        updateWasmModeButtons();
+        wasmModeButtons.forEach((button) => {
+          const option = button.dataset.option as
+            | SpriteLayerCalculationVariant
+            | undefined;
+          if (!option) {
+            return;
+          }
+          button.addEventListener('click', async () => {
+            if (wasmModePending || requestedCalculationVariant === option) {
+              return;
+            }
+            wasmModePending = true;
+            requestedCalculationVariant = option;
+            updateWasmModeButtons?.();
+            try {
+              await rebuildSpriteLayer();
+              map.triggerRepaint();
+            } catch (error) {
+              console.error('Failed to switch WASM mode', error);
+            } finally {
+              wasmModePending = false;
+              updateWasmModeButtons?.();
+            }
+          });
+        });
+      } else if (wasmModeStatusEl) {
+        wasmModeStatusEl.textContent = formatWasmVariantLabel(
+          currentCalculationVariant
+        );
+      }
+
+      const scalingModeButtons = Array.from(
+        queryAll<HTMLButtonElement>('[data-control="scaling-mode"]')
+      );
+      const scalingModeStatusEl = queryFirst<HTMLElement>(
+        '[data-status="scaling-mode-status"]'
+      );
+      if (scalingModeButtons.length > 0) {
+        updateScalingModeButtons = () => {
+          scalingModeButtons.forEach((button) => {
+            const option = button.dataset.option as
+              | 'standard'
+              | 'unlimited'
+              | undefined;
+            if (!option) {
+              return;
+            }
+            setToggleButtonState(
+              button,
+              spriteScalingMode === option,
+              'select'
+            );
+          });
+          if (scalingModeStatusEl) {
+            scalingModeStatusEl.textContent =
+              formatSpriteScalingMode(spriteScalingMode);
+          }
+        };
+        updateScalingModeButtons();
+        scalingModeButtons.forEach((button) => {
+          const option = button.dataset.option as
+            | 'standard'
+            | 'unlimited'
+            | undefined;
+          if (!option) {
+            return;
+          }
+          button.addEventListener('click', async () => {
+            if (spriteScalingMode === option) {
+              return;
+            }
+            spriteScalingMode = option;
+            updateScalingModeButtons?.();
+            try {
+              await rebuildSpriteLayer();
+            } catch (error) {
+              console.error('Failed to switch sprite scaling mode', error);
+            }
+          });
+        });
+      } else if (scalingModeStatusEl) {
+        scalingModeStatusEl.textContent =
+          formatSpriteScalingMode(spriteScalingMode);
       }
 
       const basemapButtons = Array.from(
@@ -3290,44 +3534,95 @@ const main = async () => {
       return { added, removed };
     };
 
-    const initialSpriteEntries: SpriteInitEntry<DemoSpriteTag>[] = [];
-    for (let i = 0; i < INITIAL_NUMBER_OF_SPRITES; i += 1) {
-      initialSpriteEntries.push(createSpriteInitEntry(i));
-    }
-    if (initialSpriteEntries.length > 0) {
-      spriteLayer.addSprites(initialSpriteEntries);
-    }
+    const rebuildSpriteLayer = async (): Promise<void> => {
+      if (spriteLayerRebuildPromise) {
+        await spriteLayerRebuildPromise;
+        return;
+      }
+      spriteLayerRebuildPromise = (async () => {
+        stopMovementInterval();
+        detachSpriteMouseEvents();
+        if (map.getLayer(SPRITE_LAYER_ID)) {
+          map.removeLayer(SPRITE_LAYER_ID);
+        }
 
-    applyLocationInterpolationToAll();
+        spriteLayer = createSpriteLayerInstance();
+        if (requestedCalculationVariant === 'disabled') {
+          releaseSpriteLayerHost();
+          currentCalculationVariant = 'disabled';
+        } else {
+          currentCalculationVariant = await initializeSpriteLayerHost(
+            requestedCalculationVariant
+          );
+        }
+        map.addLayer(spriteLayer);
+        spriteLayer.setHitTestEnabled(isMouseEventsMonitoringEnabled);
+        if (isMouseEventsMonitoringEnabled) {
+          attachSpriteMouseEvents();
+        }
 
-    if (isRotateInterpolationEnabled) {
-      // Apply rotation interpolation immediately so the initial state matches the toggle.
-      applyRotateInterpolationToAll(true);
-    }
-    if (isOrbitDegInterpolationEnabled || isOrbitMetersInterpolationEnabled) {
-      // Ensure orbit interpolation is set when the feature starts enabled.
-      applyOrbitInterpolationToAll();
-    }
-    // Apply the layer visibility flag so initial state matches the toggle.
-    applyLayerVisibility(isActive);
+        if (typeof window !== 'undefined') {
+          const debugState: SpriteDemoDebugState = window.__spriteDemo ?? {
+            mapLoaded: true,
+            spritesReady: false,
+            spriteLimit: INITIAL_NUMBER_OF_SPRITES,
+            activeSpriteCount: 0,
+          };
+          debugState.spriteLayer = spriteLayer;
+          debugState.mapInstance = map;
+          debugState.spriteLimit = spriteVisibilityLimit;
+          debugState.activeSpriteCount = lastVisibleSpriteCount;
+          window.__spriteDemo = debugState;
+          (window as any).__spriteLayerMap = map;
+          (window as any).__spriteLayer = spriteLayer;
+        }
 
-    if (typeof window !== 'undefined' && window.__spriteDemo) {
-      // Broadcast readiness so integration tests or observers can react once sprites are drawn.
-      window.__spriteDemo.spritesReady = true;
-      window.__spriteDemo.activeSpriteCount = lastVisibleSpriteCount;
-      window.__spriteDemo.spriteLimit = spriteVisibilityLimit;
-      window.dispatchEvent(
-        new CustomEvent('sprite-demo-ready', {
-          detail: {
-            activeSpriteCount: lastVisibleSpriteCount,
-            spriteLimit: spriteVisibilityLimit,
-          },
-        })
-      );
-    }
+        isSecondaryImageReady = false;
+        registeredSecondaryTextGlyphs.clear();
+        await registerPrimaryArrowImages();
+        await registerSecondaryBaseImage();
 
-    //////////////////////////////////////////////////////////////////////////////////
-    // Animation loop.
+        allSpriteIds.length = 0;
+        syncSpritePoolWithLimit(spriteVisibilityLimit);
+        await setSecondaryImageType(currentSecondaryImageType);
+        setSecondaryImageOrbitMode(currentSecondaryImageOrbitMode);
+
+        applyIconHeightMode(currentArrowShapeMode);
+        applyAutoRotation(isAutoRotationEnabled);
+        applySpriteMode(currentSpriteMode);
+        applyLocationInterpolationToAll();
+        applyRotateInterpolationToAll(isRotateInterpolationEnabled);
+        applyOrbitInterpolationToAll();
+        applyLayerVisibility(isActive);
+        reconcileSpriteVisibility();
+
+        if (isActive && movementSpeedScale > 0) {
+          startMovementInterval();
+        }
+
+        if (typeof window !== 'undefined' && window.__spriteDemo) {
+          window.__spriteDemo.spritesReady = true;
+          window.dispatchEvent(
+            new CustomEvent('sprite-demo-ready', {
+              detail: {
+                activeSpriteCount: lastVisibleSpriteCount,
+                spriteLimit: spriteVisibilityLimit,
+              },
+            })
+          );
+        }
+
+        updateWasmModeButtons?.();
+        updateScalingModeButtons?.();
+      })();
+      try {
+        await spriteLayerRebuildPromise;
+      } finally {
+        spriteLayerRebuildPromise = null;
+      }
+    };
+
+    await rebuildSpriteLayer();
 
     /**
      * Step handler that updates sprite positions at fixed intervals.

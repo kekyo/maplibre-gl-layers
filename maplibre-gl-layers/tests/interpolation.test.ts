@@ -9,12 +9,12 @@ import {
   createInterpolationState,
   evaluateInterpolation,
 } from '../src/interpolation';
+import { linearEasing } from '../src/easing';
 import {
   cloneSpriteLocation,
   lerpSpriteLocation,
   spriteLocationsEqual,
-} from '../src/location';
-import { linearEasing } from '../src/easing';
+} from '../src/math';
 
 describe('createInterpolationState', () => {
   it('creates feedback interpolation state when locations differ', () => {

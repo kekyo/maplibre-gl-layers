@@ -29,7 +29,10 @@
 ```typescript
 // MapLibre GL JSを使用します
 import { Map } from 'maplibre-gl';
-import { createSpriteLayer } from 'maplibre-gl-layers';
+import {
+  createSpriteLayer,
+  initializeSpriteLayerHost,
+} from 'maplibre-gl-layers';
 
 // MapLibreのインスタンスを生成します
 const map = new Map({
@@ -44,7 +47,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // MapLibreの準備が出来たら
 map.on('load', async () => {
-  // SpriteLayerを地図に追加します
+  // WASMを利用する場合は初期化します（呼ばない場合はJS計算のみ）
+  await initializeSpriteLayerHost();
   map.addLayer(spriteLayer);
 
   // 指定した画像ファイルを表示で使用する為に、SpriteLayerに登録します
@@ -106,7 +110,10 @@ npm install maplibre-gl-layers
 ```typescript
 // MapLibre GL JSを使用します
 import { Map } from 'maplibre-gl';
-import { createSpriteLayer } from 'maplibre-gl-layers';
+import {
+  createSpriteLayer,
+  initializeSpriteLayerHost,
+} from 'maplibre-gl-layers';
 
 // MapLibreのインスタンスを生成します
 // あなたに必要なスタイルや初期状態などを指定して下さい
@@ -122,6 +129,9 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // MapLibreの準備が出来たら
 map.on('load', async () => {
+  // 必要に応じてWASMを初期化（呼ばない場合はJS計算のみ）
+  await initializeSpriteLayerHost();
+
   // SpriteLayerをMapLibre地図に追加します
   map.addLayer(spriteLayer);
 
@@ -131,6 +141,12 @@ map.on('load', async () => {
 
 初期化作業はこれだけです！
 この後、描画させたい画像やテキストを準備して、スプライトの表示を行います。
+
+### WASMの有効化と解放
+
+SpriteLayer は既定では JavaScript 実装で動作します。`initializeSpriteLayerHost()`（必要なら `'simd' | 'nosimd' | 'disabled'` を指定）を一度呼び出すことで、WASM ホストのロードを試行できます。呼び出さない場合や初期化に失敗した場合は、自動的に JS 計算にフォールバックします。
+
+アプリケーション全体の終了などで WASM を解放したい場合は、`releaseSpriteLayerHost()` を呼び出してください。解放後は再度 `initializeSpriteLayerHost()` を呼び出すまで JS モードで動作します。
 
 ---
 

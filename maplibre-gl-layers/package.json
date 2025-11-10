@@ -30,13 +30,14 @@
     "images/demo2.png"
   ],
   "scripts": {
-    "build": "vite build",
-    "dev": "echo \"maplibre-gl-layers does not have dev rule.\"",
+    "build": "node ./scripts/build-wasm.mjs && vite build",
+    "dev": "npm run build",
     "test": "npm run build && vitest run",
     "test:e2e": "npm run build && playwright test",
     "pack": "npm run build && screw-up pack --pack-destination ../artifacts"
   },
   "dependencies": {
+    "async-primitives": ">=1.4.0",
     "maplibre-gl": ">=5.0.0"
   },
   "devDependencies": {

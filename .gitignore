@@ -38,3 +38,5 @@ src/generated/
 artifacts/
 
 test_results/
+
+emsdk/

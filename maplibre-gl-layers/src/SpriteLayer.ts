@@ -13,9 +13,10 @@
  * ordering rules, and depth-normalization helpers for avoiding Z-buffer issues.
  */
 
-import { type Map as MapLibreMap, MercatorCoordinate } from 'maplibre-gl';
+import { type Map as MapLibreMap } from 'maplibre-gl';
 import type { CustomRenderMethodInput } from 'maplibre-gl';
-import { vec4, type mat4 } from 'gl-matrix';
+import { createMutex } from 'async-primitives';
+
 import {
   type SpriteInit,
   type SpriteInitCollection,
@@ -48,6 +49,7 @@ import {
   type SpriteTextGlyphPaddingPixel,
   type SpriteTextGlyphBorderSide,
   type SpriteImageRegisterOptions,
+  type SpriteLayerCalculationVariant,
 } from './types';
 import type {
   ResolvedTextureFilteringOptions,
@@ -55,17 +57,22 @@ import type {
   ResolvedTextGlyphPadding,
   ResolvedBorderSides,
   ResolvedTextGlyphOptions,
-  MutableSpriteScreenPoint,
-  MatrixInput,
-  ClipContext,
   Canvas2DContext,
   Canvas2DSource,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
   SurfaceShaderInputs,
+  ProjectionHost,
+  PreparedDrawSpriteImageParams,
+  RenderCalculationHost,
+  SpriteOriginReference,
+  SpriteOriginReferenceKey,
 } from './internalTypes';
-import { loadImageBitmap, SvgSizeResolutionError } from './utils';
-import { cloneSpriteLocation, spriteLocationsEqual } from './location';
+import {
+  SPRITE_ORIGIN_REFERENCE_KEY_NONE,
+  SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+} from './internalTypes';
+import { loadImageBitmap, SvgSizeResolutionError } from './image';
 import {
   createInterpolationState,
   evaluateInterpolation,
@@ -79,25 +86,15 @@ import {
   calculateSurfaceWorldDimensions,
   applySurfaceDisplacement,
   isFiniteNumber,
-  clipToScreen,
   resolveScalingOptions,
-  calculateBillboardCenterPosition,
   calculateBillboardAnchorShiftPixels,
-  calculateBillboardCornerScreenPositions,
-  calculateBillboardDepthKey,
   calculateBillboardPixelDimensions,
   calculateBillboardOffsetPixels,
   calculateEffectivePixelsPerMeter,
-  calculateSurfaceCenterPosition,
   calculateSurfaceCornerDisplacements,
-  calculateSurfaceDepthKey,
-  computeSurfaceCornerShaderModel,
-  type ProjectToClipSpaceFn,
-  type UnprojectPointFn,
-  TRIANGLE_INDICES,
-  UV_CORNERS,
-  DEG2RAD,
-  multiplyMatrixAndVector,
+  cloneSpriteLocation,
+  spriteLocationsEqual,
+  resolveSpriteMercator,
 } from './math';
 import {
   applyOffsetUpdate,
@@ -106,7 +103,7 @@ import {
   stepSpriteImageInterpolations,
   syncImageRotationChannel,
 } from './interpolationChannels';
-import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './const';
+import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './default';
 import {
   createLooseQuadTree,
   type Item as LooseQuadTreeItem,
@@ -122,7 +119,6 @@ import {
   VERTEX_SHADER_SOURCE,
   FRAGMENT_SHADER_SOURCE,
   INITIAL_QUAD_VERTICES,
-  QUAD_VERTEX_SCRATCH,
   DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
   DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE,
   DEBUG_OUTLINE_VERTEX_COUNT,
@@ -131,11 +127,77 @@ import {
   DEBUG_OUTLINE_VERTEX_SCRATCH,
   DEBUG_OUTLINE_COLOR,
   DEBUG_OUTLINE_CORNER_ORDER,
-  BILLBOARD_BASE_CORNERS,
-  SURFACE_BASE_CORNERS,
-  computeBillboardCornersShaderModel,
   createShaderProgram,
 } from './shader';
+import { createCalculationHost } from './calculationHost';
+import {
+  createProjectionHost,
+  createProjectionHostParamsFromMapLibre,
+} from './projectionHost';
+import {
+  initializeWasmHost,
+  releaseWasmHost,
+  type WasmVariant,
+} from './wasmHost';
+import { createWasmProjectionHost } from './wasmProjectionHost';
+import { createWasmCalculationHost } from './wasmCalculationHost';
+import {
+  DEFAULT_ANCHOR,
+  DEFAULT_IMAGE_OFFSET,
+  DEFAULT_TEXT_GLYPH_ALIGN,
+  DEFAULT_TEXT_GLYPH_COLOR,
+  DEFAULT_TEXT_GLYPH_FONT_FAMILY,
+  DEFAULT_TEXT_GLYPH_FONT_SIZE,
+  DEFAULT_TEXT_GLYPH_FONT_STYLE,
+  DEFAULT_TEXT_GLYPH_FONT_WEIGHT,
+  DEFAULT_TEXT_GLYPH_RENDER_PIXEL_RATIO,
+  HIT_TEST_EPSILON,
+  HIT_TEST_WORLD_BOUNDS,
+  MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO,
+  MIN_TEXT_GLYPH_FONT_SIZE,
+} from './const';
+import { SL_DEBUG } from './config';
+import {
+  createImageHandleBufferController,
+  createIdHandler,
+  createSpriteOriginReference,
+  createRenderTargetBucketBuffers,
+} from './utils';
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+const spriteLayerHostInitializationMutex = createMutex();
+let spriteLayerHostVariant: WasmVariant = 'disabled';
+
+const isSpriteLayerHostEnabled = () => spriteLayerHostVariant !== 'disabled';
+
+export const initializeSpriteLayerHost = async (
+  calculationVariant?: SpriteLayerCalculationVariant
+): Promise<SpriteLayerCalculationVariant> => {
+  const locker = await spriteLayerHostInitializationMutex.lock();
+  try {
+    const requestedVariant = calculationVariant ?? 'simd';
+    if (requestedVariant === 'disabled') {
+      releaseSpriteLayerHost();
+      return 'disabled';
+    }
+    const forceReload = calculationVariant !== undefined;
+    spriteLayerHostVariant = await initializeWasmHost(requestedVariant, {
+      force: forceReload,
+    });
+    return spriteLayerHostVariant;
+  } finally {
+    locker.release();
+  }
+};
+
+export const releaseSpriteLayerHost = (): void => {
+  if (spriteLayerHostVariant === 'disabled') {
+    return;
+  }
+  spriteLayerHostVariant = 'disabled';
+  releaseWasmHost();
+};
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -174,42 +236,11 @@ import {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-/** Debug flag */
-const SL_DEBUG = false;
-
-/** Enables the upcoming shader-based billboard corner computation when true. */
-const USE_SHADER_BILLBOARD_GEOMETRY = true;
-/** Enables the upcoming shader-based surface corner computation when true. */
-const USE_SHADER_SURFACE_GEOMETRY = true;
-
-/** Default sprite anchor centered at the image origin. */
-const DEFAULT_ANCHOR: SpriteAnchor = { x: 0.0, y: 0.0 };
-
 /** Default threshold in meters for auto-rotation to treat movement as significant. */
 const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
 
-/** Default image offset applied when none is provided. */
-const DEFAULT_IMAGE_OFFSET: SpriteImageOffset = {
-  offsetMeters: 0,
-  offsetDeg: 0,
-};
-
 /** Query radius (in CSS pixels) when sampling the hit-test QuadTree. */
 const HIT_TEST_QUERY_RADIUS_PIXELS = 32;
-
-// Clamp the clip-space w component to avoid instability near the clip plane.
-const MIN_CLIP_W = 1e-6;
-const MIN_CLIP_Z_EPSILON = 1e-7;
-
-/** Small depth bias applied in NDC space. */
-const EPS_NDC = 1e-6;
-/** Whether to enable the NDC bias for surface rendering (disabled by default). */
-const ENABLE_NDC_BIAS_SURFACE = true;
-
-/** Maximum number of order slots available within a sub-layer (0..ORDER_MAX-1). */
-const ORDER_MAX = 16;
-/** Bucket width used to encode sub-layer and order into a single number. */
-const ORDER_BUCKET = 16;
 
 /** List of acceptable minification filters exposed to callers. */
 const MIN_FILTER_VALUES: readonly SpriteTextureMinFilter[] = [
@@ -226,6 +257,8 @@ const MAG_FILTER_VALUES: readonly SpriteTextureMagFilter[] = [
   'nearest',
   'linear',
 ] as const;
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 /** Minification filters that require mipmaps to produce complete textures. */
 const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> =
@@ -335,114 +368,6 @@ const resolveGlMagFilter = (
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Computes the perspective ratio from MapLibre's internal transform.
- * Used to calculate distance-based scaling that responds to pitch, zoom, and altitude.
- * @param {MapLibreMap} mapInstance - MapLibre map providing the transform and camera distance.
- * @param {SpriteLocation} location - Location used to derive mercator coordinates for scaling.
- * @param {MercatorCoordinate | undefined} [cachedMercator] - Optional precomputed Mercator coordinate for the location.
- * @returns {number} Perspective ratio applied when scaling sprites; defaults to 1 if unavailable.
- */
-export const calculatePerspectiveRatio = (
-  mapInstance: MapLibreMap,
-  location: SpriteLocation,
-  cachedMercator?: MercatorCoordinate
-): number => {
-  const transform = (mapInstance as unknown as { transform?: any }).transform;
-  if (!transform) {
-    return 1.0;
-  }
-
-  const mercatorMatrix: mat4 | Float32Array | number[] | undefined =
-    transform.mercatorMatrix ?? transform._mercatorMatrix;
-  const cameraToCenterDistance: number | undefined =
-    transform.cameraToCenterDistance;
-
-  if (
-    !mercatorMatrix ||
-    typeof cameraToCenterDistance !== 'number' ||
-    !Number.isFinite(cameraToCenterDistance)
-  ) {
-    return 1.0;
-  }
-
-  try {
-    const mercator =
-      cachedMercator ??
-      MercatorCoordinate.fromLngLat(
-        { lng: location.lng, lat: location.lat },
-        location.z ?? 0
-      );
-    const position = vec4.fromValues(
-      mercator.x,
-      mercator.y,
-      mercator.z ?? 0,
-      1
-    );
-    vec4.transformMat4(position, position, mercatorMatrix as mat4);
-    const w = position[3];
-    if (!Number.isFinite(w) || w <= 0) {
-      return 1.0;
-    }
-    const ratio = cameraToCenterDistance / w;
-    if (!Number.isFinite(ratio) || ratio <= 0) {
-      return 1.0;
-    }
-    return ratio;
-  } catch {
-    return 1.0;
-  }
-};
-
-/**
- * Extracts the current clip-space context from MapLibre if the mercator matrix is available.
- * @param {MapLibreMap} mapInstance - Map instance storing the transform.
- * @returns {ClipContext | null} Clip context or `null` when the transform is not ready.
- */
-const getClipContext = (mapInstance: MapLibreMap): ClipContext | null => {
-  const transform = (mapInstance as unknown as { transform?: any }).transform;
-  if (!transform) {
-    return null;
-  }
-  const mercatorMatrix: MatrixInput | undefined = transform._mercatorMatrix;
-  if (!mercatorMatrix) {
-    return null;
-  }
-  return { mercatorMatrix };
-};
-
-/**
- * Projects a longitude/latitude/elevation tuple into clip space using the provided context.
- * @param {number} lng - Longitude in degrees.
- * @param {number} lat - Latitude in degrees.
- * @param {number} elevationMeters - Elevation above the ellipsoid in meters.
- * @param {ClipContext | null} context - Clip-space context; `null` skips projection.
- * @returns {[number, number, number, number] | null} Clip coordinates or `null` when projection fails.
- */
-export const projectLngLatToClipSpace = (
-  lng: number,
-  lat: number,
-  elevationMeters: number,
-  context: ClipContext | null
-): [number, number, number, number] | null => {
-  if (!context) {
-    return null;
-  }
-  const { mercatorMatrix } = context;
-  const coord = MercatorCoordinate.fromLngLat({ lng, lat }, elevationMeters);
-  const [clipX, clipY, clipZ, clipW] = multiplyMatrixAndVector(
-    mercatorMatrix,
-    coord.x,
-    coord.y,
-    coord.z ?? 0,
-    1
-  );
-  if (!isFiniteNumber(clipW) || clipW <= MIN_CLIP_W) {
-    return null;
-  }
-  return [clipX, clipY, clipZ, clipW];
-};
-
-/**
  * Applies auto-rotation to all images within a sprite when movement exceeds the configured threshold.
  * @template T Arbitrary sprite tag type.
  * @param {InternalSpriteCurrentState<T>} sprite - Sprite undergoing potential rotation update.
@@ -513,139 +438,7 @@ export const applyAutoRotation = <T>(
   return true;
 };
 
-const calculateWorldToMercatorScale = (
-  base: SpriteLocation,
-  altitudeMeters: number
-): { east: number; north: number } => {
-  const origin = MercatorCoordinate.fromLngLat(
-    { lng: base.lng, lat: base.lat },
-    altitudeMeters
-  );
-  const eastLngLat = applySurfaceDisplacement(base.lng, base.lat, 1, 0);
-  const eastCoord = MercatorCoordinate.fromLngLat(
-    { lng: eastLngLat.lng, lat: eastLngLat.lat },
-    altitudeMeters
-  );
-  const northLngLat = applySurfaceDisplacement(base.lng, base.lat, 0, 1);
-  const northCoord = MercatorCoordinate.fromLngLat(
-    { lng: northLngLat.lng, lat: northLngLat.lat },
-    altitudeMeters
-  );
-  return {
-    east: eastCoord.x - origin.x,
-    north: northCoord.y - origin.y,
-  };
-};
-
-interface PrepareSurfaceShaderInputsParams {
-  baseLngLat: SpriteLocation;
-  worldWidthMeters: number;
-  worldHeightMeters: number;
-  anchor: SpriteAnchor;
-  totalRotateDeg: number;
-  offsetMeters: { east: number; north: number };
-  displacedCenter: SpriteLocation;
-  altitudeMeters: number;
-  depthBiasNdc: number;
-  scaleAdjustment: number;
-  centerDisplacement: { east: number; north: number };
-};
-
-const prepareSurfaceShaderInputs = (
-  params: PrepareSurfaceShaderInputsParams
-): SurfaceShaderInputs => {
-  const {
-    baseLngLat,
-    worldWidthMeters,
-    worldHeightMeters,
-    anchor,
-    totalRotateDeg,
-    offsetMeters,
-    displacedCenter,
-    altitudeMeters,
-    depthBiasNdc,
-    scaleAdjustment,
-    centerDisplacement,
-  } = params;
-
-  const halfSizeMeters = {
-    east: worldWidthMeters / 2,
-    north: worldHeightMeters / 2,
-  };
-  const rotationRad = -totalRotateDeg * DEG2RAD;
-  const sinR = Math.sin(rotationRad);
-  const cosR = Math.cos(rotationRad);
-
-  const mercatorCenter = MercatorCoordinate.fromLngLat(
-    { lng: displacedCenter.lng, lat: displacedCenter.lat },
-    altitudeMeters
-  );
-
-  const worldToMercatorScale = calculateWorldToMercatorScale(
-    displacedCenter,
-    altitudeMeters
-  );
-
-  const cornerModel = computeSurfaceCornerShaderModel({
-    baseLngLat,
-    worldWidthMeters,
-    worldHeightMeters,
-    anchor,
-    totalRotateDeg,
-    offsetMeters,
-  });
-
-  return {
-    mercatorCenter: {
-      x: mercatorCenter.x,
-      y: mercatorCenter.y,
-      z: mercatorCenter.z ?? 0,
-    },
-    worldToMercatorScale,
-    halfSizeMeters,
-    anchor,
-    offsetMeters: {
-      east: offsetMeters.east,
-      north: offsetMeters.north,
-    },
-    sinCos: { sin: sinR, cos: cosR },
-    totalRotateDeg,
-    depthBiasNdc,
-    centerDisplacement: {
-      east: centerDisplacement.east,
-      north: centerDisplacement.north,
-    },
-    baseLngLat,
-    displacedCenter: {
-      lng: displacedCenter.lng,
-      lat: displacedCenter.lat,
-      z: displacedCenter.z ?? altitudeMeters,
-    },
-    scaleAdjustment,
-    corners: cornerModel.map((corner) => ({
-      east: corner.east,
-      north: corner.north,
-      lng: corner.lng,
-      lat: corner.lat,
-    })),
-    clipCenter: { x: 0, y: 0, z: 0, w: 1 },
-    clipBasisEast: { x: 0, y: 0, z: 0, w: 0 },
-    clipBasisNorth: { x: 0, y: 0, z: 0, w: 0 },
-    clipCorners: [],
-  };
-};
-
 //////////////////////////////////////////////////////////////////////////////////////
-
-const DEFAULT_TEXT_GLYPH_FONT_FAMILY = 'sans-serif';
-const DEFAULT_TEXT_GLYPH_FONT_STYLE: 'normal' | 'italic' = 'normal';
-const DEFAULT_TEXT_GLYPH_FONT_WEIGHT = 'normal';
-const DEFAULT_TEXT_GLYPH_COLOR = '#000000';
-const DEFAULT_TEXT_GLYPH_ALIGN: SpriteTextGlyphHorizontalAlign = 'center';
-const DEFAULT_TEXT_GLYPH_FONT_SIZE = 32;
-const DEFAULT_TEXT_GLYPH_RENDER_PIXEL_RATIO = 1;
-const MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO = 4;
-const MIN_TEXT_GLYPH_FONT_SIZE = 4;
 
 /**
  * Resolves text padding into a fully populated structure with non-negative values.
@@ -1272,21 +1065,29 @@ export const cloneInterpolationOptions = (
  * @param {SpriteImageDefinitionInit} imageInit - Caller-provided image definition.
  * @param {number} subLayer - Sub-layer index the image belongs to.
  * @param {number} order - Ordering slot within the sub-layer.
+ * @param {SpriteOriginReference} originReference - Encode/Decode origin reference.
  * @returns {InternalSpriteImageState} Normalized internal state ready for rendering.
  */
 export const createImageStateFromInit = (
   imageInit: SpriteImageDefinitionInit,
   subLayer: number,
-  order: number
+  order: number,
+  originReference: SpriteOriginReference
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
   const initialOffset = cloneOffset(imageInit.offset);
   const initialRotateDeg = normalizeAngleDeg(imageInit.rotateDeg ?? 0);
+  const originLocation = cloneOriginLocation(imageInit.originLocation);
+  const originReferenceKey =
+    originLocation !== undefined
+      ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
+      : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
   const state: InternalSpriteImageState = {
     subLayer,
     order,
     imageId: imageInit.imageId,
+    imageHandle: 0,
     mode,
     opacity: imageInit.opacity ?? 1.0,
     scale: imageInit.scale ?? 1.0,
@@ -1299,7 +1100,9 @@ export const createImageStateFromInit = (
       imageInit.autoRotationMinDistanceMeters ??
       DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
     resolvedBaseRotateDeg: 0,
-    originLocation: cloneOriginLocation(imageInit.originLocation),
+    originLocation,
+    originReferenceKey,
+    originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
     rotationInterpolationState: null,
     rotationInterpolationOptions: null,
     offsetDegInterpolationState: null,
@@ -1337,11 +1140,38 @@ export const createSpriteLayer = <T = any>(
 ): SpriteLayerInterface<T> => {
   // Use caller-supplied layer ID when provided, otherwise fall back to a default identifier.
   const id = options?.id ?? 'sprite-layer';
-  const resolvedScaling = resolveScalingOptions(options?.spriteScaling);
+  let resolvedScaling = resolveScalingOptions(options?.spriteScaling);
   const resolvedTextureFiltering = resolveTextureFilteringOptions(
     options?.textureFiltering
   );
   const showDebugBounds = options?.showDebugBounds === true;
+
+  const createProjectionHostForMap = (
+    mapInstance: MapLibreMap
+  ): ProjectionHost => {
+    const params = createProjectionHostParamsFromMapLibre(mapInstance);
+    if (isSpriteLayerHostEnabled()) {
+      return createWasmProjectionHost(params);
+    }
+    return createProjectionHost(params);
+    // return createMapLibreProjectionHost(mapInstance);
+  };
+
+  const createCalculationHostForMap = (
+    mapInstance: MapLibreMap
+  ): RenderCalculationHost<T> => {
+    const params = createProjectionHostParamsFromMapLibre(mapInstance);
+    if (isSpriteLayerHostEnabled()) {
+      return createWasmCalculationHost<T>(params, {
+        imageIdHandler,
+        imageHandleBuffersController,
+        originReference,
+        spriteIdHandler,
+      });
+    }
+    return createCalculationHost<T>(params);
+    // return createMapLibreCalculationHost<TTag>(mapInstance);
+  };
 
   /** WebGL context supplied by MapLibre, assigned during onAdd. */
   let gl: WebGLRenderingContext | null = null;
@@ -1411,6 +1241,39 @@ export const createSpriteLayer = <T = any>(
   const images = new Map<string, RegisteredImage>();
 
   /**
+   * Maps image identifiers to their numeric handles.
+   * @remarks It is used for (wasm) interoperability for image identity.
+   */
+  const imageIdHandler = createIdHandler<RegisteredImage>();
+
+  /**
+   * Maps sprite identifiers to numeric handles for wasm interop.
+   */
+  const spriteIdHandler = createIdHandler<InternalSpriteCurrentState<T>>();
+
+  /**
+   * Create image handle buffer controller.
+   * @remarks It is used for (wasm) interoperability for image identity.
+   */
+  const imageHandleBuffersController = createImageHandleBufferController();
+
+  /**
+   * Resolve registered image handle for specified identifier.
+   * @param imageId Image identifier.
+   * @returns Image handle or 0 when not registered.
+   * @remarks It is used for (wasm) interoperability for image identity.
+   */
+  const resolveImageHandle = (imageId: string): number => {
+    const resource = images.get(imageId);
+    return resource ? resource.handle : 0;
+  };
+
+  /**
+   * Encode/Decode for a (subLayer, order) pair into a compact numeric key.
+   */
+  const originReference = createSpriteOriginReference();
+
+  /**
    * Tracks queued image IDs to avoid duplicated uploads.
    */
   const queuedTextureIds = new Set<string>();
@@ -1447,50 +1310,30 @@ export const createSpriteLayer = <T = any>(
   const sprites = new Map<string, InternalSpriteCurrentState<T>>();
 
   /**
-   * Ensures the sprite's cached Mercator coordinate matches its current location.
-   * Recomputes the coordinate lazily when longitude/latitude/altitude change.
-   * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
-   * @returns {MercatorCoordinate} Cached Mercator coordinate representing the current location.
+   * Updates image handle for every sprite image referencing the specified identifier.
+   * @param imageId Image identifier.
+   * @param handle Resolved handle (0 when not registered).
    */
-  const resolveSpriteMercator = (
-    sprite: InternalSpriteCurrentState<T>
-  ): MercatorCoordinate => {
-    const location = sprite.currentLocation;
-    const altitude = location.z ?? 0;
-    if (
-      sprite.cachedMercator &&
-      sprite.cachedMercatorLng === location.lng &&
-      sprite.cachedMercatorLat === location.lat &&
-      sprite.cachedMercatorZ === altitude
-    ) {
-      return sprite.cachedMercator;
-    }
-    const mercator = MercatorCoordinate.fromLngLat(
-      { lng: location.lng, lat: location.lat },
-      altitude
-    );
-    sprite.cachedMercator = mercator;
-    sprite.cachedMercatorLng = location.lng;
-    sprite.cachedMercatorLat = location.lat;
-    sprite.cachedMercatorZ = altitude;
-    return mercator;
-  };
-
-  const HIT_TEST_WORLD_BOUNDS: LooseQuadTreeRect = {
-    x0: -180,
-    y0: -90,
-    x1: 180,
-    y1: 90,
+  const updateSpriteImageHandles = (imageId: string, handle: number): void => {
+    sprites.forEach((sprite) => {
+      sprite.images.forEach((orderMap) => {
+        orderMap.forEach((imageState) => {
+          if (imageState.imageId === imageId) {
+            imageState.imageHandle = handle;
+          }
+        });
+      });
+    });
   };
 
   /**
    * State stored in the QuadTree used for hit testing.
    */
-  type HitTestTreeState = {
-    readonly sprite: InternalSpriteCurrentState<T>;
-    readonly image: InternalSpriteImageState;
+  interface HitTestTreeState {
+    readonly sprite: Readonly<InternalSpriteCurrentState<T>>;
+    readonly image: Readonly<InternalSpriteImageState>;
     drawIndex: number;
-  };
+  }
 
   /**
    * Hit-test QuadTree based on longitude and latitude.
@@ -1499,10 +1342,10 @@ export const createSpriteLayer = <T = any>(
     bounds: HIT_TEST_WORLD_BOUNDS,
   });
 
-  type HitTestTreeHandle = {
-    rect: LooseQuadTreeRect;
-    item: LooseQuadTreeItem<HitTestTreeState>;
-  };
+  interface HitTestTreeHandle {
+    rect: Readonly<LooseQuadTreeRect>;
+    item: Readonly<LooseQuadTreeItem<HitTestTreeState>>;
+  }
 
   /**
    * Reverse lookup table from an image state to the corresponding QuadTree item.
@@ -1521,7 +1364,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {LooseQuadTreeRect | null} Generated rectangle; returns null when the input is invalid.
    */
   const rectFromLngLatPoints = (
-    points: SpriteLocation[]
+    points: readonly Readonly<SpriteLocation>[]
   ): LooseQuadTreeRect | null => {
     let minLng = Number.POSITIVE_INFINITY;
     let maxLng = Number.NEGATIVE_INFINITY;
@@ -1578,7 +1421,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {LooseQuadTreeRect | null} Generated rectangle.
    */
   const rectFromRadiusMeters = (
-    base: SpriteLocation,
+    base: Readonly<SpriteLocation>,
     radiusMeters: number
   ): LooseQuadTreeRect | null => {
     if (
@@ -1590,44 +1433,37 @@ export const createSpriteLayer = <T = any>(
       return null;
     }
 
-    const cornerNE = applySurfaceDisplacement(
-      base.lng,
-      base.lat,
-      radiusMeters,
-      radiusMeters
-    );
-    const cornerSW = applySurfaceDisplacement(
-      base.lng,
-      base.lat,
-      -radiusMeters,
-      -radiusMeters
-    );
+    const cornerNE = applySurfaceDisplacement(base, {
+      east: radiusMeters,
+      north: radiusMeters,
+    });
+    const cornerSW = applySurfaceDisplacement(base, {
+      east: -radiusMeters,
+      north: -radiusMeters,
+    });
 
     return rectFromLngLatPoints([cornerNE, cornerSW]);
   };
 
   /**
    * Estimates the geographic rectangle that a surface-mode image may occupy.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
    * @param {InternalSpriteImageState} image - Target image.
    * @returns {LooseQuadTreeRect | null} Estimated rectangle.
    */
   const estimateSurfaceImageBounds = (
-    sprite: InternalSpriteCurrentState<T>,
-    image: InternalSpriteImageState
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
+    image: Readonly<InternalSpriteImageState>
   ): LooseQuadTreeRect | null => {
-    const mapInstance = map;
-    if (!mapInstance) {
-      return null;
-    }
-
     const imageResource = images.get(image.imageId);
     if (!imageResource) {
       return null;
     }
 
     const baseLocation = sprite.currentLocation;
-    const zoom = mapInstance.getZoom();
+    const zoom = projectionHost.getZoom();
     const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
@@ -1637,9 +1473,8 @@ export const createSpriteLayer = <T = any>(
       return null;
     }
 
-    const spriteMercator = resolveSpriteMercator(sprite);
-    const perspectiveRatio = calculatePerspectiveRatio(
-      mapInstance,
+    const spriteMercator = resolveSpriteMercator(projectionHost, sprite);
+    const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
       baseLocation,
       spriteMercator
     );
@@ -1699,12 +1534,7 @@ export const createSpriteLayer = <T = any>(
     });
 
     const corners = cornerDisplacements.map((corner) =>
-      applySurfaceDisplacement(
-        baseLocation.lng,
-        baseLocation.lat,
-        corner.east,
-        corner.north
-      )
+      applySurfaceDisplacement(baseLocation, corner)
     );
     return rectFromLngLatPoints(corners);
   };
@@ -1717,21 +1547,17 @@ export const createSpriteLayer = <T = any>(
    * @returns {LooseQuadTreeRect | null} Estimated rectangle.
    */
   const estimateBillboardImageBounds = (
+    projectionHost: ProjectionHost,
     sprite: InternalSpriteCurrentState<T>,
     image: InternalSpriteImageState
   ): LooseQuadTreeRect | null => {
-    const mapInstance = map;
-    if (!mapInstance) {
-      return null;
-    }
-
     const imageResource = images.get(image.imageId);
     if (!imageResource) {
       return null;
     }
 
     const baseLocation = sprite.currentLocation;
-    const zoom = mapInstance.getZoom();
+    const zoom = projectionHost.getZoom();
     const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
@@ -1741,9 +1567,8 @@ export const createSpriteLayer = <T = any>(
       return null;
     }
 
-    const spriteMercator = resolveSpriteMercator(sprite);
-    const perspectiveRatio = calculatePerspectiveRatio(
-      mapInstance,
+    const spriteMercator = resolveSpriteMercator(projectionHost, sprite);
+    const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
       baseLocation,
       spriteMercator
     );
@@ -1810,21 +1635,23 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Estimates the geographic bounding box of an image.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
    * @param {InternalSpriteImageState} image - Target image.
    * @returns {LooseQuadTreeRect | null} Estimated rectangle.
    */
   const estimateImageBounds = (
-    sprite: InternalSpriteCurrentState<T>,
-    image: InternalSpriteImageState
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
+    image: Readonly<InternalSpriteImageState>
   ): LooseQuadTreeRect | null => {
     if (image.opacity <= 0 || !sprite.isEnabled) {
       return null;
     }
     if (image.mode === 'surface') {
-      return estimateSurfaceImageBounds(sprite, image);
+      return estimateSurfaceImageBounds(projectionHost, sprite, image);
     }
-    return estimateBillboardImageBounds(sprite, image);
+    return estimateBillboardImageBounds(projectionHost, sprite, image);
   };
 
   const removeImageBoundsFromHitTestTree = (
@@ -1861,8 +1688,9 @@ export const createSpriteLayer = <T = any>(
   };
 
   const registerImageBoundsInHitTestTree = (
-    sprite: InternalSpriteCurrentState<T>,
-    image: InternalSpriteImageState
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
+    image: Readonly<InternalSpriteImageState>
   ): void => {
     const existingHandle = hitTestTreeItems.get(image);
 
@@ -1873,7 +1701,7 @@ export const createSpriteLayer = <T = any>(
       return;
     }
 
-    const rect = estimateImageBounds(sprite, image);
+    const rect = estimateImageBounds(projectionHost, sprite, image);
 
     if (!rect) {
       if (existingHandle) {
@@ -1951,11 +1779,12 @@ export const createSpriteLayer = <T = any>(
   };
 
   const refreshSpriteHitTestBounds = (
-    sprite: InternalSpriteCurrentState<T>
+    projectionHost: ProjectionHost,
+    sprite: Readonly<InternalSpriteCurrentState<T>>
   ): void => {
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
-        registerImageBoundsInHitTestTree(sprite, image);
+        registerImageBoundsInHitTestTree(projectionHost, sprite, image);
       });
     });
   };
@@ -1970,7 +1799,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {InternalSpriteImageState | undefined} Image state when present.
    */
   const getImageState = (
-    sprite: InternalSpriteCurrentState<T>,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
     subLayer: number,
     order: number
   ): InternalSpriteImageState | undefined =>
@@ -1984,8 +1813,8 @@ export const createSpriteLayer = <T = any>(
    * @returns {void}
    */
   const setImageState = (
-    sprite: InternalSpriteCurrentState<T>,
-    state: InternalSpriteImageState
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
+    state: Readonly<InternalSpriteImageState>
   ): void => {
     let inner = sprite.images.get(state.subLayer);
     if (!inner) {
@@ -2003,7 +1832,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when an image state exists.
    */
   const hasImageState = (
-    sprite: InternalSpriteCurrentState<T>,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
     subLayer: number,
     order: number
   ): boolean =>
@@ -2018,7 +1847,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when the image existed and was deleted.
    */
   const deleteImageState = (
-    sprite: InternalSpriteCurrentState<T>,
+    sprite: Readonly<InternalSpriteCurrentState<T>>,
     subLayer: number,
     order: number
   ): boolean => {
@@ -2037,7 +1866,7 @@ export const createSpriteLayer = <T = any>(
     InternalSpriteImageState,
   ];
 
-  type HitTestEntry = {
+  interface HitTestEntry {
     readonly sprite: InternalSpriteCurrentState<T>;
     readonly image: InternalSpriteImageState;
     readonly corners: readonly [
@@ -2050,10 +1879,7 @@ export const createSpriteLayer = <T = any>(
     readonly maxX: number;
     readonly minY: number;
     readonly maxY: number;
-  };
-
-  /** Small tolerance used to handle floating-point error during hit testing. */
-  const HIT_TEST_EPSILON = 1e-3;
+  }
 
   /**
    * Determines whether a point lies inside the quad defined by `corners`.
@@ -2149,218 +1975,6 @@ export const createSpriteLayer = <T = any>(
   };
 
   /**
-   * Simple XY coordinate tuple representing screen-space positions in pixels.
-   */
-  type XYPoint = { x: number; y: number };
-
-  /**
-   * Cache entry storing anchor-adjusted and raw centers for a sprite image.
-   */
-  type ImageCenterCacheEntry = {
-    anchorApplied?: XYPoint;
-    anchorless?: XYPoint;
-  };
-
-  /**
-   * Nested cache keyed by sprite ID and image key to avoid recomputing centers each frame.
-   */
-  type ImageCenterCache = Map<string, Map<string, ImageCenterCacheEntry>>;
-
-  /**
-   * Parameters required to determine an image center in screen space.
-   */
-  type ComputeImageCenterParams = {
-    readonly mapInstance: MapLibreMap;
-    readonly images: Map<string, RegisteredImage>;
-    readonly originCenterCache: ImageCenterCache;
-    readonly projected: { x: number; y: number };
-    readonly zoomScaleFactor: number;
-    readonly baseMetersPerPixel: number;
-    readonly spriteMinPixel: number;
-    readonly spriteMaxPixel: number;
-    readonly effectivePixelsPerMeter: number;
-    readonly drawingBufferWidth: number;
-    readonly drawingBufferHeight: number;
-    readonly pixelRatio: number;
-    readonly clipContext: ClipContext | null;
-    readonly altitudeMeters: number;
-  };
-
-  /**
-   * Computes the screen-space center of an image, caching anchor-dependent results.
-   * @template T Sprite tag type.
-   * @param {InternalSpriteCurrentState<T>} sprite - Sprite that owns the image.
-   * @param {InternalSpriteImageState} img - Image state to evaluate.
-   * @param {ComputeImageCenterParams} params - Precomputed scaling and projection context.
-   * @param {{ useResolvedAnchor?: boolean }} [options] - When true, returns the anchor-applied center.
-   * @returns {{ x: number; y: number }} Screen-space coordinates for the requested center variant.
-   */
-  const computeImageCenterXY = <T>(
-    sprite: InternalSpriteCurrentState<T>,
-    img: InternalSpriteImageState,
-    params: ComputeImageCenterParams,
-    options?: { useResolvedAnchor?: boolean }
-  ): { x: number; y: number } => {
-    const {
-      originCenterCache,
-      projected,
-      zoomScaleFactor,
-      baseMetersPerPixel,
-      spriteMinPixel,
-      spriteMaxPixel,
-      effectivePixelsPerMeter,
-      images,
-      mapInstance,
-      drawingBufferWidth,
-      drawingBufferHeight,
-      pixelRatio,
-      clipContext,
-      altitudeMeters,
-    } = params;
-
-    // Decide whether to return the anchor-adjusted center or the raw projected location.
-    const useResolvedAnchor = options?.useResolvedAnchor ?? false;
-
-    let spriteCache = originCenterCache.get(sprite.spriteId);
-    if (!spriteCache) {
-      // Initialize a new cache bucket for this sprite when none exists yet.
-      spriteCache = new Map<string, ImageCenterCacheEntry>();
-      originCenterCache.set(sprite.spriteId, spriteCache);
-    }
-
-    const cacheKey = `${img.subLayer}:${img.order}`;
-    const cachedEntry = spriteCache.get(cacheKey);
-    if (cachedEntry) {
-      // Hit the cache: return whichever variant (anchor vs anchorless) the caller requested.
-      const cachedPoint = useResolvedAnchor
-        ? cachedEntry.anchorApplied
-        : cachedEntry.anchorless;
-      if (cachedPoint) {
-        return cachedPoint;
-      }
-    }
-
-    let baseX = projected.x;
-    let baseY = projected.y;
-    if (img.originLocation !== undefined) {
-      const ref = sprite.images
-        .get(img.originLocation.subLayer)
-        ?.get(img.originLocation.order);
-      if (ref) {
-        const refCenter = computeImageCenterXY(sprite, ref, params, {
-          useResolvedAnchor: img.originLocation.useResolvedAnchor ?? false,
-        });
-        baseX = refCenter.x;
-        baseY = refCenter.y;
-      }
-    }
-
-    const totalRotDeg = Number.isFinite(img.displayedRotateDeg)
-      ? img.displayedRotateDeg
-      : normalizeAngleDeg(
-          (img.resolvedBaseRotateDeg ?? 0) + (img.rotateDeg ?? 0)
-        );
-    const imageScaleLocal = img.scale ?? 1;
-    const imageResourceRef = images.get(img.imageId);
-
-    if (img.mode === 'billboard') {
-      const placement = calculateBillboardCenterPosition({
-        base: { x: baseX, y: baseY },
-        imageWidth: imageResourceRef?.width,
-        imageHeight: imageResourceRef?.height,
-        baseMetersPerPixel,
-        imageScale: imageScaleLocal,
-        zoomScaleFactor,
-        effectivePixelsPerMeter,
-        spriteMinPixel,
-        spriteMaxPixel,
-        totalRotateDeg: totalRotDeg,
-        anchor: img.anchor,
-        offset: img.offset,
-      });
-      // Center used when the anchor is resolved to the provided anchor point.
-      const anchorApplied: XYPoint = {
-        x: placement.centerX,
-        y: placement.centerY,
-      };
-      // Origin fallback before anchor offsets are applied; used by callers referencing anchorless placement.
-      const anchorless: XYPoint = {
-        x: anchorApplied.x + placement.anchorShift.x,
-        y: anchorApplied.y - placement.anchorShift.y,
-      };
-      // Reuse cached entry to avoid repeated allocations.
-      // Cache the computed centers so repeated lookups in this frame avoid recomputation.
-      const entry = cachedEntry ?? {};
-      entry.anchorless = anchorless;
-      entry.anchorApplied = anchorApplied;
-      spriteCache.set(cacheKey, entry);
-      return useResolvedAnchor ? anchorApplied : anchorless;
-    }
-
-    const baseLngLat =
-      img.originLocation !== undefined
-        ? // When anchored to another image, reproject the 2D reference point back to geographic space.
-          (mapInstance.unproject([baseX, baseY] as any) as {
-            lng: number;
-            lat: number;
-          })
-        : // Otherwise use the sprite's own interpolated geographic location.
-          { lng: sprite.currentLocation.lng, lat: sprite.currentLocation.lat };
-
-    const projectToClipSpace: ProjectToClipSpaceFn | undefined = clipContext
-      ? (lng, lat, elevation) =>
-          projectLngLatToClipSpace(lng, lat, elevation, clipContext)
-      : undefined;
-
-    const surfacePlacement = calculateSurfaceCenterPosition({
-      baseLngLat,
-      imageWidth: imageResourceRef?.width,
-      imageHeight: imageResourceRef?.height,
-      baseMetersPerPixel,
-      imageScale: imageScaleLocal,
-      zoomScaleFactor,
-      totalRotateDeg: totalRotDeg,
-      anchor: img.anchor,
-      offset: img.offset,
-      effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel,
-      projectToClipSpace,
-      drawingBufferWidth,
-      drawingBufferHeight,
-      pixelRatio,
-      altitudeMeters,
-      resolveAnchorless: true,
-      project:
-        projectToClipSpace === undefined
-          ? (lngLat) => {
-              const projectedPoint = mapInstance.project(lngLat as any);
-              if (!projectedPoint) {
-                return null;
-              }
-              return { x: projectedPoint.x, y: projectedPoint.y };
-            }
-          : undefined,
-    });
-
-    const anchorlessCenter = surfacePlacement.anchorlessCenter ?? {
-      // If the anchorless placement could not be projected, fall back to the original screen position.
-      x: baseX,
-      y: baseY,
-    };
-    // If the anchor-aware placement fails, reuse the anchorless center to keep the sprite visible.
-    const anchorAppliedCenter = surfacePlacement.center ?? anchorlessCenter;
-
-    // Cache the computed centers so repeated lookups in this frame avoid recomputation.
-    const entry = cachedEntry ?? {};
-    entry.anchorless = anchorlessCenter;
-    entry.anchorApplied = anchorAppliedCenter;
-    spriteCache.set(cacheKey, entry);
-    // Respect the caller's anchor preference when selecting the cached center.
-    return useResolvedAnchor ? anchorAppliedCenter : anchorlessCenter;
-  };
-
-  /**
    * List of sprite/image pairs that need to be rendered.
    * Updated whenever sprites or their images are added or removed, and filtered to visible entries.
    */
@@ -2373,38 +1987,14 @@ export const createSpriteLayer = <T = any>(
   >();
 
   /**
-   * Ensures an image has a reusable hit-test corner buffer.
-   * @param {InternalSpriteImageState} imageEntry - Image requiring a corner buffer.
-   * @returns {[SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint, SpriteScreenPoint]}
-   */
-  const ensureHitTestCorners = (
-    imageEntry: InternalSpriteImageState
-  ): [
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-  ] => {
-    if (!imageEntry.hitTestCorners) {
-      imageEntry.hitTestCorners = [
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-        { x: 0, y: 0 },
-      ];
-    }
-    return imageEntry.hitTestCorners;
-  };
-
-  /**
    * Adds a hit-test entry to the cache, computing its axis-aligned bounding box.
    * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image.
    * @param {InternalSpriteImageState} imageEntry - Image reference.
    * @param {readonly SpriteScreenPoint[]} screenCorners - Quad corners in screen space.
    */
   const registerHitTestEntry = (
-    spriteEntry: InternalSpriteCurrentState<T>,
-    imageEntry: InternalSpriteImageState,
+    spriteEntry: Readonly<InternalSpriteCurrentState<T>>,
+    imageEntry: Readonly<InternalSpriteImageState>,
     screenCorners: readonly [
       SpriteScreenPoint,
       SpriteScreenPoint,
@@ -2849,6 +2439,7 @@ export const createSpriteLayer = <T = any>(
         // Delete existing textures to avoid stale GPU data.
         glContext.deleteTexture(image.texture);
         image.texture = undefined;
+        imageHandleBuffersController.markDirty(images);
       }
       const texture = glContext.createTexture();
       if (!texture) {
@@ -2943,6 +2534,7 @@ export const createSpriteLayer = <T = any>(
       }
 
       image.texture = texture;
+      imageHandleBuffersController.markDirty(images);
     });
   };
 
@@ -2952,9 +2544,14 @@ export const createSpriteLayer = <T = any>(
    * Ensure this runs after animations or style updates so the render loop reflects changes.
    * @returns {void}
    */
+  let isRenderScheduled = false;
+
   const scheduleRender = (): void => {
-    // Only attempt to repaint when the MapLibre instance is available.
-    map?.triggerRepaint();
+    if (!map || isRenderScheduled) {
+      return;
+    }
+    isRenderScheduled = true;
+    map.triggerRepaint();
   };
 
   /**
@@ -2983,12 +2580,30 @@ export const createSpriteLayer = <T = any>(
         orderMap.forEach((image) => {
           // Fully transparent images contribute nothing and can be ignored.
           if (image.opacity <= 0) {
+            image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+            image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
           }
+          const imageResource = images.get(image.imageId);
           // Skip images referencing texture IDs that are not registered.
-          if (!images.has(image.imageId)) {
+          if (!imageResource) {
+            image.imageHandle = 0;
+            image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+            image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
           }
+
+          if (image.originLocation !== undefined) {
+            image.originReferenceKey = originReference.encodeKey(
+              image.originLocation.subLayer,
+              image.originLocation.order
+            );
+          } else {
+            image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
+          }
+          image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+
+          image.imageHandle = imageResource.handle;
           renderTargetEntries.push([sprite, image]);
         });
       });
@@ -3006,6 +2621,34 @@ export const createSpriteLayer = <T = any>(
       }
       return aImage.imageId.localeCompare(bImage.imageId);
     });
+
+    const originIndexBySprite = new Map<
+      string,
+      Map<SpriteOriginReferenceKey, number>
+    >();
+
+    for (let index = 0; index < renderTargetEntries.length; index++) {
+      const [sprite, image] = renderTargetEntries[index]!;
+      let indexMap = originIndexBySprite.get(sprite.spriteId);
+      if (!indexMap) {
+        indexMap = new Map<SpriteOriginReferenceKey, number>();
+        originIndexBySprite.set(sprite.spriteId, indexMap);
+      }
+      const selfKey = originReference.encodeKey(image.subLayer, image.order);
+      indexMap.set(selfKey, index);
+    }
+
+    for (const [sprite, image] of renderTargetEntries) {
+      if (image.originReferenceKey === SPRITE_ORIGIN_REFERENCE_KEY_NONE) {
+        image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+        continue;
+      }
+      const indexMap = originIndexBySprite.get(sprite.spriteId);
+      const targetIndex =
+        indexMap?.get(image.originReferenceKey) ??
+        SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
+      image.originRenderTargetIndex = targetIndex;
+    }
   };
 
   //////////////////////////////////////////////////////////////////////////
@@ -3432,15 +3075,16 @@ export const createSpriteLayer = <T = any>(
     glContext: WebGLRenderingContext,
     _options: CustomRenderMethodInput
   ): void => {
+    isRenderScheduled = false;
     hitTestEntries.length = 0;
     hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
 
     // Abort early if any critical resource (map, program, vertex buffer) is missing.
     const mapInstance = map;
-    // Rendering cannot proceed if core resources (map/program/buffer) are missing; bail out early.
     if (!mapInstance || !program || !vertexBuffer) {
       return;
     }
+
     // Uniform locations must be resolved before drawing; skip the frame otherwise.
     if (
       !uniformOpacityLocation ||
@@ -3529,1086 +3173,391 @@ export const createSpriteLayer = <T = any>(
     const identityOffsetX = 0;
     const identityOffsetY = 0;
 
-    const zoom = mapInstance.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const baseMetersPerPixel = resolvedScaling.metersPerPixel;
     const spriteMinPixel = resolvedScaling.spriteMinPixel;
     const spriteMaxPixel = resolvedScaling.spriteMaxPixel;
-    const clipContext = getClipContext(mapInstance);
-    // Without a clip context we cannot project to clip space; skip rendering.
-    if (!clipContext) {
-      return;
-    }
-    // Enable blending and avoid depth-buffer interference.
-    glContext.enable(glContext.BLEND);
-    glContext.blendFunc(glContext.SRC_ALPHA, glContext.ONE_MINUS_SRC_ALPHA);
-    glContext.disable(glContext.DEPTH_TEST);
-    glContext.depthMask(false);
 
-    glContext.useProgram(program);
-    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
-    glContext.enableVertexAttribArray(attribPositionLocation);
-    glContext.vertexAttribPointer(
-      attribPositionLocation,
-      POSITION_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      0
-    );
-    glContext.enableVertexAttribArray(attribUvLocation);
-    glContext.vertexAttribPointer(
-      attribUvLocation,
-      UV_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      UV_OFFSET
-    );
-    glContext.uniform1i(uniformTextureLocation, 0);
-    const screenToClipScaleLocation = uniformScreenToClipScaleLocation!;
-    const screenToClipOffsetLocation = uniformScreenToClipOffsetLocation!;
-
-    let currentScaleX = Number.NaN;
-    let currentScaleY = Number.NaN;
-    let currentOffsetX = Number.NaN;
-    let currentOffsetY = Number.NaN;
-    const applyScreenToClipUniforms = (
-      scaleX: number,
-      scaleY: number,
-      offsetX: number,
-      offsetY: number
-    ): void => {
-      if (
-        scaleX !== currentScaleX ||
-        scaleY !== currentScaleY ||
-        offsetX !== currentOffsetX ||
-        offsetY !== currentOffsetY
-      ) {
-        glContext.uniform2f(screenToClipScaleLocation, scaleX, scaleY);
-        glContext.uniform2f(screenToClipOffsetLocation, offsetX, offsetY);
-        currentScaleX = scaleX;
-        currentScaleY = scaleY;
-        currentOffsetX = offsetX;
-        currentOffsetY = offsetY;
-      }
-    };
-
-    let currentSurfaceMode = Number.NaN;
-    const applySurfaceMode = (enabled: boolean): void => {
-      if (!uniformSurfaceModeLocation) {
-        return;
-      }
-      const value = enabled ? 1 : 0;
-      if (value !== currentSurfaceMode) {
-        glContext.uniform1f(uniformSurfaceModeLocation, value);
-        currentSurfaceMode = value;
-      }
-    };
-
-    let currentSurfaceClipEnabled = Number.NaN;
-    const applySurfaceClipUniforms = (
-      enabled: boolean,
-      inputs: SurfaceShaderInputs | null
-    ): void => {
-      if (
-        !uniformSurfaceClipEnabledLocation ||
-        !uniformSurfaceClipCenterLocation ||
-        !uniformSurfaceClipBasisEastLocation ||
-        !uniformSurfaceClipBasisNorthLocation
-      ) {
-        return;
-      }
-      const value = enabled ? 1 : 0;
-      if (value !== currentSurfaceClipEnabled) {
-        glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
-        currentSurfaceClipEnabled = value;
-      }
-      const clipCenter =
-        enabled && inputs ? inputs.clipCenter : { x: 0, y: 0, z: 0, w: 1 };
-      glContext.uniform4f(
-        uniformSurfaceClipCenterLocation,
-        clipCenter.x,
-        clipCenter.y,
-        clipCenter.z,
-        clipCenter.w
-      );
-      const clipBasisEast =
-        enabled && inputs ? inputs.clipBasisEast : { x: 0, y: 0, z: 0, w: 0 };
-      glContext.uniform4f(
-        uniformSurfaceClipBasisEastLocation,
-        clipBasisEast.x,
-        clipBasisEast.y,
-        clipBasisEast.z,
-        clipBasisEast.w
-      );
-      const clipBasisNorth =
-        enabled && inputs ? inputs.clipBasisNorth : { x: 0, y: 0, z: 0, w: 0 };
-      glContext.uniform4f(
-        uniformSurfaceClipBasisNorthLocation,
-        clipBasisNorth.x,
-        clipBasisNorth.y,
-        clipBasisNorth.z,
-        clipBasisNorth.w
-      );
-    };
-
-    /**
-     * Uploads quad data and issues the draw call for a single sprite image.
-     * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image being drawn.
-     * @param {InternalSpriteImageState} imageEntry - Image state describing rendering parameters.
-     * @param {RegisteredImage} imageResource - GPU-backed image resource.
-     * @param {ImageCenterCache} originCenterCache - Cache for resolving origin references quickly.
-     * @returns {void}
-     */
-    let drawOrderCounter = 0;
-
-    const drawSpriteImage = (
-      spriteEntry: InternalSpriteCurrentState<T>,
-      imageEntry: InternalSpriteImageState,
-      imageResource: RegisteredImage,
-      originCenterCache: ImageCenterCache
-    ): void => {
-      let screenCornerBuffer: SpriteScreenPoint[] | null = null;
-      // Use per-image anchor/offset when provided; otherwise fall back to defaults.
-      const anchor = imageEntry.anchor ?? DEFAULT_ANCHOR;
-      const offsetDef = imageEntry.offset ?? DEFAULT_IMAGE_OFFSET;
-      applySurfaceMode(false);
-      applySurfaceClipUniforms(false, null);
-      // Prefer the dynamically interpolated rotation when available; otherwise synthesize it from base + manual rotations.
-      const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
-        ? imageEntry.displayedRotateDeg
-        : normalizeAngleDeg(
-            (imageEntry.resolvedBaseRotateDeg ?? 0) +
-              (imageEntry.rotateDeg ?? 0)
-          );
-
-      const projected = mapInstance.project(spriteEntry.currentLocation);
-      if (!projected) {
-        // Projection may fail when the coordinate exits the viewport.
+    // Prepare to create projection host
+    const projectionHost = createProjectionHostForMap(mapInstance);
+    try {
+      const clipContext = projectionHost.getClipContext();
+      // Without a clip context we cannot project to clip space; skip rendering.
+      if (!clipContext) {
         return;
       }
 
-      const spriteMercator = resolveSpriteMercator(spriteEntry);
-      const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
-        zoom,
-        spriteEntry.currentLocation.lat
-      );
-      if (!Number.isFinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0) {
-        return;
-      }
+      const zoom = projectionHost.getZoom();
+      const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
 
-      const perspectiveRatio = calculatePerspectiveRatio(
-        mapInstance,
-        spriteEntry.currentLocation,
-        spriteMercator
-      );
-      // Convert meters-per-pixel into pixels-per-meter when valid so scaling remains intuitive.
-      const basePixelsPerMeter =
-        metersPerPixelAtLat > 0 ? 1 / metersPerPixelAtLat : 0;
-      const effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
-        metersPerPixelAtLat,
-        perspectiveRatio
-      );
-      if (effectivePixelsPerMeter <= 0) {
-        return;
-      }
+      // Enable blending and avoid depth-buffer interference.
+      glContext.enable(glContext.BLEND);
+      glContext.blendFunc(glContext.SRC_ALPHA, glContext.ONE_MINUS_SRC_ALPHA);
+      glContext.disable(glContext.DEPTH_TEST);
+      glContext.depthMask(false);
 
-      // Input scale defaults to 1 when callers omit it.
-      const imageScale = imageEntry.scale ?? 1;
-      const altitudeMeters = spriteEntry.currentLocation.z ?? 0;
+      glContext.useProgram(program);
+      glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+      glContext.enableVertexAttribArray(attribPositionLocation);
+      glContext.vertexAttribPointer(
+        attribPositionLocation,
+        POSITION_COMPONENT_COUNT,
+        glContext.FLOAT,
+        false,
+        VERTEX_STRIDE,
+        0
+      );
+      glContext.enableVertexAttribArray(attribUvLocation);
+      glContext.vertexAttribPointer(
+        attribUvLocation,
+        UV_COMPONENT_COUNT,
+        glContext.FLOAT,
+        false,
+        VERTEX_STRIDE,
+        UV_OFFSET
+      );
+      glContext.uniform1i(uniformTextureLocation, 0);
+      const screenToClipScaleLocation = uniformScreenToClipScaleLocation!;
+      const screenToClipOffsetLocation = uniformScreenToClipOffsetLocation!;
 
-      const centerParams: ComputeImageCenterParams = {
-        mapInstance,
-        images,
-        originCenterCache,
-        projected,
-        zoomScaleFactor,
-        baseMetersPerPixel,
-        spriteMinPixel,
-        spriteMaxPixel,
-        effectivePixelsPerMeter,
-        drawingBufferWidth,
-        drawingBufferHeight,
-        pixelRatio,
-        clipContext,
-        altitudeMeters,
+      let currentScaleX = Number.NaN;
+      let currentScaleY = Number.NaN;
+      let currentOffsetX = Number.NaN;
+      let currentOffsetY = Number.NaN;
+      const applyScreenToClipUniforms = (
+        scaleX: number,
+        scaleY: number,
+        offsetX: number,
+        offsetY: number
+      ): void => {
+        if (
+          scaleX !== currentScaleX ||
+          scaleY !== currentScaleY ||
+          offsetX !== currentOffsetX ||
+          offsetY !== currentOffsetY
+        ) {
+          glContext.uniform2f(screenToClipScaleLocation, scaleX, scaleY);
+          glContext.uniform2f(screenToClipOffsetLocation, offsetX, offsetY);
+          currentScaleX = scaleX;
+          currentScaleY = scaleY;
+          currentOffsetX = offsetX;
+          currentOffsetY = offsetY;
+        }
       };
 
-      let baseProjected = { x: projected.x, y: projected.y };
-      if (imageEntry.originLocation !== undefined) {
-        const refImg = spriteEntry.images
-          .get(imageEntry.originLocation.subLayer)
-          ?.get(imageEntry.originLocation.order);
-        if (refImg) {
-          // Align this image's base position with the referenced image when available.
-          baseProjected = computeImageCenterXY(
-            spriteEntry,
-            refImg,
-            centerParams,
-            {
-              useResolvedAnchor:
-                imageEntry.originLocation.useResolvedAnchor ?? false,
-            }
-          );
-        }
-      }
-
-      if (imageEntry.mode === 'surface') {
-        applyScreenToClipUniforms(
-          identityScaleX,
-          identityScaleY,
-          identityOffsetX,
-          identityOffsetY
-        );
-        imageEntry.surfaceShaderInputs = undefined;
-        const baseLngLat =
-          imageEntry.originLocation !== undefined
-            ? // When an origin reference is set, reproject the cached screen point back to geographic space.
-              (mapInstance.unproject([
-                baseProjected.x,
-                baseProjected.y,
-              ] as any) as SpriteLocation)
-            : // Otherwise base the surface on the sprite's current longitude/latitude.
-              spriteEntry.currentLocation;
-
-        const surfaceCenter = calculateSurfaceCenterPosition({
-          baseLngLat,
-          imageWidth: imageResource.width,
-          imageHeight: imageResource.height,
-          baseMetersPerPixel,
-          imageScale,
-          zoomScaleFactor,
-          totalRotateDeg,
-          anchor,
-          offset: offsetDef,
-          effectivePixelsPerMeter,
-          spriteMinPixel,
-          spriteMaxPixel,
-          projectToClipSpace: (lng, lat, elevation) =>
-            projectLngLatToClipSpace(lng, lat, elevation, clipContext),
-          drawingBufferWidth,
-          drawingBufferHeight,
-          pixelRatio,
-          altitudeMeters,
-          project: !clipContext
-            ? (lngLat) => {
-                const result = mapInstance.project(lngLat as any);
-                return result ? { x: result.x, y: result.y } : null;
-              }
-            : undefined,
-        });
-
-        if (!surfaceCenter.center) {
-          // Projection failed for at least one corner; skip rendering to avoid NaNs.
+      let currentSurfaceMode = Number.NaN;
+      const applySurfaceMode = (enabled: boolean): void => {
+        if (!uniformSurfaceModeLocation) {
           return;
         }
-
-        if (uniformBillboardModeLocation) {
-          glContext.uniform1f(uniformBillboardModeLocation, 0);
+        const value = enabled ? 1 : 0;
+        if (value !== currentSurfaceMode) {
+          glContext.uniform1f(uniformSurfaceModeLocation, value);
+          currentSurfaceMode = value;
         }
+      };
 
-        const offsetMeters = calculateSurfaceOffsetMeters(
-          offsetDef,
-          imageScale,
-          zoomScaleFactor,
-          surfaceCenter.worldDimensions.scaleAdjustment
-        );
-        const cornerDisplacements = calculateSurfaceCornerDisplacements({
-          worldWidthMeters: surfaceCenter.worldDimensions.width,
-          worldHeightMeters: surfaceCenter.worldDimensions.height,
-          anchor,
-          totalRotateDeg,
-          offsetMeters,
-        });
-
-        const orderIndex = Math.min(imageEntry.order, ORDER_MAX - 1);
-        const depthBiasNdc = ENABLE_NDC_BIAS_SURFACE
-          ? -((imageEntry.subLayer * ORDER_BUCKET + orderIndex) * EPS_NDC)
-          : 0;
-
-        const displacedCenterLngLat =
-          surfaceCenter.displacedLngLat ?? baseLngLat;
-        const displacedCenter: SpriteLocation = {
-          lng: displacedCenterLngLat.lng,
-          lat: displacedCenterLngLat.lat,
-          z: altitudeMeters,
-        };
-
-        const surfaceShaderInputs = prepareSurfaceShaderInputs({
-          baseLngLat,
-          worldWidthMeters: surfaceCenter.worldDimensions.width,
-          worldHeightMeters: surfaceCenter.worldDimensions.height,
-          anchor,
-          totalRotateDeg,
-          offsetMeters,
-          displacedCenter,
-          altitudeMeters,
-          depthBiasNdc,
-          scaleAdjustment: surfaceCenter.worldDimensions.scaleAdjustment,
-          centerDisplacement: surfaceCenter.totalDisplacement,
-        });
-        imageEntry.surfaceShaderInputs = surfaceShaderInputs;
-
-        let useShaderSurface = USE_SHADER_SURFACE_GEOMETRY && !!clipContext;
-        let clipCornerPositions: Array<
-          [number, number, number, number]
-        > | null = null;
-        let clipCenterPosition: [number, number, number, number] | null = null;
-        if (useShaderSurface) {
-          clipCornerPositions = new Array(SURFACE_BASE_CORNERS.length) as Array<
-            [number, number, number, number]
-          >;
-          clipCenterPosition = projectLngLatToClipSpace(
-            displacedCenter.lng,
-            displacedCenter.lat,
-            displacedCenter.z ?? altitudeMeters,
-            clipContext
-          );
-          if (!clipCenterPosition) {
-            useShaderSurface = false;
-            clipCornerPositions = null;
-          }
-        }
-
-        applySurfaceMode(useShaderSurface);
-        if (useShaderSurface && uniformSurfaceDepthBiasLocation) {
-          glContext.uniform1f(
-            uniformSurfaceDepthBiasLocation,
-            surfaceShaderInputs.depthBiasNdc
-          );
-        }
-
-        const hitTestCorners = ensureHitTestCorners(imageEntry);
-        const debugClipCorners: Array<[number, number, number, number]> | null =
-          SL_DEBUG ? [] : null;
-        let bufferOffset = 0;
-        // Iterate through each vertex defined by TRIANGLE_INDICES to populate the vertex buffer.
-        for (const index of TRIANGLE_INDICES) {
-          const displacement = cornerDisplacements[index]!;
-          const displaced = applySurfaceDisplacement(
-            baseLngLat.lng,
-            baseLngLat.lat,
-            displacement.east,
-            displacement.north
-          );
-
-          const clipPosition = projectLngLatToClipSpace(
-            displaced.lng,
-            displaced.lat,
-            altitudeMeters,
-            clipContext
-          );
-          if (!clipPosition) {
-            // A vertex left the clip volume; abort drawing this image to prevent corrupt geometry.
-            return;
-          }
-
-          let [clipX, clipY, clipZ, clipW] = clipPosition;
-          if (!useShaderSurface) {
-            const screenCorner = clipToScreen(
-              clipPosition,
-              drawingBufferWidth,
-              drawingBufferHeight,
-              pixelRatio
-            );
-            if (!screenCorner) {
-              return;
-            }
-            const targetCorner = hitTestCorners[index]!;
-            targetCorner.x = screenCorner.x;
-            targetCorner.y = screenCorner.y;
-          }
-
-          if (depthBiasNdc !== 0) {
-            clipZ += depthBiasNdc * clipW;
-            const minClipZ = -clipW + MIN_CLIP_Z_EPSILON;
-            if (clipZ < minClipZ) {
-              // Avoid crossing the near clip plane after biasing, which would invert winding.
-              clipZ = minClipZ;
-            }
-          }
-
-          if (clipCornerPositions) {
-            clipCornerPositions[index] = [clipX, clipY, clipZ, clipW];
-          }
-
-          const [u, v] = UV_CORNERS[index]!;
-          if (useShaderSurface) {
-            const baseCorner = SURFACE_BASE_CORNERS[index]!;
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = baseCorner[0];
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = baseCorner[1];
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = 0;
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = 1;
-          } else {
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = clipX;
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = clipY;
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = clipZ;
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = clipW;
-          }
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = u;
-          QUAD_VERTEX_SCRATCH[bufferOffset++] = v;
-
-          if (debugClipCorners) {
-            debugClipCorners.push([clipX, clipY, clipZ, clipW]);
-          }
-        }
-
-        let clipUniformEnabled = false;
+      let currentSurfaceClipEnabled = Number.NaN;
+      const applySurfaceClipUniforms = (
+        enabled: boolean,
+        inputs: SurfaceShaderInputs | null
+      ): void => {
         if (
-          clipCornerPositions &&
-          clipCenterPosition &&
-          clipCornerPositions.every((corner) => Array.isArray(corner))
+          !uniformSurfaceClipEnabledLocation ||
+          !uniformSurfaceClipCenterLocation ||
+          !uniformSurfaceClipBasisEastLocation ||
+          !uniformSurfaceClipBasisNorthLocation
         ) {
-          const leftTop = clipCornerPositions[0];
-          const rightTop = clipCornerPositions[1];
-          const leftBottom = clipCornerPositions[2];
-          const rightBottom = clipCornerPositions[3];
-          if (leftTop && rightTop && leftBottom && rightBottom) {
-            const clipBasisEast: [number, number, number, number] = [
-              (rightTop[0] - leftTop[0]) * 0.5,
-              (rightTop[1] - leftTop[1]) * 0.5,
-              (rightTop[2] - leftTop[2]) * 0.5,
-              (rightTop[3] - leftTop[3]) * 0.5,
-            ];
-            const clipBasisNorth: [number, number, number, number] = [
-              (leftTop[0] - leftBottom[0]) * 0.5,
-              (leftTop[1] - leftBottom[1]) * 0.5,
-              (leftTop[2] - leftBottom[2]) * 0.5,
-              (leftTop[3] - leftBottom[3]) * 0.5,
-            ];
-            surfaceShaderInputs.clipCenter = {
-              x: clipCenterPosition[0],
-              y: clipCenterPosition[1],
-              z: clipCenterPosition[2],
-              w: clipCenterPosition[3],
-            };
-            surfaceShaderInputs.clipBasisEast = {
-              x: clipBasisEast[0],
-              y: clipBasisEast[1],
-              z: clipBasisEast[2],
-              w: clipBasisEast[3],
-            };
-            surfaceShaderInputs.clipBasisNorth = {
-              x: clipBasisNorth[0],
-              y: clipBasisNorth[1],
-              z: clipBasisNorth[2],
-              w: clipBasisNorth[3],
-            };
-            const clipCornersForInputs: Array<{
-              x: number;
-              y: number;
-              z: number;
-              w: number;
-            }> = [];
-            let allCornersResolved = true;
-            for (
-              let cornerIndex = 0;
-              cornerIndex < SURFACE_BASE_CORNERS.length;
-              cornerIndex++
-            ) {
-              const clipCorner = clipCornerPositions[cornerIndex];
-              if (!clipCorner) {
-                allCornersResolved = false;
-                break;
-              }
-              clipCornersForInputs.push({
-                x: clipCorner[0],
-                y: clipCorner[1],
-                z: clipCorner[2],
-                w: clipCorner[3],
-              });
-              const screenCorner = clipToScreen(
-                clipCorner,
-                drawingBufferWidth,
-                drawingBufferHeight,
-                pixelRatio
-              );
-              if (!screenCorner) {
-                return;
-              }
-              const targetCorner = hitTestCorners[cornerIndex]!;
-              targetCorner.x = screenCorner.x;
-              targetCorner.y = screenCorner.y;
-            }
-            if (allCornersResolved) {
-              surfaceShaderInputs.clipCorners = clipCornersForInputs;
-              clipUniformEnabled = true;
-            } else {
-              surfaceShaderInputs.clipCorners = [];
-            }
-          }
-        } else {
-          surfaceShaderInputs.clipCorners = [];
+          return;
         }
+        const value = enabled ? 1 : 0;
+        if (value !== currentSurfaceClipEnabled) {
+          glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
+          currentSurfaceClipEnabled = value;
+        }
+        const clipCenter =
+          enabled && inputs ? inputs.clipCenter : { x: 0, y: 0, z: 0, w: 1 };
+        glContext.uniform4f(
+          uniformSurfaceClipCenterLocation,
+          clipCenter.x,
+          clipCenter.y,
+          clipCenter.z,
+          clipCenter.w
+        );
+        const clipBasisEast =
+          enabled && inputs ? inputs.clipBasisEast : { x: 0, y: 0, z: 0, w: 0 };
+        glContext.uniform4f(
+          uniformSurfaceClipBasisEastLocation,
+          clipBasisEast.x,
+          clipBasisEast.y,
+          clipBasisEast.z,
+          clipBasisEast.w
+        );
+        const clipBasisNorth =
+          enabled && inputs
+            ? inputs.clipBasisNorth
+            : { x: 0, y: 0, z: 0, w: 0 };
+        glContext.uniform4f(
+          uniformSurfaceClipBasisNorthLocation,
+          clipBasisNorth.x,
+          clipBasisNorth.y,
+          clipBasisNorth.z,
+          clipBasisNorth.w
+        );
+      };
 
-        if (useShaderSurface) {
+      let drawOrderCounter = 0;
+
+      const issueSpriteDraw = (
+        prepared: PreparedDrawSpriteImageParams<T>
+      ): void => {
+        const { screenToClip } = prepared;
+        applyScreenToClipUniforms(
+          screenToClip.scaleX,
+          screenToClip.scaleY,
+          screenToClip.offsetX,
+          screenToClip.offsetY
+        );
+
+        applySurfaceMode(prepared.useShaderSurface);
+
+        const surfaceInputs = prepared.surfaceShaderInputs;
+        if (prepared.useShaderSurface && surfaceInputs) {
+          if (uniformSurfaceDepthBiasLocation) {
+            glContext.uniform1f(
+              uniformSurfaceDepthBiasLocation,
+              surfaceInputs.depthBiasNdc
+            );
+          }
           applySurfaceClipUniforms(
-            clipUniformEnabled,
-            clipUniformEnabled ? surfaceShaderInputs : null
+            prepared.surfaceClipEnabled,
+            prepared.surfaceClipEnabled ? surfaceInputs : null
           );
         } else {
+          if (uniformSurfaceDepthBiasLocation) {
+            glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
+          }
           applySurfaceClipUniforms(false, null);
         }
 
-        screenCornerBuffer = hitTestCorners;
-
-        if (SL_DEBUG) {
-          (imageEntry as any).__debugBag = {
-            mode: 'surface',
-            drawingBufferWidth,
-            drawingBufferHeight,
-            pixelRatio,
-            zoom,
-            zoomScaleFactor,
-            resolvedScaling,
-            baseMetersPerPixel,
-            projected,
-            metersPerPixelAtLat,
-            perspectiveRatio,
-            basePixelsPerMeter,
-            effectivePixelsPerMeter,
-            imageScale,
-            anchor,
-            offsetDef,
-            baseLngLat,
-            surfaceCenter,
-            cornerDisplacements,
-            depthBiasNdc,
-            useShaderSurface,
-            surfaceShaderInputs,
-            clipCorners: debugClipCorners ?? undefined,
-          };
-        }
-      } else {
-        applyScreenToClipUniforms(
-          screenToClipScaleX,
-          screenToClipScaleY,
-          screenToClipOffsetX,
-          screenToClipOffsetY
-        );
-        imageEntry.surfaceShaderInputs = undefined;
-        applySurfaceMode(false);
-        const placement = calculateBillboardCenterPosition({
-          base: baseProjected,
-          imageWidth: imageResource.width,
-          imageHeight: imageResource.height,
-          baseMetersPerPixel,
-          imageScale,
-          zoomScaleFactor,
-          effectivePixelsPerMeter,
-          spriteMinPixel,
-          spriteMaxPixel,
-          totalRotateDeg,
-          anchor,
-          offset: offsetDef,
-        });
-
-        const billboardShaderInputs = {
-          centerX: placement.centerX,
-          centerY: placement.centerY,
-          halfWidth: placement.halfWidth,
-          halfHeight: placement.halfHeight,
-          anchor,
-          totalRotateDeg,
-        };
-
-        if (SL_DEBUG) {
-          (imageEntry as any).__billboardShaderInputs = billboardShaderInputs;
-        }
-
-        const useShaderBillboard = USE_SHADER_BILLBOARD_GEOMETRY;
         if (uniformBillboardModeLocation) {
           glContext.uniform1f(
             uniformBillboardModeLocation,
-            useShaderBillboard ? 1 : 0
+            prepared.useShaderBillboard ? 1 : 0
           );
         }
-
-        const writeBillboardCorners = (
-          corners: ReturnType<typeof calculateBillboardCornerScreenPositions>,
-          useShaderGeometry: boolean
-        ): void => {
-          const hitTestCorners = ensureHitTestCorners(imageEntry);
-          let bufferOffset = 0;
-          for (const index of TRIANGLE_INDICES) {
-            const corner = corners[index]!;
-            if (useShaderGeometry) {
-              const baseCorner = BILLBOARD_BASE_CORNERS[index]!;
-              QUAD_VERTEX_SCRATCH[bufferOffset++] = baseCorner[0];
-              QUAD_VERTEX_SCRATCH[bufferOffset++] = baseCorner[1];
-            } else {
-              QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.x;
-              QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.y;
-            }
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = 0;
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = 1;
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.u;
-            QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.v;
-          }
-
-          for (let i = 0; i < corners.length; i++) {
-            const source = corners[i]!;
-            const target = hitTestCorners[i]!;
-            target.x = source.x;
-            target.y = source.y;
-          }
-
-          screenCornerBuffer = hitTestCorners;
-        };
-
-        let resolvedCorners: ReturnType<
-          typeof calculateBillboardCornerScreenPositions
-        >;
-        let shaderModelCorners:
-          | ReturnType<typeof calculateBillboardCornerScreenPositions>
-          | undefined;
-        if (useShaderBillboard) {
+        if (prepared.useShaderBillboard && prepared.billboardUniforms) {
+          const uniforms = prepared.billboardUniforms;
           if (uniformBillboardCenterLocation) {
             glContext.uniform2f(
               uniformBillboardCenterLocation,
-              billboardShaderInputs.centerX,
-              billboardShaderInputs.centerY
+              uniforms.center.x,
+              uniforms.center.y
             );
           }
           if (uniformBillboardHalfSizeLocation) {
             glContext.uniform2f(
               uniformBillboardHalfSizeLocation,
-              billboardShaderInputs.halfWidth,
-              billboardShaderInputs.halfHeight
+              uniforms.halfWidth,
+              uniforms.halfHeight
             );
           }
           if (uniformBillboardAnchorLocation) {
             glContext.uniform2f(
               uniformBillboardAnchorLocation,
-              billboardShaderInputs.anchor?.x ?? 0,
-              billboardShaderInputs.anchor?.y ?? 0
+              uniforms.anchor.x,
+              uniforms.anchor.y
             );
           }
           if (uniformBillboardSinCosLocation) {
-            const rad = -billboardShaderInputs.totalRotateDeg * DEG2RAD;
             glContext.uniform2f(
               uniformBillboardSinCosLocation,
-              Math.sin(rad),
-              Math.cos(rad)
+              uniforms.sin,
+              uniforms.cos
             );
           }
-          shaderModelCorners = computeBillboardCornersShaderModel({
-            centerX: billboardShaderInputs.centerX,
-            centerY: billboardShaderInputs.centerY,
-            halfWidth: billboardShaderInputs.halfWidth,
-            halfHeight: billboardShaderInputs.halfHeight,
-            anchor: billboardShaderInputs.anchor,
-            rotationDeg: billboardShaderInputs.totalRotateDeg,
-          });
-          resolvedCorners = shaderModelCorners;
-          if (SL_DEBUG) {
-            const cpuCorners = calculateBillboardCornerScreenPositions(
-              billboardShaderInputs
-            );
-            const cornerDelta = cpuCorners.map((corner, index) => {
-              const shaderCorner = shaderModelCorners![index]!;
-              return {
-                index,
-                dx: corner.x - shaderCorner.x,
-                dy: corner.y - shaderCorner.y,
-                du: corner.u - shaderCorner.u,
-                dv: corner.v - shaderCorner.v,
-              };
-            });
-            (imageEntry as any).__billboardCornerComparison = {
-              cpuCorners,
-              shaderModelCorners,
-              cornerDelta,
-            };
-          }
-        } else {
-          resolvedCorners = calculateBillboardCornerScreenPositions(
-            billboardShaderInputs
+        }
+
+        const texture = prepared.imageResource.texture;
+        if (!texture) {
+          return;
+        }
+
+        glContext.bufferSubData(glContext.ARRAY_BUFFER, 0, prepared.vertexData);
+        glContext.uniform1f(uniformOpacityLocation, prepared.opacity);
+        glContext.activeTexture(glContext.TEXTURE0);
+        glContext.bindTexture(glContext.TEXTURE_2D, texture);
+        glContext.drawArrays(glContext.TRIANGLES, 0, QUAD_VERTEX_COUNT);
+
+        prepared.imageEntry.surfaceShaderInputs = surfaceInputs ?? undefined;
+
+        if (prepared.hitTestCorners && prepared.hitTestCorners.length === 4) {
+          registerHitTestEntry(
+            prepared.spriteEntry,
+            prepared.imageEntry,
+            prepared.hitTestCorners as [
+              SpriteScreenPoint,
+              SpriteScreenPoint,
+              SpriteScreenPoint,
+              SpriteScreenPoint,
+            ],
+            drawOrderCounter
           );
         }
 
-        writeBillboardCorners(resolvedCorners, useShaderBillboard);
+        drawOrderCounter += 1;
+      };
 
-        if (SL_DEBUG) {
-          (imageEntry as any).__debugBag = {
-            mode: 'billboard',
+      const sortedSubLayerBuckets =
+        buildSortedSubLayerBuckets(renderTargetEntries);
+
+      if (renderTargetEntries.length > 0) {
+        const calculationHost = createCalculationHostForMap(mapInstance);
+        try {
+          const imageHandleBuffers = imageHandleBuffersController.ensure();
+          const imageResources =
+            imageHandleBuffersController.getResourcesByHandle();
+          const bucketBuffers = createRenderTargetBucketBuffers(
+            renderTargetEntries,
+            {
+              originReference,
+            }
+          );
+          const preparedItems = calculationHost.prepareDrawSpriteImages({
+            bucket: renderTargetEntries,
+            bucketBuffers,
+            imageResources,
+            imageHandleBuffers,
+            resolvedScaling,
+            clipContext,
+            baseMetersPerPixel,
+            spriteMinPixel,
+            spriteMaxPixel,
             drawingBufferWidth,
             drawingBufferHeight,
             pixelRatio,
-            zoom,
             zoomScaleFactor,
-            resolvedScaling,
-            baseMetersPerPixel,
-            projected,
-            metersPerPixelAtLat,
-            perspectiveRatio,
-            basePixelsPerMeter,
-            effectivePixelsPerMeter,
-            imageScale,
-            anchor,
-            offsetDef,
-            baseProjected,
-            placement,
-            billboardCornersCpu: useShaderBillboard
-              ? ((imageEntry as any).__billboardCornerComparison?.cpuCorners ??
-                resolvedCorners)
-              : resolvedCorners,
-            billboardCornersShaderModel: shaderModelCorners,
-            billboardCornersUsed: resolvedCorners,
-          };
-        }
-      }
-
-      // Register corners for hit testing only when all four vertices were produced.
-      if (screenCornerBuffer && screenCornerBuffer.length === 4) {
-        registerHitTestEntry(
-          spriteEntry,
-          imageEntry,
-          screenCornerBuffer as [
-            SpriteScreenPoint,
-            SpriteScreenPoint,
-            SpriteScreenPoint,
-            SpriteScreenPoint,
-          ],
-          drawOrderCounter
-        );
-        drawOrderCounter += 1;
-      }
-
-      glContext.bufferSubData(glContext.ARRAY_BUFFER, 0, QUAD_VERTEX_SCRATCH);
-      glContext.uniform1f(uniformOpacityLocation, imageEntry.opacity);
-      glContext.activeTexture(glContext.TEXTURE0);
-      glContext.bindTexture(glContext.TEXTURE_2D, imageResource.texture!);
-      glContext.drawArrays(glContext.TRIANGLES, 0, QUAD_VERTEX_COUNT);
-    };
-
-    // Render sprite images. The renderTargetEntries list is already filtered to visible items.
-    // Cache of sprite-specific reference origins (center pixel coordinates).
-    const originCenterCache: ImageCenterCache = new Map();
-
-    const sortedSubLayerBuckets =
-      buildSortedSubLayerBuckets(renderTargetEntries);
-
-    /**
-     * Renders every image within the provided sub-layer bucket after calculating depth.
-     * @param {RenderTargetEntry[]} bucket - Sprite/image pairs belonging to a single sub-layer.
-     */
-    const renderSortedBucket = (bucket: RenderTargetEntry[]): void => {
-      const itemsWithDepth: Array<{
-        sprite: InternalSpriteCurrentState<T>;
-        image: InternalSpriteImageState;
-        resource: RegisteredImage;
-        depthKey: number;
-      }> = [];
-
-      const projectToClipSpace: ProjectToClipSpaceFn = (lng, lat, elevation) =>
-        projectLngLatToClipSpace(lng, lat, elevation, clipContext);
-
-      const unprojectPoint: UnprojectPointFn = ({ x, y }) => {
-        const result = mapInstance.unproject([x, y] as any);
-        if (!result) {
-          return null;
-        }
-        // Convert the MapLibre LngLat object into the simplified structure expected downstream.
-        return { lng: result.lng, lat: result.lat };
-      };
-
-      for (const [spriteEntry, imageEntry] of bucket) {
-        const imageResource = images.get(imageEntry.imageId);
-        if (!imageResource || !imageResource.texture) {
-          // Skip images whose textures have not yet been uploaded to the GPU.
-          continue;
-        }
-
-        const projected = mapInstance.project(spriteEntry.currentLocation);
-        if (!projected) {
-          // Sprite center could not be projected (off-screen); depth cannot be evaluated.
-          continue;
-        }
-
-        const spriteMercator = resolveSpriteMercator(spriteEntry);
-        const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
-          zoom,
-          spriteEntry.currentLocation.lat
-        );
-        if (!Number.isFinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0) {
-          // Invalid scale would blow up downstream computations.
-          continue;
-        }
-
-        const perspectiveRatio = calculatePerspectiveRatio(
-          mapInstance,
-          spriteEntry.currentLocation,
-          spriteMercator
-        );
-        const effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
-          metersPerPixelAtLat,
-          perspectiveRatio
-        );
-        if (effectivePixelsPerMeter <= 0) {
-          // Perspective ratio produced an unusable scale for this sprite.
-          continue;
-        }
-
-        const centerParams: ComputeImageCenterParams = {
-          mapInstance,
-          images,
-          originCenterCache,
-          projected,
-          zoomScaleFactor,
-          baseMetersPerPixel,
-          spriteMinPixel,
-          spriteMaxPixel,
-          effectivePixelsPerMeter,
-          drawingBufferWidth,
-          drawingBufferHeight,
-          pixelRatio,
-          clipContext,
-          altitudeMeters: spriteEntry.currentLocation.z ?? 0,
-        };
-
-        // Resolve anchor/offset defaults for depth computations to stay consistent with draw path.
-        const anchorResolved = imageEntry.anchor ?? DEFAULT_ANCHOR;
-        const offsetResolved = imageEntry.offset ?? DEFAULT_IMAGE_OFFSET;
-
-        const depthCenter = computeImageCenterXY(
-          spriteEntry,
-          imageEntry,
-          centerParams,
-          { useResolvedAnchor: true }
-        );
-
-        let depthKey: number;
-
-        // Surface-mode sprites require world-space geometry computation.
-        if (imageEntry.mode === 'surface') {
-          const imageScale = imageEntry.scale ?? 1;
-          const worldDims = calculateSurfaceWorldDimensions(
-            imageResource.width,
-            imageResource.height,
-            baseMetersPerPixel,
-            imageScale,
-            zoomScaleFactor,
-            {
-              effectivePixelsPerMeter,
-              spriteMinPixel,
-              spriteMaxPixel,
-            }
-          );
-          const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
-            ? imageEntry.displayedRotateDeg
-            : normalizeAngleDeg(
-                (imageEntry.resolvedBaseRotateDeg ?? 0) +
-                  (imageEntry.rotateDeg ?? 0)
-              );
-          const offsetMeters = calculateSurfaceOffsetMeters(
-            offsetResolved,
-            imageScale,
-            zoomScaleFactor,
-            worldDims.scaleAdjustment
-          );
-          const cornerDisplacements = calculateSurfaceCornerDisplacements({
-            worldWidthMeters: worldDims.width,
-            worldHeightMeters: worldDims.height,
-            anchor: anchorResolved,
-            totalRotateDeg,
-            offsetMeters,
+            identityScaleX,
+            identityScaleY,
+            identityOffsetX,
+            identityOffsetY,
+            screenToClipScaleX,
+            screenToClipScaleY,
+            screenToClipOffsetX,
+            screenToClipOffsetY,
           });
 
-          const baseLngLat = (() => {
-            if (imageEntry.originLocation !== undefined) {
-              const refImg = spriteEntry.images
-                .get(imageEntry.originLocation.subLayer)
-                ?.get(imageEntry.originLocation.order);
-              if (refImg) {
-                const baseCenter = computeImageCenterXY(
-                  spriteEntry,
-                  refImg,
-                  centerParams,
-                  {
-                    // Default to the raw (anchorless) position unless explicit opt-in.
-                    useResolvedAnchor:
-                      imageEntry.originLocation.useResolvedAnchor ?? false,
-                  }
-                );
-                const baseLngLatLike = mapInstance.unproject([
-                  baseCenter.x,
-                  baseCenter.y,
-                ] as any);
-                if (baseLngLatLike) {
-                  // Use the referenced image's anchor position when available.
-                  return baseLngLatLike;
-                }
+          const preparedBySubLayer = new Map<
+            number,
+            PreparedDrawSpriteImageParams<T>[]
+          >();
+          for (const prepared of preparedItems) {
+            const subLayer = prepared.imageEntry.subLayer;
+            let list = preparedBySubLayer.get(subLayer);
+            if (!list) {
+              list = [];
+              preparedBySubLayer.set(subLayer, list);
+            }
+            list.push(prepared);
+          }
+
+          for (const [subLayer, bucket] of sortedSubLayerBuckets) {
+            const preparedBucket = preparedBySubLayer.get(subLayer);
+            if (!preparedBucket) {
+              continue;
+            }
+            const bucketImages = new Set<InternalSpriteImageState>();
+            for (const [, image] of bucket) {
+              bucketImages.add(image);
+            }
+            for (const prepared of preparedBucket) {
+              if (!bucketImages.has(prepared.imageEntry)) {
+                continue;
               }
+              bucketImages.delete(prepared.imageEntry);
+              issueSpriteDraw(prepared);
             }
-            return spriteEntry.currentLocation;
-          })();
-
-          const surfaceDepth = calculateSurfaceDepthKey(
-            baseLngLat,
-            cornerDisplacements,
-            spriteEntry.currentLocation,
-            projectToClipSpace,
-            {
-              // Enable per-vertex depth biasing to combat z-fighting when requested.
-              biasFn: ENABLE_NDC_BIAS_SURFACE
-                ? ({ clipZ, clipW }) => {
-                    const orderIndex = Math.min(
-                      imageEntry.order,
-                      ORDER_MAX - 1
-                    );
-                    const biasIndex =
-                      imageEntry.subLayer * ORDER_BUCKET + orderIndex;
-                    const biasNdc = -(biasIndex * EPS_NDC);
-                    const biasedClipZ = clipZ + biasNdc * clipW;
-                    const minClipZ = -clipW + MIN_CLIP_Z_EPSILON;
-                    return {
-                      // Clamp the biased depth so we never cross the near plane.
-                      clipZ: biasedClipZ < minClipZ ? minClipZ : biasedClipZ,
-                      clipW,
-                    };
-                  }
-                : undefined,
-            }
-          );
-
-          if (surfaceDepth === null) {
-            // Any missing corner depth indicates the surface fell outside the clip volume.
-            continue;
           }
-          depthKey = surfaceDepth;
-        } else {
-          // Billboard mode evaluates depth by sampling the screen-space center only.
-          const billboardDepth = calculateBillboardDepthKey(
-            depthCenter,
-            spriteEntry.currentLocation,
-            unprojectPoint,
-            projectToClipSpace
-          );
-          if (billboardDepth === null) {
-            // Depth key calculation failed; omit this image to keep ordering stable.
-            continue;
-          }
-          depthKey = billboardDepth;
+        } finally {
+          calculationHost.release();
         }
-
-        itemsWithDepth.push({
-          sprite: spriteEntry,
-          image: imageEntry,
-          resource: imageResource,
-          depthKey,
-        });
       }
 
-      itemsWithDepth.sort((a, b) => {
-        if (a.depthKey !== b.depthKey) {
-          return a.depthKey - b.depthKey;
-        }
-        if (a.image.order !== b.image.order) {
-          return a.image.order - b.image.order;
-        }
-        const spriteCompare = a.sprite.spriteId.localeCompare(
-          b.sprite.spriteId
-        );
-        if (spriteCompare !== 0) {
-          return spriteCompare;
-        }
-        return a.image.imageId.localeCompare(b.image.imageId);
-      });
-
-      for (const item of itemsWithDepth) {
-        // Draw in sorted order so nearer primitives overwrite farther ones.
-        drawSpriteImage(
-          item.sprite,
-          item.image,
-          item.resource,
-          originCenterCache
-        );
-      }
-    };
-
-    for (const [, bucket] of sortedSubLayerBuckets) {
-      // Process buckets in ascending sub-layer order so draw order respects configuration.
-      renderSortedBucket(bucket);
-    }
-
-    if (
-      showDebugBounds &&
-      debugProgram &&
-      debugVertexBuffer &&
-      debugUniformColorLocation &&
-      debugAttribPositionLocation !== -1
-    ) {
-      glContext.useProgram(debugProgram);
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
-      glContext.enableVertexAttribArray(debugAttribPositionLocation);
-      glContext.vertexAttribPointer(
-        debugAttribPositionLocation,
-        DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
-        glContext.FLOAT,
-        false,
-        DEBUG_OUTLINE_VERTEX_STRIDE,
-        0
-      );
-      glContext.disable(glContext.DEPTH_TEST);
-      glContext.depthMask(false);
-      glContext.uniform4f(
-        debugUniformColorLocation,
-        DEBUG_OUTLINE_COLOR[0],
-        DEBUG_OUTLINE_COLOR[1],
-        DEBUG_OUTLINE_COLOR[2],
-        DEBUG_OUTLINE_COLOR[3]
-      );
       if (
-        debugUniformScreenToClipScaleLocation &&
-        debugUniformScreenToClipOffsetLocation
+        showDebugBounds &&
+        debugProgram &&
+        debugVertexBuffer &&
+        debugUniformColorLocation &&
+        debugAttribPositionLocation !== -1
       ) {
-        glContext.uniform2f(
-          debugUniformScreenToClipScaleLocation,
-          screenToClipScaleX,
-          screenToClipScaleY
+        glContext.useProgram(debugProgram);
+        glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
+        glContext.enableVertexAttribArray(debugAttribPositionLocation);
+        glContext.vertexAttribPointer(
+          debugAttribPositionLocation,
+          DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
+          glContext.FLOAT,
+          false,
+          DEBUG_OUTLINE_VERTEX_STRIDE,
+          0
         );
-        glContext.uniform2f(
-          debugUniformScreenToClipOffsetLocation,
-          screenToClipOffsetX,
-          screenToClipOffsetY
+        glContext.disable(glContext.DEPTH_TEST);
+        glContext.depthMask(false);
+        glContext.uniform4f(
+          debugUniformColorLocation,
+          DEBUG_OUTLINE_COLOR[0],
+          DEBUG_OUTLINE_COLOR[1],
+          DEBUG_OUTLINE_COLOR[2],
+          DEBUG_OUTLINE_COLOR[3]
         );
-      }
-
-      for (const entry of hitTestEntries) {
-        let writeOffset = 0;
-        for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
-          const corner = entry.corners[cornerIndex]!;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
-          DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+        if (
+          debugUniformScreenToClipScaleLocation &&
+          debugUniformScreenToClipOffsetLocation
+        ) {
+          glContext.uniform2f(
+            debugUniformScreenToClipScaleLocation,
+            screenToClipScaleX,
+            screenToClipScaleY
+          );
+          glContext.uniform2f(
+            debugUniformScreenToClipOffsetLocation,
+            screenToClipOffsetX,
+            screenToClipOffsetY
+          );
         }
-        glContext.bufferSubData(
-          glContext.ARRAY_BUFFER,
-          0,
-          DEBUG_OUTLINE_VERTEX_SCRATCH
-        );
-        glContext.drawArrays(
-          glContext.LINE_LOOP,
-          0,
-          DEBUG_OUTLINE_VERTEX_COUNT
-        );
-      }
 
-      glContext.depthMask(true);
-      glContext.enable(glContext.DEPTH_TEST);
-      glContext.disableVertexAttribArray(debugAttribPositionLocation);
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+        for (const entry of hitTestEntries) {
+          let writeOffset = 0;
+          for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
+            const corner = entry.corners[cornerIndex]!;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
+            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+          }
+          glContext.bufferSubData(
+            glContext.ARRAY_BUFFER,
+            0,
+            DEBUG_OUTLINE_VERTEX_SCRATCH
+          );
+          glContext.drawArrays(
+            glContext.LINE_LOOP,
+            0,
+            DEBUG_OUTLINE_VERTEX_COUNT
+          );
+        }
+
+        glContext.depthMask(true);
+        glContext.enable(glContext.DEPTH_TEST);
+        glContext.disableVertexAttribArray(debugAttribPositionLocation);
+        glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+      }
+    } finally {
+      projectionHost.release();
     }
 
     glContext.depthMask(true);
     glContext.enable(glContext.DEPTH_TEST);
     glContext.disable(glContext.BLEND);
-
-    // Queue another render pass.
-    scheduleRender();
   };
 
   //////////////////////////////////////////////////////////////////////////
@@ -4649,15 +3598,20 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    const handle = imageIdHandler.allocate(imageId);
     // Store the image metadata.
     const image: RegisteredImage = {
       id: imageId,
+      handle,
       width: bitmap.width,
       height: bitmap.height,
       bitmap,
       texture: undefined,
     };
     images.set(imageId, image);
+    imageIdHandler.store(handle, image);
+    updateSpriteImageHandles(imageId, handle);
+    imageHandleBuffersController.markDirty(images);
 
     // Queue the upload so the next draw refreshes the texture.
     queueTextureUpload(image);
@@ -4899,14 +3853,19 @@ export const createSpriteLayer = <T = any>(
       renderPixelRatio
     );
 
+    const handle = imageIdHandler.allocate(textGlyphId);
     const image: RegisteredImage = {
       id: textGlyphId,
+      handle,
       width: totalWidth,
       height: totalHeight,
       bitmap,
       texture: undefined,
     };
     images.set(textGlyphId, image);
+    imageIdHandler.store(handle, image);
+    updateSpriteImageHandles(textGlyphId, handle);
+    imageHandleBuffersController.markDirty(images);
 
     queueTextureUpload(image);
     ensureTextures();
@@ -4927,6 +3886,7 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    // Remove image bounds
     sprites.forEach((sprite) => {
       sprite.images.forEach((orderMap) => {
         orderMap.forEach((imageState) => {
@@ -4944,8 +3904,12 @@ export const createSpriteLayer = <T = any>(
     }
 
     cancelQueuedTextureUpload(imageId);
+
     // Remove the image entry.
     images.delete(imageId);
+    imageIdHandler.release(imageId);
+    updateSpriteImageHandles(imageId, 0);
+    imageHandleBuffersController.markDirty(images);
 
     // Rebuild render targets now that the image is gone.
     ensureRenderTargetEntries();
@@ -4969,6 +3933,15 @@ export const createSpriteLayer = <T = any>(
       }
     });
     images.clear();
+    imageIdHandler.reset();
+    imageHandleBuffersController.markDirty(images);
+    sprites.forEach((sprite) => {
+      sprite.images.forEach((orderMap) => {
+        orderMap.forEach((imageState) => {
+          imageState.imageHandle = 0;
+        });
+      });
+    });
     hitTestTree.clear();
     hitTestTreeItems = new WeakMap<
       InternalSpriteImageState,
@@ -4990,11 +3963,13 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Internal helper that constructs sprite state without scheduling redraws.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {string} spriteId - Sprite identifier.
    * @param {SpriteInit<T>} init - Initial sprite parameters.
    * @returns {boolean} `true` when the sprite is stored; `false` when the ID already exists or is invalid.
    */
   const addSpriteInternal = (
+    projectionHost: ProjectionHost,
     spriteId: string,
     init: SpriteInit<T>
   ): boolean => {
@@ -5011,8 +3986,10 @@ export const createSpriteLayer = <T = any>(
       const state = createImageStateFromInit(
         imageInit,
         imageInit.subLayer,
-        imageInit.order
+        imageInit.order,
+        originReference
       );
+      state.imageHandle = resolveImageHandle(state.imageId);
       let inner = images.get(imageInit.subLayer);
       if (!inner) {
         // First entry for this sub-layer; allocate a map for subsequent inserts.
@@ -5072,12 +4049,12 @@ export const createSpriteLayer = <T = any>(
     // Construct internal sprite state.
     const currentLocation = cloneSpriteLocation(init.location);
     const initialAltitude = currentLocation.z ?? 0;
-    const initialMercator = MercatorCoordinate.fromLngLat(
-      { lng: currentLocation.lng, lat: currentLocation.lat },
-      initialAltitude
-    );
+    const initialMercator = projectionHost.fromLngLat(currentLocation);
+    const spriteHandle = spriteIdHandler.allocate(spriteId);
+
     const spriteState: InternalSpriteCurrentState<T> = {
       spriteId,
+      handle: spriteHandle,
       // Sprites default to enabled unless explicitly disabled in the init payload.
       isEnabled: init.isEnabled ?? true,
       currentLocation,
@@ -5099,8 +4076,9 @@ export const createSpriteLayer = <T = any>(
 
     // Store the sprite state.
     sprites.set(spriteId, spriteState);
+    spriteIdHandler.store(spriteHandle, spriteState);
 
-    refreshSpriteHitTestBounds(spriteState);
+    refreshSpriteHitTestBounds(projectionHost, spriteState);
 
     return true;
   };
@@ -5108,18 +4086,18 @@ export const createSpriteLayer = <T = any>(
   /**
    * Expands a batch sprite payload into iterable entries.
    * @param {SpriteInitCollection<T>} collection - Batch payload.
-   * @returns {Array<[string, SpriteInit<T>]>} Normalized entries.
+   * @returns {Array<[string, Readonly<SpriteInit<T>>]>} Normalized entries.
    */
   const resolveSpriteInitCollection = (
     collection: SpriteInitCollection<T>
-  ): Array<[string, SpriteInit<T>]> => {
+  ): readonly [string, Readonly<SpriteInit<T>>][] => {
     if (Array.isArray(collection)) {
-      return collection.map((entry): [string, SpriteInit<T>] => [
+      return collection.map((entry): [string, Readonly<SpriteInit<T>>] => [
         entry.spriteId,
         entry,
       ]);
     }
-    return Object.entries(collection) as Array<[string, SpriteInit<T>]>;
+    return Object.entries(collection);
   };
 
   /**
@@ -5129,14 +4107,23 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when the sprite is added; `false` when the ID already exists.
    */
   const addSprite = (spriteId: string, init: SpriteInit<T>): boolean => {
-    const isAdded = addSpriteInternal(spriteId, init);
-    if (isAdded) {
-      // Rebuild render target entries.
-      ensureRenderTargetEntries();
-      // Request a redraw so the new sprite appears immediately.
-      scheduleRender();
+    if (!map) {
+      return false;
     }
-    return isAdded;
+
+    const projectionHost = createProjectionHostForMap(map);
+    try {
+      const isAdded = addSpriteInternal(projectionHost, spriteId, init);
+      if (isAdded) {
+        // Rebuild render target entries.
+        ensureRenderTargetEntries();
+        // Request a redraw so the new sprite appears immediately.
+        scheduleRender();
+      }
+      return isAdded;
+    } finally {
+      projectionHost.release();
+    }
   };
 
   /**
@@ -5145,21 +4132,30 @@ export const createSpriteLayer = <T = any>(
    * @returns {number} Number of sprites that were newly added.
    */
   const addSprites = (collection: SpriteInitCollection<T>): number => {
-    let addedCount = 0;
-    for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
-      collection
-    )) {
-      if (addSpriteInternal(spriteId, spriteInit)) {
-        addedCount++;
+    if (!map) {
+      return 0;
+    }
+
+    const projectionHost = createProjectionHostForMap(map);
+    try {
+      let addedCount = 0;
+      for (const [spriteId, spriteInit] of resolveSpriteInitCollection(
+        collection
+      )) {
+        if (addSpriteInternal(projectionHost, spriteId, spriteInit)) {
+          addedCount++;
+        }
       }
+      if (addedCount > 0) {
+        // Rebuild render target entries.
+        ensureRenderTargetEntries();
+        // Request a redraw so the new sprite appears immediately.
+        scheduleRender();
+      }
+      return addedCount;
+    } finally {
+      projectionHost.release();
     }
-    if (addedCount > 0) {
-      // Rebuild render target entries.
-      ensureRenderTargetEntries();
-      // Request a redraw so the new sprite appears immediately.
-      scheduleRender();
-    }
-    return addedCount;
   };
 
   /**
@@ -5178,6 +4174,7 @@ export const createSpriteLayer = <T = any>(
       });
     });
     sprites.delete(spriteId);
+    spriteIdHandler.release(spriteId);
     return true;
   };
 
@@ -5234,12 +4231,10 @@ export const createSpriteLayer = <T = any>(
     }
 
     hitTestTree.clear();
-    hitTestTreeItems = new WeakMap<
-      InternalSpriteImageState,
-      HitTestTreeHandle
-    >();
-    hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
+    hitTestTreeItems = new WeakMap();
+    hitTestEntryByImage = new WeakMap();
     sprites.clear();
+    spriteIdHandler.reset();
 
     // Rebuild render target entries.
     ensureRenderTargetEntries();
@@ -5299,6 +4294,7 @@ export const createSpriteLayer = <T = any>(
 
   /**
    * Adds an image definition to the sprite, validating origin references and initializing rotation state.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {InternalSpriteCurrentState<T>} sprite - Sprite receiving the image.
    * @param {number} subLayer - Sub-layer identifier.
    * @param {number} order - Order slot within the sub-layer.
@@ -5307,6 +4303,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when the image is added; `false` when the slot already exists.
    */
   const addSpriteImageInternal = (
+    projectionHost: ProjectionHost,
     sprite: InternalSpriteCurrentState<T>,
     subLayer: number,
     order: number,
@@ -5318,7 +4315,13 @@ export const createSpriteLayer = <T = any>(
     }
 
     // Create and add the internal image state.
-    const state = createImageStateFromInit(imageInit, subLayer, order);
+    const state = createImageStateFromInit(
+      imageInit,
+      subLayer,
+      order,
+      originReference
+    );
+    state.imageHandle = resolveImageHandle(state.imageId);
 
     // Verify references: ensure targets exist and no cycles occur.
     if (state.originLocation !== undefined) {
@@ -5360,7 +4363,7 @@ export const createSpriteLayer = <T = any>(
     syncImageRotationChannel(state);
 
     setImageState(sprite, state);
-    registerImageBoundsInHitTestTree(sprite, state);
+    registerImageBoundsInHitTestTree(projectionHost, sprite, state);
     resultOut.isUpdated = true;
     return true;
   };
@@ -5385,23 +4388,40 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    // Insert the image definition.
-    const result: SpriteImageOperationInternalResult = { isUpdated: false };
-    addSpriteImageInternal(sprite, subLayer, order, imageInit, result);
-    if (!result.isUpdated) {
+    if (!map) {
       return false;
     }
 
-    // Refresh render targets.
-    ensureRenderTargetEntries();
-    // Request a redraw so the new image appears immediately.
-    scheduleRender();
+    const projectionHost = createProjectionHostForMap(map);
+    try {
+      // Insert the image definition.
+      const result: SpriteImageOperationInternalResult = { isUpdated: false };
+      addSpriteImageInternal(
+        projectionHost,
+        sprite,
+        subLayer,
+        order,
+        imageInit,
+        result
+      );
+      if (!result.isUpdated) {
+        return false;
+      }
 
-    return true;
+      // Refresh render targets.
+      ensureRenderTargetEntries();
+      // Request a redraw so the new image appears immediately.
+      scheduleRender();
+
+      return true;
+    } finally {
+      projectionHost.release();
+    }
   };
 
   /**
    * Updates an existing image with partial changes, handling interpolation and auto-rotation adjustments.
+   * @param {ProjectionHost} projectionHost - Projection host.
    * @param {InternalSpriteCurrentState<T>} sprite - Sprite containing the image.
    * @param {number} subLayer - Sub-layer identifier.
    * @param {number} order - Order slot within the sub-layer.
@@ -5410,6 +4430,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {boolean} `true` when the image exists and the update succeeded.
    */
   const updateSpriteImageInternal = (
+    projectionHost: ProjectionHost,
     sprite: InternalSpriteCurrentState<T>,
     subLayer: number,
     order: number,
@@ -5424,6 +4445,7 @@ export const createSpriteLayer = <T = any>(
     if (imageUpdate.imageId !== undefined) {
       // Swap texture reference when caller points to a new image asset.
       state.imageId = imageUpdate.imageId;
+      state.imageHandle = resolveImageHandle(imageUpdate.imageId);
     }
     if (imageUpdate.mode !== undefined) {
       // Mode changes influence how geometry is generated.
@@ -5533,7 +4555,7 @@ export const createSpriteLayer = <T = any>(
       );
     }
 
-    registerImageBoundsInHitTestTree(sprite, state);
+    registerImageBoundsInHitTestTree(projectionHost, sprite, state);
 
     resultOut.isUpdated = true;
     return true;
@@ -5553,25 +4575,41 @@ export const createSpriteLayer = <T = any>(
     order: number,
     imageUpdate: SpriteImageDefinitionUpdate
   ): boolean => {
-    // Fail if the sprite cannot be found.
-    const sprite = sprites.get(spriteId);
-    if (!sprite) {
+    if (!map) {
       return false;
     }
 
-    // Apply the image update.
-    const result: SpriteImageOperationInternalResult = { isUpdated: false };
-    updateSpriteImageInternal(sprite, subLayer, order, imageUpdate, result);
-    if (!result.isUpdated) {
-      return false;
+    const projectionHost = createProjectionHostForMap(map);
+    try {
+      // Fail if the sprite cannot be found.
+      const sprite = sprites.get(spriteId);
+      if (!sprite) {
+        return false;
+      }
+
+      // Apply the image update.
+      const result: SpriteImageOperationInternalResult = { isUpdated: false };
+      updateSpriteImageInternal(
+        projectionHost,
+        sprite,
+        subLayer,
+        order,
+        imageUpdate,
+        result
+      );
+      if (!result.isUpdated) {
+        return false;
+      }
+
+      // Refresh render targets.
+      ensureRenderTargetEntries();
+      // Request a redraw so the updated image is displayed immediately.
+      scheduleRender();
+
+      return true;
+    } finally {
+      projectionHost.release();
     }
-
-    // Refresh render targets.
-    ensureRenderTargetEntries();
-    // Request a redraw so the updated image is displayed immediately.
-    scheduleRender();
-
-    return true;
   };
 
   /**
@@ -5649,6 +4687,7 @@ export const createSpriteLayer = <T = any>(
     | 'isRequiredRender';
 
   const updateSpriteInternal = (
+    projectionHost: ProjectionHost,
     spriteId: string,
     update: SpriteUpdateEntry<T>
   ): UpdateSpriteResult => {
@@ -5792,7 +4831,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     if (needsHitTestRefresh) {
-      refreshSpriteHitTestBounds(sprite);
+      refreshSpriteHitTestBounds(projectionHost, sprite);
     }
 
     // Rendering must be scheduled when draw-affecting changes occurred.
@@ -5816,26 +4855,36 @@ export const createSpriteLayer = <T = any>(
     spriteId: string,
     update: SpriteUpdateEntry<T>
   ): boolean => {
-    // Perform the update.
-    const result = updateSpriteInternal(spriteId, update);
+    if (!map) {
+      return false;
+    }
 
-    switch (result) {
-      case 'notfound':
-        // Sprite missing; report no change to the caller.
-        return false;
-      case 'ignored':
-        // Update produced no state difference, so nothing to propagate.
-        return false;
-      case 'updated':
-        // State changed but no redraw is required (e.g., metadata change).
-        return true;
-      case 'isRequiredRender':
-        // State changed in a way that affects rendering; refresh buffers and request repaint.
-        ensureRenderTargetEntries();
-        scheduleRender();
-        return true;
+    const projectionHost = createProjectionHostForMap(map);
+    try {
+      // Perform the update.
+      const result = updateSpriteInternal(projectionHost, spriteId, update);
+
+      switch (result) {
+        case 'notfound':
+          // Sprite missing; report no change to the caller.
+          return false;
+        case 'ignored':
+          // Update produced no state difference, so nothing to propagate.
+          return false;
+        case 'updated':
+          // State changed but no redraw is required (e.g., metadata change).
+          return true;
+        case 'isRequiredRender':
+          // State changed in a way that affects rendering; refresh buffers and request repaint.
+          ensureRenderTargetEntries();
+          scheduleRender();
+          return true;
+      }
+    } finally {
+      projectionHost.release();
     }
   };
+
   /**
    * Adds, updates, or removes sprites based on arbitrary source items.
    * @template TSourceItem Source item type that exposes a sprite identifier.
@@ -5851,140 +4900,156 @@ export const createSpriteLayer = <T = any>(
       return 0;
     }
 
-    let changedCount = 0;
-    let isRequiredRender = false;
+    if (!map) {
+      return 0;
+    }
 
-    // Reuse mutable helpers for efficiency.
-    let currentSprite: InternalSpriteCurrentState<T> = undefined!;
-    let didMutateImages = false;
-    const operationResult: SpriteImageOperationInternalResult = {
-      isUpdated: false,
-    };
-    const updateObject: SpriteUpdaterEntry<T> = {
-      isEnabled: undefined,
-      location: undefined,
-      interpolation: undefined,
-      tag: undefined,
-      getImageIndexMap: () => {
-        const map = new Map<number, Set<number>>();
-        currentSprite.images.forEach((inner, subLayer) => {
-          map.set(subLayer, new Set(inner.keys()));
-        });
-        return map;
-      },
-      addImage: (subLayer, order, imageInit) => {
-        const added = addSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          imageInit,
-          operationResult
-        );
-        if (added) {
-          didMutateImages = true;
-        }
-        return added;
-      },
-      updateImage: (subLayer, order, imageUpdate) => {
-        const updated = updateSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          imageUpdate,
-          operationResult
-        );
-        if (updated) {
-          didMutateImages = true;
-        }
-        return updated;
-      },
-      removeImage: (subLayer, order) => {
-        const removed = removeSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          operationResult
-        );
-        if (removed) {
-          didMutateImages = true;
-        }
-        return removed;
-      },
-    } as SpriteUpdaterEntry<T>;
+    const projectionHost = createProjectionHostForMap(map);
+    try {
+      let changedCount = 0;
+      let isRequiredRender = false;
 
-    for (const sourceItem of sourceItems) {
-      const spriteId = sourceItem.spriteId;
-      const sprite = sprites.get(spriteId);
+      // Reuse mutable helpers for efficiency.
+      let currentSprite: InternalSpriteCurrentState<T> = undefined!;
+      let didMutateImages = false;
+      const operationResult: SpriteImageOperationInternalResult = {
+        isUpdated: false,
+      };
+      const updateObject: SpriteUpdaterEntry<T> = {
+        isEnabled: undefined,
+        location: undefined,
+        interpolation: undefined,
+        tag: undefined,
+        getImageIndexMap: () => {
+          const map = new Map<number, Set<number>>();
+          currentSprite.images.forEach((inner, subLayer) => {
+            map.set(subLayer, new Set(inner.keys()));
+          });
+          return map;
+        },
+        addImage: (subLayer, order, imageInit) => {
+          const added = addSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageInit,
+            operationResult
+          );
+          if (added) {
+            didMutateImages = true;
+          }
+          return added;
+        },
+        updateImage: (subLayer, order, imageUpdate) => {
+          const updated = updateSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageUpdate,
+            operationResult
+          );
+          if (updated) {
+            didMutateImages = true;
+          }
+          return updated;
+        },
+        removeImage: (subLayer, order) => {
+          const removed = removeSpriteImageInternal(
+            currentSprite,
+            subLayer,
+            order,
+            operationResult
+          );
+          if (removed) {
+            didMutateImages = true;
+          }
+          return removed;
+        },
+      } as SpriteUpdaterEntry<T>;
 
-      if (!sprite) {
-        const init = mutator.add(sourceItem);
-        if (!init) {
+      for (const sourceItem of sourceItems) {
+        const spriteId = sourceItem.spriteId;
+        const sprite = sprites.get(spriteId);
+
+        if (!sprite) {
+          const init = mutator.add(sourceItem);
+          if (!init) {
+            continue;
+          }
+          if (addSpriteInternal(projectionHost, spriteId, init)) {
+            changedCount++;
+            isRequiredRender = true;
+          }
           continue;
         }
-        if (addSpriteInternal(spriteId, init)) {
-          changedCount++;
-          isRequiredRender = true;
-        }
-        continue;
-      }
 
-      currentSprite = sprite;
-      operationResult.isUpdated = false;
-      didMutateImages = false;
+        currentSprite = sprite;
+        operationResult.isUpdated = false;
+        didMutateImages = false;
 
-      const decision = mutator.modify(
-        sourceItem,
-        sprite as SpriteCurrentState<T>,
-        updateObject
-      );
+        const decision = mutator.modify(
+          sourceItem,
+          sprite as SpriteCurrentState<T>,
+          updateObject
+        );
 
-      if (decision === 'remove') {
-        if (removeSpriteInternal(spriteId)) {
-          changedCount++;
-          isRequiredRender = true;
-        }
-      } else {
-        const updateResult = updateSpriteInternal(spriteId, updateObject);
-        let spriteChanged = false;
+        if (decision === 'remove') {
+          if (removeSpriteInternal(spriteId)) {
+            changedCount++;
+            isRequiredRender = true;
+          }
+        } else {
+          const updateResult = updateSpriteInternal(
+            projectionHost,
+            spriteId,
+            updateObject
+          );
+          let spriteChanged = false;
 
-        switch (updateResult) {
-          case 'updated':
-            spriteChanged = true;
-            break;
-          case 'isRequiredRender':
+          switch (updateResult) {
+            case 'updated':
+              spriteChanged = true;
+              break;
+            case 'isRequiredRender':
+              spriteChanged = true;
+              isRequiredRender = true;
+              break;
+          }
+
+          if (didMutateImages) {
             spriteChanged = true;
             isRequiredRender = true;
-            break;
+          }
+
+          if (spriteChanged) {
+            changedCount++;
+          }
         }
 
-        if (didMutateImages) {
-          spriteChanged = true;
-          isRequiredRender = true;
-        }
-
-        if (spriteChanged) {
-          changedCount++;
-        }
+        // Reset reusable fields on the shared update object.
+        updateObject.isEnabled = undefined;
+        updateObject.location = undefined;
+        updateObject.interpolation = undefined;
+        updateObject.tag = undefined;
+        operationResult.isUpdated = false;
+        didMutateImages = false;
       }
 
-      // Reset reusable fields on the shared update object.
-      updateObject.isEnabled = undefined;
-      updateObject.location = undefined;
-      updateObject.interpolation = undefined;
-      updateObject.tag = undefined;
-      operationResult.isUpdated = false;
-      didMutateImages = false;
-    }
+      // Request rendering
+      if (isRequiredRender) {
+        // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
+        ensureRenderTargetEntries();
+        scheduleRender();
+      }
 
-    // Request rendering
-    if (isRequiredRender) {
-      // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
-      ensureRenderTargetEntries();
-      scheduleRender();
+      return changedCount;
+    } finally {
+      projectionHost.release();
     }
-
-    return changedCount;
   };
+
   /**
    * Iterates over every sprite and attempts to update it via the provided callback.
    * @param {(sprite: SpriteCurrentState<T>, update: SpriteUpdaterEntry<T>) => boolean} updater - Callback invoked per sprite; return `false` to abort iteration.
@@ -5996,89 +5061,133 @@ export const createSpriteLayer = <T = any>(
       update: SpriteUpdaterEntry<T>
     ) => boolean
   ): number => {
-    let updatedCount = 0;
-    let isRequiredRender = false;
-
-    // Reuse allocation-heavy objects.
-    let currentSprite: InternalSpriteCurrentState<T> = undefined!;
-    const operationResult: SpriteImageOperationInternalResult = {
-      isUpdated: false,
-    };
-    const updateObject: SpriteUpdaterEntry<T> = {
-      getImageIndexMap: () => {
-        const map = new Map<number, Set<number>>();
-        currentSprite.images.forEach((inner, subLayer) => {
-          map.set(subLayer, new Set(inner.keys()));
-        });
-        return map;
-      },
-      addImage: (subLayer, order, imageInit) =>
-        addSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          imageInit,
-          operationResult
-        ),
-      updateImage: (subLayer, order, imageUpdate) =>
-        updateSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          imageUpdate,
-          operationResult
-        ),
-      removeImage: (subLayer, order) =>
-        removeSpriteImageInternal(
-          currentSprite,
-          subLayer,
-          order,
-          operationResult
-        ),
-    } as SpriteUpdaterEntry<T>;
-
-    // Process every sprite.
-    sprites.forEach((sprite) => {
-      currentSprite = sprite;
-
-      // Invoke the user-supplied updater to populate updateObject.
-      updater(sprite as SpriteCurrentState<T>, updateObject);
-
-      // Apply the update.
-      const result = updateSpriteInternal(sprite.spriteId, updateObject);
-
-      switch (result) {
-        case 'notfound':
-          // Sprite vanished during iteration; skip it.
-          break;
-        case 'ignored':
-          // Updater made no net changes.
-          break;
-        case 'updated':
-          updatedCount++;
-          break;
-        case 'isRequiredRender':
-          // Changes require a redraw after iteration completes.
-          isRequiredRender = true;
-          updatedCount++;
-          break;
-      }
-
-      // Reset reusable fields on the shared update object.
-      updateObject.isEnabled = undefined;
-      updateObject.location = undefined;
-      updateObject.interpolation = undefined;
-      updateObject.tag = undefined;
-    });
-
-    // Request rendering if any sprite or image changed.
-    if (isRequiredRender || operationResult.isUpdated) {
-      // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
-      ensureRenderTargetEntries();
-      scheduleRender();
+    if (!map) {
+      return 0;
     }
 
-    return updatedCount;
+    const projectionHost = createProjectionHostForMap(map);
+    try {
+      let updatedCount = 0;
+      let isRequiredRender = false;
+
+      // Reuse allocation-heavy objects.
+      let currentSprite: InternalSpriteCurrentState<T> = undefined!;
+      const operationResult: SpriteImageOperationInternalResult = {
+        isUpdated: false,
+      };
+      const updateObject: SpriteUpdaterEntry<T> = {
+        getImageIndexMap: () => {
+          const map = new Map<number, Set<number>>();
+          currentSprite.images.forEach((inner, subLayer) => {
+            map.set(subLayer, new Set(inner.keys()));
+          });
+          return map;
+        },
+        addImage: (subLayer, order, imageInit) =>
+          addSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageInit,
+            operationResult
+          ),
+        updateImage: (subLayer, order, imageUpdate) =>
+          updateSpriteImageInternal(
+            projectionHost,
+            currentSprite,
+            subLayer,
+            order,
+            imageUpdate,
+            operationResult
+          ),
+        removeImage: (subLayer, order) =>
+          removeSpriteImageInternal(
+            currentSprite,
+            subLayer,
+            order,
+            operationResult
+          ),
+      } as SpriteUpdaterEntry<T>;
+
+      // Process every sprite.
+      sprites.forEach((sprite) => {
+        currentSprite = sprite;
+
+        // Invoke the user-supplied updater to populate updateObject.
+        updater(sprite as SpriteCurrentState<T>, updateObject);
+
+        // Apply the update.
+        const result = updateSpriteInternal(
+          projectionHost,
+          sprite.spriteId,
+          updateObject
+        );
+
+        switch (result) {
+          case 'notfound':
+            // Sprite vanished during iteration; skip it.
+            break;
+          case 'ignored':
+            // Updater made no net changes.
+            break;
+          case 'updated':
+            updatedCount++;
+            break;
+          case 'isRequiredRender':
+            // Changes require a redraw after iteration completes.
+            isRequiredRender = true;
+            updatedCount++;
+            break;
+        }
+
+        // Reset reusable fields on the shared update object.
+        updateObject.isEnabled = undefined;
+        updateObject.location = undefined;
+        updateObject.interpolation = undefined;
+        updateObject.tag = undefined;
+      });
+
+      // Request rendering if any sprite or image changed.
+      if (isRequiredRender || operationResult.isUpdated) {
+        // Either a sprite changed or an image operation mutated state; refresh buffers and repaint.
+        ensureRenderTargetEntries();
+        scheduleRender();
+      }
+
+      return updatedCount;
+    } finally {
+      projectionHost.release();
+    }
+  };
+
+  const setHitTestEnabled = (enabled: boolean) => {
+    if (isHitTestEnabled === enabled) {
+      return;
+    }
+    isHitTestEnabled = enabled;
+    hitTestTree.clear();
+    hitTestTreeItems = new WeakMap<
+      InternalSpriteImageState,
+      HitTestTreeHandle
+    >();
+    hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
+    if (!enabled) {
+      return;
+    }
+
+    if (!map) {
+      return;
+    }
+
+    const projectionHost = createProjectionHostForMap(map);
+    try {
+      sprites.forEach((sprite) => {
+        refreshSpriteHitTestBounds(projectionHost, sprite);
+      });
+    } finally {
+      projectionHost.release();
+    }
   };
 
   /**
@@ -6109,27 +5218,7 @@ export const createSpriteLayer = <T = any>(
     updateSprite,
     mutateSprites,
     updateForEach,
-    setHitTestEnabled: (enabled: boolean) => {
-      if (isHitTestEnabled === enabled) {
-        return;
-      }
-      isHitTestEnabled = enabled;
-      hitTestTree.clear();
-      hitTestTreeItems = new WeakMap<
-        InternalSpriteImageState,
-        HitTestTreeHandle
-      >();
-      hitTestEntryByImage = new WeakMap<
-        InternalSpriteImageState,
-        HitTestEntry
-      >();
-      if (!enabled) {
-        return;
-      }
-      sprites.forEach((sprite) => {
-        refreshSpriteHitTestBounds(sprite);
-      });
-    },
+    setHitTestEnabled,
     on: addEventListener,
     off: removeEventListener,
   };

@@ -5,6 +5,6 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 export * from './types';
-export * from './const';
-export * from './utils';
+export * from './default';
+export * from './image';
 export * from './SpriteLayer';
