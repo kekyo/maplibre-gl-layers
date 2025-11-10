@@ -187,9 +187,48 @@ export type WasmVariant = SpriteLayerCalculationVariant;
 
 type WasmBinaryVariant = Exclude<WasmVariant, 'disabled'>;
 
-const WASM_BINARY_PATHS: Record<WasmBinaryVariant, string> = {
-  simd: './wasm/offloads-simd.wasm',
-  nosimd: './wasm/offloads-nosimd.wasm',
+const DEFAULT_WASM_URLS: Record<WasmBinaryVariant, URL> = {
+  simd: new URL('./wasm/offloads-simd.wasm', import.meta.url),
+  nosimd: new URL('./wasm/offloads-nosimd.wasm', import.meta.url),
+};
+
+const WASM_BINARY_FILE_NAMES: Record<WasmBinaryVariant, string> = {
+  simd: DEFAULT_WASM_URLS.simd.pathname.substring(
+    DEFAULT_WASM_URLS.simd.pathname.lastIndexOf('/') + 1
+  ),
+  nosimd: DEFAULT_WASM_URLS.nosimd.pathname.substring(
+    DEFAULT_WASM_URLS.nosimd.pathname.lastIndexOf('/') + 1
+  ),
+};
+
+const ensureTrailingSlash = (value: string): string =>
+  value.endsWith('/') ? value : `${value}/`;
+
+const resolveRuntimeBase = (): string => {
+  const runtimeLocation = (globalThis as { location?: Location }).location;
+  if (runtimeLocation?.href) {
+    return runtimeLocation.href;
+  }
+  return import.meta.url;
+};
+
+const resolveBaseUrl = (base: string): URL => {
+  try {
+    return new URL(base);
+  } catch {
+    return new URL(base, resolveRuntimeBase());
+  }
+};
+
+let wasmBaseUrlOverride: string | undefined;
+
+const buildWasmUrl = (variant: WasmBinaryVariant): URL => {
+  if (wasmBaseUrlOverride !== undefined) {
+    const normalizedBase = ensureTrailingSlash(wasmBaseUrlOverride);
+    const baseUrl = resolveBaseUrl(normalizedBase);
+    return new URL(WASM_BINARY_FILE_NAMES[variant], baseUrl);
+  }
+  return DEFAULT_WASM_URLS[variant];
 };
 
 interface RawProjectionWasmExports {
@@ -253,7 +292,7 @@ const createImportFunctionStub = (): Record<
 const loadWasmBinary = async (
   variant: WasmBinaryVariant
 ): Promise<ArrayBuffer> => {
-  const wasmUrl = new URL(WASM_BINARY_PATHS[variant], import.meta.url);
+  const wasmUrl = buildWasmUrl(variant);
 
   if (typeof fetch === 'function') {
     try {
@@ -708,6 +747,8 @@ let currentWasmHost: (WasmHost & Releaseable) | undefined;
 export interface InitializeWasmHostOptions {
   /** Force initialization. Default is false. */
   readonly force?: boolean;
+  /** Override the URL used to fetch wasm artifacts. */
+  readonly wasmBaseUrl?: string;
 }
 
 /**
@@ -720,7 +761,17 @@ export const initializeWasmHost = async (
   preferredVariant: WasmVariant,
   options?: InitializeWasmHostOptions
 ): Promise<WasmVariant> => {
-  if (options?.force) {
+  let nextBaseUrl = wasmBaseUrlOverride;
+  if (options?.wasmBaseUrl !== undefined) {
+    nextBaseUrl = options.wasmBaseUrl === '' ? undefined : options.wasmBaseUrl;
+  }
+
+  const baseChanged = nextBaseUrl !== wasmBaseUrlOverride;
+  if (options?.wasmBaseUrl !== undefined) {
+    wasmBaseUrlOverride = nextBaseUrl;
+  }
+
+  if (options?.force || baseChanged) {
     currentWasmHost = undefined;
   }
 

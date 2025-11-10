@@ -144,7 +144,16 @@ map.on('load', async () => {
 
 ### WASMの有効化と解放
 
-SpriteLayer は既定では JavaScript 実装で動作します。`initializeSpriteLayerHost()`（必要なら `'simd' | 'nosimd' | 'disabled'` を指定）を一度呼び出すことで、WASM ホストのロードを試行できます。呼び出さない場合や初期化に失敗した場合は、自動的に JS 計算にフォールバックします。
+SpriteLayer は既定では JavaScript 実装で動作します。`initializeSpriteLayerHost()` を一度呼び出すことで WASM ホストのロードを試行でき、引数にはバリアント（`'simd' | 'nosimd' | 'disabled'`）または `{ variant?, wasmBaseUrl? }` 形式のオプションを指定できます。呼び出さない場合や初期化に失敗した場合は、自動的に JS 計算にフォールバックします。
+
+```typescript
+await initializeSpriteLayerHost({
+  variant: 'simd',
+  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
+});
+```
+
+`wasmBaseUrl` を指定すると、npm パッケージに含まれる `dist/wasm` ディレクトリを任意の場所（CDN など）へコピーして運用できます。省略した場合は、配布された `dist` ディレクトリ直下にある `.wasm` をそのまま読み込みますので、Vite/Rollup/webpack 等で特別な設定は不要です。
 
 アプリケーション全体の終了などで WASM を解放したい場合は、`releaseSpriteLayerHost()` を呼び出してください。解放後は再度 `initializeSpriteLayerHost()` を呼び出すまで JS モードで動作します。
 
