@@ -11,6 +11,7 @@ import type { SpriteLayerCalculationVariant } from './types';
 
 const BUFFER_POOL_ENTRY_TTL_MS = 5_000;
 const BUFFER_POOL_SWEEP_INTERVAL_MS = 3_000;
+const BUFFER_POOL_MAX_REUSE_RATIO = 2;
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -124,6 +125,7 @@ export interface TypedArrayBufferView<TArray> extends ArrayBufferView {
    * @param from An array.
    */
   readonly set: (from: ArrayLike<TypedArrayElement<TArray>>) => void;
+  readonly length: number;
 }
 
 /**
@@ -294,6 +296,7 @@ interface InternalBufferHolder<TArray extends TypedArrayBufferView<TArray>>
   extends BufferHolder<TArray> {
   __ptr: Pointer;
   __buffer: TArray;
+  __capacity: number;
   __length: number;
   /** Is this pooled? */
   __pooled: boolean;
@@ -482,16 +485,43 @@ const instantiateProjectionWasm = async (
       pool.set(ArrayType, typedPool);
     }
 
-    let stack = typedPool.get(length) as
+    let candidate: InternalBufferHolder<TArray> | undefined;
+    const exactStack = typedPool.get(length) as
       | InternalBufferHolder<TArray>[]
       | undefined;
-    let candidate: InternalBufferHolder<TArray> | undefined;
-    if (stack && stack.length > 0) {
-      candidate = stack.pop();
-      if (stack.length === 0) {
+    if (exactStack && exactStack.length > 0) {
+      candidate = exactStack.pop();
+      if (exactStack.length === 0) {
         typedPool.delete(length);
         if (typedPool.size === 0) {
           pool.delete(ArrayType);
+        }
+      }
+    }
+    if (!candidate && typedPool.size > 0) {
+      const maxCapacity = length * BUFFER_POOL_MAX_REUSE_RATIO;
+      let bestCapacity: number | undefined;
+      let bestStack: InternalBufferHolder<TArray>[] | undefined;
+      typedPool.forEach((stack, capacity) => {
+        if (stack.length === 0) {
+          typedPool.delete(capacity);
+          return;
+        }
+        if (capacity < length || capacity > maxCapacity) {
+          return;
+        }
+        if (bestStack === undefined || capacity < (bestCapacity as number)) {
+          bestStack = stack as InternalBufferHolder<TArray>[];
+          bestCapacity = capacity;
+        }
+      });
+      if (bestStack && bestStack.length > 0) {
+        candidate = bestStack.pop();
+        if (bestStack.length === 0) {
+          typedPool.delete(bestCapacity!);
+          if (typedPool.size === 0) {
+            pool.delete(ArrayType);
+          }
         }
       }
     }
@@ -504,11 +534,14 @@ const instantiateProjectionWasm = async (
           throw new Error('Buffer already freed.');
         }
         // Out of dated the buffer
-        if (candidate!.__buffer.buffer !== memory.buffer) {
+        if (
+          candidate!.__buffer.buffer !== memory.buffer ||
+          candidate!.__buffer.length !== candidate!.__length
+        ) {
           candidate!.__buffer = new ArrayType(
             memory.buffer,
             candidate!.__ptr,
-            length
+            candidate!.__length
           );
         }
         return { ptr: candidate!.__ptr, buffer: candidate!.__buffer };
@@ -523,10 +556,11 @@ const instantiateProjectionWasm = async (
         }
         candidate!.__pooled = true;
         candidate!.__lastReleasedAt = getNow();
-        let stack = typedPool!.get(length);
+        const capacity = candidate!.__capacity;
+        let stack = typedPool!.get(capacity);
         if (!stack) {
           stack = [];
-          typedPool!.set(length, stack);
+          typedPool!.set(capacity, stack);
         }
         if (!pool.has(ArrayType)) {
           pool.set(ArrayType, typedPool!);
@@ -540,6 +574,7 @@ const instantiateProjectionWasm = async (
           free(candidate!.__ptr);
           candidate!.__ptr = 0;
           candidate!.__buffer = undefined!;
+          candidate!.__capacity = 0;
           candidate!.__length = 0;
           candidate!.__pooled = false;
           candidate!.__lastReleasedAt = 0;
@@ -553,6 +588,7 @@ const instantiateProjectionWasm = async (
         release,
         __ptr: ptr,
         __buffer: buffer,
+        __capacity: length,
         __length: length,
         __pooled: false,
         __lastReleasedAt: 0,
@@ -560,6 +596,7 @@ const instantiateProjectionWasm = async (
       };
     } else {
       candidate.__pooled = false;
+      candidate.__length = length;
       candidate.__lastReleasedAt = 0;
     }
 
