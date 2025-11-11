@@ -1293,6 +1293,18 @@ export const createSpriteLayer = <T = any>(
   const executeTextGlyphJob = async (
     entry: TextGlyphQueueEntry
   ): Promise<void> => {
+    if (images.has(entry.glyphId)) {
+      entry.deferred.resolve(false);
+      return;
+    }
+    if (!pendingTextGlyphIds.has(entry.glyphId)) {
+      entry.deferred.reject(
+        new Error(
+          `[SpriteLayer][GlyphQueue] Image "${entry.glyphId}" was removed before generation.`
+        )
+      );
+      return;
+    }
     let registeredImage: RegisteredImage | null = null;
     try {
       const { bitmap, width, height } = await renderTextGlyphBitmap(
@@ -4063,8 +4075,8 @@ export const createSpriteLayer = <T = any>(
     dimensions: SpriteTextGlyphDimensions,
     options?: SpriteTextGlyphOptions
   ): Promise<boolean> => {
-    if (images.has(textGlyphId) || pendingTextGlyphIds.has(textGlyphId)) {
-      return false;
+    if (images.has(textGlyphId)) {
+      return true;
     }
 
     pendingTextGlyphIds.add(textGlyphId);
