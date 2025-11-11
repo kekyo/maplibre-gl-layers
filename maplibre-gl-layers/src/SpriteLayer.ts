@@ -735,16 +735,6 @@ const createImageBitmapFromCanvas = async (
   throw new Error('ImageBitmap API is not supported in this environment.');
 };
 
-const toAbortError = (reason: unknown): Error => {
-  if (reason instanceof Error) {
-    return reason;
-  }
-  if (typeof reason === 'string') {
-    return new Error(reason);
-  }
-  return new Error('Operation aborted');
-};
-
 /**
  * Builds a CSS font string from resolved text glyph options.
  * @param {ResolvedTextGlyphOptions} options - Resolved typography options.
@@ -3853,8 +3843,8 @@ export const createSpriteLayer = <T = any>(
 
     const deferred = createDeferred<boolean>();
     const abortHandle = signal
-      ? onAbort(signal, () => {
-          deferred.reject(toAbortError(signal.reason));
+      ? onAbort(signal, (error) => {
+          deferred.reject(error);
         })
       : null;
     atlasQueue.enqueueUpsert({ imageId, bitmap, deferred });
@@ -4122,8 +4112,8 @@ export const createSpriteLayer = <T = any>(
     const deferred = createDeferred<boolean>();
     let glyphAbortHandle: Releasable | null = null;
     if (signal) {
-      glyphAbortHandle = onAbort(signal, () => {
-        cancelPendingTextGlyphJob(textGlyphId, toAbortError(signal.reason));
+      glyphAbortHandle = onAbort(signal, (error) => {
+        cancelPendingTextGlyphJob(textGlyphId, error);
       });
     }
     enqueueTextGlyphJob({
