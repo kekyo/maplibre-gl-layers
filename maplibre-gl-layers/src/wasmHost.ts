@@ -144,6 +144,10 @@ export type TypedArrayConstructor<TArray extends TypedArrayBufferView<TArray>> =
  */
 export interface BufferHolder<TArray extends TypedArrayBufferView<TArray>> {
   /**
+   * Element count (Float64Array: mod 8)
+   */
+  readonly length: number;
+  /**
    * Prepare and get the raw pointer and the buffer reference.
    * @returns The raw pointer and the buffer reference.
    */
@@ -173,9 +177,11 @@ export interface WasmHost {
   // ProjectionHost related functions.
   readonly fromLngLat: WasmFromLngLat;
   readonly project: WasmProject;
-  readonly calculatePerspectiveRatio: WasmCalculatePerspectiveRatio;
   readonly unproject: WasmUnproject;
+  readonly calculatePerspectiveRatio: WasmCalculatePerspectiveRatio;
   readonly projectLngLatToClipSpace: WasmProjectLngLatToClipSpace;
+
+  // CalculationHost related functions.
   readonly calculateBillboardDepthKey: WasmCalculateBillboardDepthKey;
   readonly calculateSurfaceDepthKey: WasmCalculateSurfaceDepthKey;
   readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
@@ -230,32 +236,6 @@ const buildWasmUrl = (variant: WasmBinaryVariant): URL => {
   }
   return DEFAULT_WASM_URLS[variant];
 };
-
-interface RawProjectionWasmExports {
-  readonly memory?: WebAssembly.Memory;
-  readonly _malloc?: (size: number) => number;
-  readonly malloc?: (size: number) => number;
-  readonly _free?: (ptr: number) => void;
-  readonly free?: (ptr: number) => void;
-  readonly __wasm_call_ctors?: () => void;
-
-  readonly _fromLngLat?: WasmFromLngLat;
-  readonly fromLngLat?: WasmFromLngLat;
-  readonly _project?: WasmProject;
-  readonly project?: WasmProject;
-  readonly _unproject?: WasmUnproject;
-  readonly unproject?: WasmUnproject;
-  readonly _calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
-  readonly calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
-  readonly _projectLngLatToClipSpace?: WasmProjectLngLatToClipSpace;
-  readonly projectLngLatToClipSpace?: WasmProjectLngLatToClipSpace;
-  readonly _calculateBillboardDepthKey?: WasmCalculateBillboardDepthKey;
-  readonly calculateBillboardDepthKey?: WasmCalculateBillboardDepthKey;
-  readonly _calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
-  readonly calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
-  readonly _prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
-  readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
-}
 
 type NodeFsPromisesModule = typeof import('fs/promises');
 type NodeUrlModule = typeof import('url');
@@ -329,20 +309,57 @@ const loadWasmBinary = async (
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * Raw interface for wasm export functions.
+ */
+interface RawProjectionWasmExports {
+  // Runtime related functions
+  readonly memory?: WebAssembly.Memory;
+  readonly _malloc?: (size: number) => number;
+  readonly malloc?: (size: number) => number;
+  readonly _free?: (ptr: number) => void;
+  readonly free?: (ptr: number) => void;
+  readonly __wasm_call_ctors?: () => void;
+
+  // Wasm implementations
+  readonly _fromLngLat?: WasmFromLngLat;
+  readonly fromLngLat?: WasmFromLngLat;
+  readonly _project?: WasmProject;
+  readonly project?: WasmProject;
+  readonly _unproject?: WasmUnproject;
+  readonly unproject?: WasmUnproject;
+  readonly _calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
+  readonly calculatePerspectiveRatio?: WasmCalculatePerspectiveRatio;
+  readonly _projectLngLatToClipSpace?: WasmProjectLngLatToClipSpace;
+  readonly projectLngLatToClipSpace?: WasmProjectLngLatToClipSpace;
+  readonly _calculateBillboardDepthKey?: WasmCalculateBillboardDepthKey;
+  readonly calculateBillboardDepthKey?: WasmCalculateBillboardDepthKey;
+  readonly _calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
+  readonly calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
+  readonly _prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
+  readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
+}
+
+/**
  * Internal interface of BufferHolder.
  */
 interface InternalBufferHolder<TArray extends TypedArrayBufferView<TArray>>
   extends BufferHolder<TArray> {
+  /** Raw pointer */
   __ptr: Pointer;
+  /** Buffer view (ex: Float64Array) */
   __buffer: TArray;
+  /** Real capacity */
   __capacity: number;
-  __length: number;
   /** Is this pooled? */
   __pooled: boolean;
   /** Last time this holder returned to the pool. */
   __lastReleasedAt: number;
   /** Completely free heap memory */
   __free: () => void;
+  /** Element count (Float64Array: mod 8) */
+  length: number;
+
+  // Mutable BufferHolder members
   prepare: () => { ptr: Pointer; buffer: TArray };
   release: () => void;
 }
@@ -363,6 +380,8 @@ const instantiateProjectionWasm = async (
   importTargets.env = functionStub;
   const { instance } = await WebAssembly.instantiate(binary, imports);
   const exports = instance.exports as RawProjectionWasmExports;
+
+  //====================================================================
 
   // Call wasm side constructors.
   if (typeof exports.__wasm_call_ctors === 'function') {
@@ -438,6 +457,8 @@ const instantiateProjectionWasm = async (
   ) {
     throw new Error('Projection host WASM exports are incomplete.');
   }
+
+  //====================================================================
 
   /** Pooled BufferHolder, grouping by the type and length. */
   const pool = new Map<
@@ -518,126 +539,140 @@ const instantiateProjectionWasm = async (
     length: number,
     ArrayType: TypedArrayConstructor<TArray>
   ) => {
+    // Find typed pool by `ArrayType` constructor.
     let typedPool = pool.get(ArrayType);
     if (!typedPool) {
       typedPool = new Map();
       pool.set(ArrayType, typedPool);
     }
 
+    // Get exact length pooled holder
     let candidate: InternalBufferHolder<TArray> | undefined;
-    const exactStack = typedPool.get(length) as
-      | InternalBufferHolder<TArray>[]
-      | undefined;
+    const exactStack = typedPool.get(length);
     if (exactStack && exactStack.length > 0) {
-      candidate = exactStack.pop();
+      // Got and last one
+      candidate = exactStack.pop()!;
       if (exactStack.length === 0) {
+        // Shrink the maps.
         typedPool.delete(length);
         if (typedPool.size === 0) {
           pool.delete(ArrayType);
         }
       }
+      candidate.__pooled = false;
+      candidate.__lastReleasedAt = 0;
+      return candidate;
     }
-    if (!candidate && typedPool.size > 0) {
+
+    // Could not get exact length holder and available remains
+    if (typedPool.size > 0) {
+      // Find not exact but loose fit holder
       const maxCapacity = length * BUFFER_POOL_MAX_REUSE_RATIO;
       let bestCapacity: number | undefined;
       let bestStack: InternalBufferHolder<TArray>[] | undefined;
       typedPool.forEach((stack, capacity) => {
+        // Removed garbage
         if (stack.length === 0) {
           typedPool.delete(capacity);
           return;
         }
+        // Ignore this when not loose fit
         if (capacity < length || capacity > maxCapacity) {
           return;
         }
+        // Better than last one
         if (bestStack === undefined || capacity < (bestCapacity as number)) {
-          bestStack = stack as InternalBufferHolder<TArray>[];
+          // Found candidate stack
+          bestStack = stack;
           bestCapacity = capacity;
         }
       });
+
+      // Found it
       if (bestStack && bestStack.length > 0) {
-        candidate = bestStack.pop();
+        // Got holder
+        candidate = bestStack.pop()!;
+        // Shrink the maps.
         if (bestStack.length === 0) {
           typedPool.delete(bestCapacity!);
           if (typedPool.size === 0) {
             pool.delete(ArrayType);
           }
         }
+        candidate.__pooled = false;
+        candidate.__lastReleasedAt = 0;
+        return candidate;
       }
     }
-    if (!candidate) {
-      //console.log(`allocated: ${length}`);
-      let ptr = malloc(length * ArrayType.BYTES_PER_ELEMENT);
-      let buffer: TArray = new ArrayType(memory.buffer, ptr, length);
-      const prepare = () => {
-        if (candidate!.__ptr === 0) {
-          throw new Error('Buffer already freed.');
-        }
-        // Out of dated the buffer
-        if (
-          candidate!.__buffer.buffer !== memory.buffer ||
-          candidate!.__buffer.length !== candidate!.__length
-        ) {
-          candidate!.__buffer = new ArrayType(
-            memory.buffer,
-            candidate!.__ptr,
-            candidate!.__length
-          );
-        }
-        return { ptr: candidate!.__ptr, buffer: candidate!.__buffer };
-      };
-      const release = () => {
-        if (candidate!.__pooled) {
-          return;
-        }
-        if (destroyed) {
-          candidate!.__free();
-          return;
-        }
-        candidate!.__pooled = true;
-        candidate!.__lastReleasedAt = getNow();
-        const capacity = candidate!.__capacity;
-        let stack = typedPool!.get(capacity);
-        if (!stack) {
-          stack = [];
-          typedPool!.set(capacity, stack);
-        }
-        if (!pool.has(ArrayType)) {
-          pool.set(ArrayType, typedPool!);
-        }
-        stack.push(candidate!);
-        schedulePoolSweep();
-      };
-      const __free = () => {
-        if (candidate!.__ptr) {
-          //console.log(`freed: ${length}`);
-          free(candidate!.__ptr);
-          candidate!.__ptr = 0;
-          candidate!.__buffer = undefined!;
-          candidate!.__capacity = 0;
-          candidate!.__length = 0;
-          candidate!.__pooled = false;
-          candidate!.__lastReleasedAt = 0;
-          candidate!.__free = undefined!;
-          candidate!.prepare = undefined!;
-          candidate!.release = undefined!;
-        }
-      };
-      candidate = {
-        prepare,
-        release,
-        __ptr: ptr,
-        __buffer: buffer,
-        __capacity: length,
-        __length: length,
-        __pooled: false,
-        __lastReleasedAt: 0,
-        __free,
-      };
-    } else {
-      candidate.__pooled = false;
-      candidate.__length = length;
-      candidate.__lastReleasedAt = 0;
-    }
+
+    //console.log(`allocated: ${length}`);
+    let ptr = malloc(length * ArrayType.BYTES_PER_ELEMENT);
+    let buffer: TArray = new ArrayType(memory.buffer, ptr, length);
+    const prepare = () => {
+      if (candidate!.__ptr === 0) {
+        throw new Error('Buffer already freed.');
+      }
+      // Out of dated the buffer
+      if (
+        candidate!.__buffer.buffer !== memory.buffer ||
+        candidate!.__buffer.length !== candidate!.length
+      ) {
+        candidate!.__buffer = new ArrayType(
+          memory.buffer,
+          candidate!.__ptr,
+          candidate!.length
+        );
+      }
+      return { ptr: candidate!.__ptr, buffer: candidate!.__buffer };
+    };
+    const release = () => {
+      if (candidate!.__pooled) {
+        return;
+      }
+      if (destroyed) {
+        candidate!.__free();
+        return;
+      }
+      candidate!.__pooled = true;
+      candidate!.__lastReleasedAt = getNow();
+      const capacity = candidate!.__capacity;
+      let stack = typedPool!.get(capacity);
+      if (!stack) {
+        stack = [];
+        typedPool!.set(capacity, stack);
+      }
+      if (!pool.has(ArrayType)) {
+        pool.set(ArrayType, typedPool!);
+      }
+      stack.push(candidate!);
+      schedulePoolSweep();
+    };
+    const __free = () => {
+      if (candidate!.__ptr) {
+        //console.log(`freed: ${length}`);
+        free(candidate!.__ptr);
+        candidate!.__ptr = 0;
+        candidate!.__buffer = undefined!;
+        candidate!.__capacity = 0;
+        candidate!.__pooled = false;
+        candidate!.__lastReleasedAt = 0;
+        candidate!.__free = undefined!;
+        candidate!.length = 0;
+        candidate!.prepare = undefined!;
+        candidate!.release = undefined!;
+      }
+    };
+    candidate = {
+      length: length,
+      prepare,
+      release,
+      __ptr: ptr,
+      __buffer: buffer,
+      __capacity: length,
+      __pooled: false,
+      __lastReleasedAt: 0,
+      __free,
+    };
 
     return candidate;
   };
