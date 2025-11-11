@@ -15,7 +15,6 @@
 
 import { type Map as MapLibreMap } from 'maplibre-gl';
 import type { CustomRenderMethodInput } from 'maplibre-gl';
-import { createMutex } from 'async-primitives';
 
 import {
   type SpriteInit,
@@ -49,7 +48,6 @@ import {
   type SpriteTextGlyphPaddingPixel,
   type SpriteTextGlyphBorderSide,
   type SpriteImageRegisterOptions,
-  type SpriteLayerCalculationVariant,
 } from './types';
 import type {
   ResolvedTextureFilteringOptions,
@@ -134,11 +132,6 @@ import {
   createProjectionHost,
   createProjectionHostParamsFromMapLibre,
 } from './projectionHost';
-import {
-  initializeWasmHost,
-  releaseWasmHost,
-  type WasmVariant,
-} from './wasmHost';
 import { createWasmProjectionHost } from './wasmProjectionHost';
 import { createWasmCalculationHost } from './wasmCalculationHost';
 import {
@@ -163,51 +156,7 @@ import {
   createSpriteOriginReference,
   createRenderTargetBucketBuffers,
 } from './utils';
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-const spriteLayerHostInitializationMutex = createMutex();
-let spriteLayerHostVariant: WasmVariant = 'disabled';
-
-const isSpriteLayerHostEnabled = () => spriteLayerHostVariant !== 'disabled';
-
-export interface SpriteLayerHostOptions {
-  readonly variant?: SpriteLayerCalculationVariant;
-  readonly wasmBaseUrl?: string;
-}
-
-export const initializeSpriteLayerHost = async (
-  variantOrOptions?: SpriteLayerCalculationVariant | SpriteLayerHostOptions
-): Promise<SpriteLayerCalculationVariant> => {
-  const hostOptions =
-    typeof variantOrOptions === 'string' || variantOrOptions === undefined
-      ? { variant: variantOrOptions }
-      : variantOrOptions;
-  const locker = await spriteLayerHostInitializationMutex.lock();
-  try {
-    const requestedVariant = hostOptions.variant ?? 'simd';
-    if (requestedVariant === 'disabled') {
-      releaseSpriteLayerHost();
-      return 'disabled';
-    }
-    const forceReload = variantOrOptions !== undefined;
-    spriteLayerHostVariant = await initializeWasmHost(requestedVariant, {
-      force: forceReload,
-      wasmBaseUrl: hostOptions.wasmBaseUrl,
-    });
-    return spriteLayerHostVariant;
-  } finally {
-    locker.release();
-  }
-};
-
-export const releaseSpriteLayerHost = (): void => {
-  if (spriteLayerHostVariant === 'disabled') {
-    return;
-  }
-  spriteLayerHostVariant = 'disabled';
-  releaseWasmHost();
-};
+import { isSpriteLayerHostEnabled } from './runtime';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

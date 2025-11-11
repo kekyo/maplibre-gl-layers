@@ -781,9 +781,9 @@ let currentWasmHost: (WasmHost & Releaseable) | undefined;
  */
 export interface InitializeWasmHostOptions {
   /** Force initialization. Default is false. */
-  readonly force?: boolean;
+  readonly force: boolean;
   /** Override the URL used to fetch wasm artifacts. */
-  readonly wasmBaseUrl?: string;
+  readonly wasmBaseUrl: string | undefined;
 }
 
 /**
@@ -794,7 +794,7 @@ export interface InitializeWasmHostOptions {
  */
 export const initializeWasmHost = async (
   preferredVariant: WasmVariant,
-  options?: InitializeWasmHostOptions
+  options: InitializeWasmHostOptions | undefined
 ): Promise<WasmVariant> => {
   let nextBaseUrl = wasmBaseUrlOverride;
   if (options?.wasmBaseUrl !== undefined) {

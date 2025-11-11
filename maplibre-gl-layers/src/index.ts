@@ -7,4 +7,5 @@
 export * from './types';
 export * from './default';
 export * from './image';
+export { initializeRuntimeHost, releaseRuntimeHost } from './runtime';
 export * from './SpriteLayer';

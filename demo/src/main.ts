@@ -10,8 +10,8 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Map, type MapOptions, type SourceSpecification } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
-  releaseSpriteLayerHost,
+  initializeRuntimeHost,
+  releaseRuntimeHost,
   STANDARD_SPRITE_SCALING_OPTIONS,
   UNLIMITED_SPRITE_SCALING_OPTIONS,
   type SpriteLayerCalculationVariant,
@@ -3548,12 +3548,12 @@ const main = async () => {
 
         spriteLayer = createSpriteLayerInstance();
         if (requestedCalculationVariant === 'disabled') {
-          releaseSpriteLayerHost();
+          releaseRuntimeHost();
           currentCalculationVariant = 'disabled';
         } else {
-          currentCalculationVariant = await initializeSpriteLayerHost(
-            requestedCalculationVariant
-          );
+          currentCalculationVariant = await initializeRuntimeHost({
+            variant: requestedCalculationVariant,
+          });
         }
         map.addLayer(spriteLayer);
         spriteLayer.setHitTestEnabled(isMouseEventsMonitoringEnabled);

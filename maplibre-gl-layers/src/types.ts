@@ -581,11 +581,6 @@ export interface SpriteTextureFilteringOptions {
 }
 
 /**
- * Calculation variant. It is internal calculation methods.
- */
-export type SpriteLayerCalculationVariant = 'simd' | 'nosimd' | 'disabled';
-
-/**
  * Options accepted when creating a SpriteLayer.
  *
  * @property {string | undefined} id - Optional layer identifier supplied to MapLibre.
@@ -933,4 +928,25 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
     type: K,
     listener: SpriteLayerEventListener<TTag, K>
   ) => void;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Calculation variant. It is internal calculation methods.
+ */
+export type SpriteLayerCalculationVariant = 'simd' | 'nosimd' | 'disabled';
+
+/**
+ * SpriteLayer host options.
+ */
+export interface SpriteLayerHostOptions {
+  /**
+   * Calculation variant. Default is `simd`.
+   */
+  readonly variant?: SpriteLayerCalculationVariant;
+  /**
+   * Wasm runtime module base URL path. Default is `/wasm`
+   */
+  readonly wasmBaseUrl?: string;
 }

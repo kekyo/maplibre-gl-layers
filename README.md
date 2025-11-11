@@ -30,7 +30,7 @@ Here is a minimal example that adds a single sprite:
 import { Map } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
+  initializeRuntimeHost,
 } from 'maplibre-gl-layers';
 
 // Create the MapLibre instance
@@ -47,7 +47,7 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 // Add the layer after the map finishes loading
 map.on('load', async () => {
   // Initialize and add SpriteLayer to MapLibre
-  await initializeSpriteLayerHost();
+  await initializeRuntimeHost();
   map.addLayer(spriteLayer);
 
   // Register an image that can be referenced by sprites
@@ -110,7 +110,7 @@ First create a `SpriteLayer` instance and add it to the MapLibre map.
 import { Map } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
+  initializeRuntimeHost,
 } from 'maplibre-gl-layers';
 
 // Create the MapLibre map with your desired style and initial view
@@ -126,8 +126,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // When MapLibre is ready
 map.on('load', async () => {
-  // Enable WASM acceleration (optional, defaults to JS calculations)
-  await initializeSpriteLayerHost();
+  // Initialize SpriteLayer
+  await initializeRuntimeHost();
 
   // Add the layer once
   map.addLayer(spriteLayer);
@@ -138,20 +138,37 @@ map.on('load', async () => {
 
 That is all you need for the initial setup. After this, prepare the images and text you want to render and start displaying sprites.
 
-### Enabling and releasing WASM acceleration
+### Enabling WASM acceleration
 
-SpriteLayer uses the JavaScript implementation by default. Call `initializeSpriteLayerHost()` once—optionally passing either a variant (`'simd' | 'nosimd' | 'disabled'`) or an options object `{ variant?, wasmBaseUrl? }`—to attempt loading the WebAssembly host. When initialization fails or is skipped, the layer continues to operate via CPU calculations.
+By default, SpriteLayer performs coordinate calculations using its JavaScript implementation.
+Initializing the WASM runtime module offloads coordinate calculations to the WASM module.
+
+You can attempt to load the WASM host by calling `initializeRuntimeHost()` once, specifying options in the form of `{ variant?, wasmBaseUrl? }` as arguments.
+If you do not call it or if initialization fails, it will automatically fall back to JavaScript calculations.
 
 ```typescript
-await initializeSpriteLayerHost({
+// Execute initialization to obtain the selected calculation type
+const selectedVariant = await initializeRuntimeHost({
   variant: 'simd',
   wasmBaseUrl: '/custom-assets/maplibre-wasm/',
 });
 ```
 
-Use `wasmBaseUrl` when you copy the packaged `dist/wasm` directory to a different location (for example, a CDN or a custom public path). If it is omitted, the loader fetches the `.wasm` files directly next to the distributed `dist` files, allowing Vite/Rollup/webpack users to consume the npm package without extra configuration.
+The `variant` parameter specifies the type of WASM module.
+`simd` uses SIMD operations, while `nosimd` does not. The default is `simd`.
+Since most modern browsers support SIMD operations, leaving the default setting should be fine.
 
-When you no longer need the WebAssembly host—such as when the entire application is shutting down—call `releaseSpriteLayerHost()`. After releasing, the layer automatically falls back to the JavaScript implementation until `initializeSpriteLayerHost()` is called again.
+By specifying `wasmBaseUrl`, you can copy the `dist/wasm` directory included in the npm package to any location (such as a CDN) for operation.
+If omitted, `*.wasm` files located directly under the distributed `dist` directory will be loaded as-is,
+requiring no special configuration in Vite/Rollup/webpack, etc.
+However, the server must include the `Content-Type: application/wasm` header.
+Note that depending on the browser implementation, if the correct MIME type is not applied, the module may not load as a WASM module.
+
+The return value indicates the selected calculation type.
+For example, if loading a SIMD calculation module fails, a different type is returned.
+
+To release WASM when the SPA page terminates, call `releaseRuntimeHost()`.
+After release, it will operate using JavaScript computation until `initializeRuntimeHost()` is called again.
 
 ## Registering Images and Text
 

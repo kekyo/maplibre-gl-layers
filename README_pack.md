@@ -27,7 +27,7 @@ Here is a minimal example that places a single sprite:
 import { Map } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
+  initializeRuntimeHost,
 } from 'maplibre-gl-layers';
 
 // Create the MapLibre instance
@@ -44,7 +44,7 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 // When MapLibre is ready
 map.on('load', async () => {
   // Initialize and add SpriteLayer to MapLibre
-  await initializeSpriteLayerHost();
+  await initializeRuntimeHost();
   map.addLayer(spriteLayer);
 
   // Register an image that can be referenced by sprites

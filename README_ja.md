@@ -31,7 +31,7 @@
 import { Map } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
+  initializeRuntimeHost,
 } from 'maplibre-gl-layers';
 
 // MapLibreのインスタンスを生成します
@@ -48,7 +48,7 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 // MapLibreの準備が出来たら
 map.on('load', async () => {
   // SpriteLayerを初期化してMapLibreに追加します
-  await initializeSpriteLayerHost();
+  await initializeRuntimeHost();
   map.addLayer(spriteLayer);
 
   // 指定した画像ファイルを表示で使用する為に、SpriteLayerに登録します
@@ -112,7 +112,7 @@ npm install maplibre-gl-layers
 import { Map } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
+  initializeRuntimeHost,
 } from 'maplibre-gl-layers';
 
 // MapLibreのインスタンスを生成します
@@ -129,8 +129,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // MapLibreの準備が出来たら
 map.on('load', async () => {
-  // 必要に応じてWASMを初期化（呼ばない場合はJS計算のみ）
-  await initializeSpriteLayerHost();
+  // SpriteLayerを初期化
+  await initializeRuntimeHost();
 
   // SpriteLayerをMapLibre地図に追加します
   map.addLayer(spriteLayer);
@@ -142,20 +142,34 @@ map.on('load', async () => {
 初期化作業はこれだけです！
 この後、描画させたい画像やテキストを準備して、スプライトの表示を行います。
 
-### WASMの有効化と解放
+### WASMによる座標計算のオフロード
 
-SpriteLayer は既定では JavaScript 実装で動作します。`initializeSpriteLayerHost()` を一度呼び出すことで WASM ホストのロードを試行でき、引数にはバリアント（`'simd' | 'nosimd' | 'disabled'`）または `{ variant?, wasmBaseUrl? }` 形式のオプションを指定できます。呼び出さない場合や初期化に失敗した場合は、自動的に JS 計算にフォールバックします。
+SpriteLayer は既定では JavaScript 実装で座標計算を実行します。
+WASMランタイムモジュールの初期化を行うと、座標計算をWASMモジュールにオフロードします。
+
+`initializeRuntimeHost()` を一度呼び出すことで WASM ホストのロードを試行でき、引数には `{ variant?, wasmBaseUrl? }` 形式のオプションを指定できます。
+呼び出さない場合や初期化に失敗した場合は、自動的に JavaScript 計算にフォールバックします。
 
 ```typescript
-await initializeSpriteLayerHost({
+// 初期化を実行して、選択された計算種別を得る
+const selectedVariant = await initializeRuntimeHost({
   variant: 'simd',
   wasmBaseUrl: '/custom-assets/maplibre-wasm/',
 });
 ```
 
-`wasmBaseUrl` を指定すると、npm パッケージに含まれる `dist/wasm` ディレクトリを任意の場所（CDN など）へコピーして運用できます。省略した場合は、配布された `dist` ディレクトリ直下にある `.wasm` をそのまま読み込みますので、Vite/Rollup/webpack 等で特別な設定は不要です。
+`variant`には、WASMモジュールの種別を指定できます。`simd`はSIMD演算を使用、`nosimd`はSIMD演算を使用しません。デフォルトは`simd`です。
+現在のブラウザはほぼSIMD演算をサポートしているので、デフォルトのままで問題ないでしょう。
 
-アプリケーション全体の終了などで WASM を解放したい場合は、`releaseSpriteLayerHost()` を呼び出してください。解放後は再度 `initializeSpriteLayerHost()` を呼び出すまで JS モードで動作します。
+`wasmBaseUrl` を指定すると、npm パッケージに含まれる `dist/wasm` ディレクトリを任意の場所（CDN など）へコピーして運用できます。
+省略した場合は、配布された `dist` ディレクトリ直下にある `*.wasm` をそのまま読み込むので、Vite/Rollup/webpack 等で特別な設定は不要です。
+但し、サーバーは `Content-Type: application/wasm` ヘッダを付与する必要があります。
+これはブラウザの実装によりますが、正しいMIME typeが適用されていないと、WASMモジュールとしてロードできない可能性があるため注意してください。
+
+戻り値には、選択された計算種別が返されます。例えばSIMD計算モジュールのロードに失敗した場合は、異なる種別が返されます。
+
+SPAページの終了などで WASM を解放したい場合は、`releaseRuntimeHost()` を呼び出してください。
+解放後は再度 `initializeRuntimeHost()` を呼び出すまで JavaScript 計算で動作します。
 
 ---
 
