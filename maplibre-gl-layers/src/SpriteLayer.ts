@@ -149,13 +149,19 @@ import {
   MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO,
   MIN_TEXT_GLYPH_FONT_SIZE,
 } from './const';
-import { SL_DEBUG } from './config';
+import {
+  SL_DEBUG,
+  ATLAS_QUEUE_CHUNK_SIZE,
+  ATLAS_QUEUE_TIME_BUDGET_MS,
+} from './config';
 import {
   createImageHandleBufferController,
   createIdHandler,
   createSpriteOriginReference,
   createRenderTargetBucketBuffers,
 } from './utils';
+import { createAtlasManager, type AtlasPageState } from './atlas';
+import { createDeferred, type Deferred } from 'async-primitives';
 import { isSpriteLayerHostEnabled } from './runtime';
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -197,6 +203,9 @@ import { isSpriteLayerHostEnabled } from './runtime';
 
 /** Default threshold in meters for auto-rotation to treat movement as significant. */
 const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
+
+/** Sentinel used when an image has not been placed on any atlas page. */
+const ATLAS_PAGE_INDEX_NONE = -1;
 
 /** Query radius (in CSS pixels) when sampling the hit-test QuadTree. */
 const HIT_TEST_QUERY_RADIUS_PIXELS = 32;
@@ -1194,6 +1203,33 @@ export const createSpriteLayer = <T = any>(
 
   //////////////////////////////////////////////////////////////////////////
 
+  /** Sprite image atlas manager coordinating page packing. */
+  const atlasManager = createAtlasManager();
+  /** Active WebGL textures keyed by atlas page index. */
+  const atlasPageTextures = new Map<number, WebGLTexture>();
+  /** Flag indicating atlas pages require GPU upload. */
+  let atlasNeedsUpload = false;
+
+  /**
+   * Determines whether any atlas page requires uploading or missing texture recreation.
+   * @param pageStates Optional atlas page list to evaluate.
+   * @returns True when at least one page is dirty or lacks a matching GL texture.
+   */
+  const shouldUploadAtlasPages = (
+    pageStates?: readonly AtlasPageState[]
+  ): boolean => {
+    const pages = pageStates ?? atlasManager.getPages();
+    for (const page of pages) {
+      if (page.needsUpload) {
+        return true;
+      }
+      if (!atlasPageTextures.has(page.index)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   /**
    * Registry of loaded images, pairing ImageBitmaps with WebGL textures.
    */
@@ -1233,34 +1269,190 @@ export const createSpriteLayer = <T = any>(
   const originReference = createSpriteOriginReference();
 
   /**
-   * Tracks queued image IDs to avoid duplicated uploads.
+   * Synchronizes atlas placements from the atlas manager into registered images.
+   * Marks atlas textures as dirty when placements change.
    */
-  const queuedTextureIds = new Set<string>();
-
-  /**
-   * Enqueues an image for GPU texture upload.
-   * @param {RegisteredImage} image - Registered image awaiting upload.
-   * @returns {void}
-   */
-  const queueTextureUpload = (image: RegisteredImage): void => {
-    queuedTextureIds.add(image.id);
+  const syncAtlasPlacementsFromManager = (): void => {
+    let placementsChanged = false;
+    images.forEach((image, imageId) => {
+      const placement = atlasManager.getImagePlacement(imageId);
+      if (!placement) {
+        if (
+          image.atlasPageIndex !== ATLAS_PAGE_INDEX_NONE ||
+          image.atlasU0 !== 0 ||
+          image.atlasV0 !== 0 ||
+          image.atlasU1 !== 1 ||
+          image.atlasV1 !== 1
+        ) {
+          image.atlasPageIndex = ATLAS_PAGE_INDEX_NONE;
+          image.atlasU0 = 0;
+          image.atlasV0 = 0;
+          image.atlasU1 = 1;
+          image.atlasV1 = 1;
+          image.texture = undefined;
+          placementsChanged = true;
+        }
+        return;
+      }
+      if (
+        image.atlasPageIndex !== placement.pageIndex ||
+        image.atlasU0 !== placement.u0 ||
+        image.atlasV0 !== placement.v0 ||
+        image.atlasU1 !== placement.u1 ||
+        image.atlasV1 !== placement.v1
+      ) {
+        image.atlasPageIndex = placement.pageIndex;
+        image.atlasU0 = placement.u0;
+        image.atlasV0 = placement.v0;
+        image.atlasU1 = placement.u1;
+        image.atlasV1 = placement.v1;
+        image.texture = undefined;
+        placementsChanged = true;
+      }
+    });
+    if (placementsChanged) {
+      imageHandleBuffersController.markDirty(images);
+    }
+    atlasNeedsUpload = placementsChanged || shouldUploadAtlasPages();
   };
 
-  /**
-   * Removes an image ID from the upload queue when no longer needed.
-   * @param {string} imageId - Identifier of the image to cancel.
-   * @returns {void}
-   */
-  const cancelQueuedTextureUpload = (imageId: string): void => {
-    queuedTextureIds.delete(imageId);
+  interface AtlasUpsertQueueEntry {
+    readonly type: 'upsert';
+    readonly imageId: string;
+    readonly bitmap: ImageBitmap;
+    readonly deferred: Deferred<boolean>;
+  }
+
+  type AtlasQueueEntry = AtlasUpsertQueueEntry;
+
+  const atlasOperationQueue: AtlasQueueEntry[] = [];
+  let atlasQueueTimer: ReturnType<typeof setTimeout> | null = null;
+  let isProcessingAtlasQueue = false;
+
+  const processAtlasQueueChunk = (
+    timeBudgetMs: number = ATLAS_QUEUE_TIME_BUDGET_MS
+  ): {
+    processedAny: boolean;
+    hasRemaining: boolean;
+  } => {
+    if (isProcessingAtlasQueue) {
+      return {
+        processedAny: false,
+        hasRemaining: atlasOperationQueue.length > 0,
+      };
+    }
+    if (atlasOperationQueue.length === 0) {
+      return { processedAny: false, hasRemaining: false };
+    }
+    isProcessingAtlasQueue = true;
+    let processedAny = false;
+    const hasBudget = Number.isFinite(timeBudgetMs) && timeBudgetMs > 0;
+    const budgetStart = hasBudget
+      ? typeof performance !== 'undefined'
+        ? performance.now()
+        : Date.now()
+      : 0;
+    try {
+      let processedCount = 0;
+      while (atlasOperationQueue.length > 0) {
+        const entry = atlasOperationQueue.shift()!;
+        try {
+          switch (entry.type) {
+            case 'upsert':
+              atlasManager.upsertImage(entry.imageId, entry.bitmap);
+              entry.deferred.resolve(true);
+              processedAny = true;
+              break;
+          }
+        } catch (error) {
+          entry.deferred.reject(error);
+        }
+        processedCount += 1;
+        if (processedCount >= ATLAS_QUEUE_CHUNK_SIZE) {
+          break;
+        }
+        if (hasBudget) {
+          const now =
+            typeof performance !== 'undefined' ? performance.now() : Date.now();
+          if (now - budgetStart >= timeBudgetMs) {
+            break;
+          }
+        }
+      }
+      if (processedAny) {
+        syncAtlasPlacementsFromManager();
+      }
+      return {
+        processedAny,
+        hasRemaining: atlasOperationQueue.length > 0,
+      };
+    } finally {
+      isProcessingAtlasQueue = false;
+    }
   };
 
-  /**
-   * Clears all pending texture uploads.
-   * @returns {void}
-   */
-  const clearTextureQueue = (): void => {
-    queuedTextureIds.clear();
+  const scheduleAtlasQueueProcessing = (): void => {
+    if (atlasQueueTimer) {
+      return;
+    }
+    atlasQueueTimer = setTimeout(() => {
+      atlasQueueTimer = null;
+      const { processedAny, hasRemaining } = processAtlasQueueChunk();
+      if (processedAny) {
+        scheduleRender();
+      }
+      if (hasRemaining) {
+        scheduleAtlasQueueProcessing();
+      }
+    }, 0);
+  };
+
+  const enqueueAtlasUpsertOperation = (
+    imageId: string,
+    bitmap: ImageBitmap,
+    deferred: Deferred<boolean>
+  ): void => {
+    atlasOperationQueue.push({
+      type: 'upsert',
+      imageId,
+      bitmap,
+      deferred,
+    });
+    scheduleAtlasQueueProcessing();
+  };
+
+  const flushAtlasQueueIfNeeded = (): void => {
+    if (atlasOperationQueue.length === 0) {
+      return;
+    }
+    const { processedAny, hasRemaining } = processAtlasQueueChunk();
+    if (processedAny) {
+      scheduleRender();
+    }
+    if (hasRemaining) {
+      scheduleAtlasQueueProcessing();
+    }
+  };
+
+  const cancelPendingAtlasOperations = (imageId: string): void => {
+    for (let idx = atlasOperationQueue.length - 1; idx >= 0; idx -= 1) {
+      const entry = atlasOperationQueue[idx]!;
+      if (entry.type === 'upsert' && entry.imageId === imageId) {
+        atlasOperationQueue.splice(idx, 1);
+        entry.deferred.reject(
+          new Error(
+            `[SpriteLayer][Atlas] Image "${imageId}" was unregistered before placement.`
+          )
+        );
+      }
+    }
+  };
+
+  const rejectAllPendingAtlasOperations = (reason: Error): void => {
+    while (atlasOperationQueue.length > 0) {
+      const entry = atlasOperationQueue.shift()!;
+      entry.deferred.reject(reason);
+    }
   };
 
   /**
@@ -2377,47 +2569,56 @@ export const createSpriteLayer = <T = any>(
    * @returns {void}
    */
   const ensureTextures = (): void => {
-    // Defer texture creation until the WebGL context becomes available.
     if (!gl) {
       return;
     }
-    if (queuedTextureIds.size === 0) {
+    flushAtlasQueueIfNeeded();
+    if (!atlasNeedsUpload) {
       return;
     }
-    const glContext = gl;
 
-    // Iterates all queue item (image id)
-    queuedTextureIds.forEach((imageId) => {
-      // Extract image object
-      const image = images.get(imageId);
-      queuedTextureIds.delete(imageId);
-      if (!image || !image.bitmap) {
+    const glContext = gl;
+    const pages = atlasManager.getPages();
+    const activePageIndices = new Set<number>();
+    pages.forEach((page) => activePageIndices.add(page.index));
+
+    atlasPageTextures.forEach((texture, pageIndex) => {
+      if (!activePageIndices.has(pageIndex)) {
+        glContext.deleteTexture(texture);
+        atlasPageTextures.delete(pageIndex);
+      }
+    });
+
+    pages.forEach((page) => {
+      const requiresUpload =
+        page.needsUpload || !atlasPageTextures.has(page.index);
+      if (!requiresUpload) {
         return;
       }
-      if (image.texture) {
-        // Delete existing textures to avoid stale GPU data.
-        glContext.deleteTexture(image.texture);
-        image.texture = undefined;
-        imageHandleBuffersController.markDirty(images);
-      }
-      const texture = glContext.createTexture();
+
+      let texture = atlasPageTextures.get(page.index);
+      let isNewTexture = false;
       if (!texture) {
-        // Rendering cannot continue without GPU resources.
-        throw new Error('Failed to create texture.');
+        texture = glContext.createTexture();
+        if (!texture) {
+          throw new Error('Failed to create texture.');
+        }
+        atlasPageTextures.set(page.index, texture);
+        isNewTexture = true;
       }
       glContext.bindTexture(glContext.TEXTURE_2D, texture);
-      // Clamp wrapping to avoid sampling outside sprite edges.
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_WRAP_S,
-        glContext.CLAMP_TO_EDGE
-      );
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_WRAP_T,
-        glContext.CLAMP_TO_EDGE
-      );
-      // Enable premultiplied alpha for natural blending on the canvas.
+      if (isNewTexture) {
+        glContext.texParameteri(
+          glContext.TEXTURE_2D,
+          glContext.TEXTURE_WRAP_S,
+          glContext.CLAMP_TO_EDGE
+        );
+        glContext.texParameteri(
+          glContext.TEXTURE_2D,
+          glContext.TEXTURE_WRAP_T,
+          glContext.CLAMP_TO_EDGE
+        );
+      }
       glContext.pixelStorei(glContext.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
       glContext.texImage2D(
         glContext.TEXTURE_2D,
@@ -2425,10 +2626,9 @@ export const createSpriteLayer = <T = any>(
         glContext.RGBA,
         glContext.RGBA,
         glContext.UNSIGNED_BYTE,
-        image.bitmap
+        page.canvas as TexImageSource
       );
 
-      // Determine the desired filters up-front.
       let minFilterEnum = resolveGlMinFilter(
         glContext,
         resolvedTextureFiltering.minFilter
@@ -2444,12 +2644,11 @@ export const createSpriteLayer = <T = any>(
           typeof WebGL2RenderingContext !== 'undefined' &&
           glContext instanceof WebGL2RenderingContext;
         const canUseMipmaps =
-          isWebGL2 || (isPowerOfTwo(image.width) && isPowerOfTwo(image.height));
+          isWebGL2 || (isPowerOfTwo(page.width) && isPowerOfTwo(page.height));
         if (canUseMipmaps) {
           glContext.generateMipmap(glContext.TEXTURE_2D);
           usedMipmaps = true;
         } else {
-          // Fall back to linear filtering when mipmaps are unsupported.
           minFilterEnum = glContext.LINEAR;
         }
       }
@@ -2458,7 +2657,6 @@ export const createSpriteLayer = <T = any>(
         !usedMipmaps &&
         filterRequiresMipmaps(resolvedTextureFiltering.minFilter)
       ) {
-        // Without mipmaps the requested filter would produce incomplete textures.
         minFilterEnum = glContext.LINEAR;
       }
 
@@ -2492,9 +2690,18 @@ export const createSpriteLayer = <T = any>(
         }
       }
 
-      image.texture = texture;
-      imageHandleBuffersController.markDirty(images);
+      atlasManager.markPageClean(page.index);
     });
+
+    images.forEach((image) => {
+      if (image.atlasPageIndex !== ATLAS_PAGE_INDEX_NONE) {
+        image.texture = atlasPageTextures.get(image.atlasPageIndex);
+      } else {
+        image.texture = undefined;
+      }
+    });
+    imageHandleBuffersController.markDirty(images);
+    atlasNeedsUpload = shouldUploadAtlasPages(pages);
   };
 
   /**
@@ -2971,14 +3178,14 @@ export const createSpriteLayer = <T = any>(
 
     const glContext = gl;
     if (glContext) {
-      images.forEach((image) => {
-        // Delete textures when present; otherwise there is nothing to reuse.
-        if (image.texture) {
-          glContext.deleteTexture(image.texture);
-        }
-        image.texture = undefined;
-        queueTextureUpload(image);
+      atlasPageTextures.forEach((texture) => {
+        glContext.deleteTexture(texture);
       });
+      atlasPageTextures.clear();
+      images.forEach((image) => {
+        image.texture = undefined;
+      });
+      atlasNeedsUpload = true;
       if (vertexBuffer) {
         glContext.deleteBuffer(vertexBuffer);
       }
@@ -3566,19 +3773,31 @@ export const createSpriteLayer = <T = any>(
       height: bitmap.height,
       bitmap,
       texture: undefined,
+      atlasPageIndex: ATLAS_PAGE_INDEX_NONE,
+      atlasU0: 0,
+      atlasV0: 0,
+      atlasU1: 1,
+      atlasV1: 1,
     };
     images.set(imageId, image);
     imageIdHandler.store(handle, image);
     updateSpriteImageHandles(imageId, handle);
     imageHandleBuffersController.markDirty(images);
 
-    // Queue the upload so the next draw refreshes the texture.
-    queueTextureUpload(image);
-    ensureTextures();
-    // Request a redraw so sprites using the new image update immediately.
-    scheduleRender();
+    const deferred = createDeferred<boolean>();
+    enqueueAtlasUpsertOperation(imageId, bitmap, deferred);
 
-    return true;
+    try {
+      return await deferred.promise;
+    } catch (e) {
+      images.delete(imageId);
+      imageIdHandler.release(imageId);
+      updateSpriteImageHandles(imageId, 0);
+      imageHandleBuffersController.markDirty(images);
+      atlasManager.removeImage(imageId);
+      bitmap.close?.();
+      throw e;
+    }
   };
 
   /**
@@ -3820,17 +4039,31 @@ export const createSpriteLayer = <T = any>(
       height: totalHeight,
       bitmap,
       texture: undefined,
+      atlasPageIndex: ATLAS_PAGE_INDEX_NONE,
+      atlasU0: 0,
+      atlasV0: 0,
+      atlasU1: 1,
+      atlasV1: 1,
     };
     images.set(textGlyphId, image);
     imageIdHandler.store(handle, image);
     updateSpriteImageHandles(textGlyphId, handle);
     imageHandleBuffersController.markDirty(images);
 
-    queueTextureUpload(image);
-    ensureTextures();
-    scheduleRender();
+    const deferred = createDeferred<boolean>();
+    enqueueAtlasUpsertOperation(textGlyphId, bitmap, deferred);
 
-    return true;
+    try {
+      return await deferred.promise;
+    } catch (e) {
+      images.delete(textGlyphId);
+      imageIdHandler.release(textGlyphId);
+      updateSpriteImageHandles(textGlyphId, 0);
+      imageHandleBuffersController.markDirty(images);
+      atlasManager.removeImage(textGlyphId);
+      bitmap.close?.();
+      throw e;
+    }
   };
 
   /**
@@ -3845,6 +4078,8 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    cancelPendingAtlasOperations(imageId);
+
     // Remove image bounds
     sprites.forEach((sprite) => {
       sprite.images.forEach((orderMap) => {
@@ -3856,19 +4091,17 @@ export const createSpriteLayer = <T = any>(
       });
     });
 
-    // Delete the bound texture if present.
-    const glContext = gl;
-    if (glContext && image.texture) {
-      glContext.deleteTexture(image.texture);
+    if (image.bitmap) {
+      image.bitmap.close?.();
     }
-
-    cancelQueuedTextureUpload(imageId);
 
     // Remove the image entry.
     images.delete(imageId);
     imageIdHandler.release(imageId);
     updateSpriteImageHandles(imageId, 0);
     imageHandleBuffersController.markDirty(images);
+    atlasManager.removeImage(imageId);
+    syncAtlasPlacementsFromManager();
 
     // Rebuild render targets now that the image is gone.
     ensureRenderTargetEntries();
@@ -3882,16 +4115,24 @@ export const createSpriteLayer = <T = any>(
    * @returns {void}
    */
   const unregisterAllImages = (): void => {
+    rejectAllPendingAtlasOperations(
+      new Error('[SpriteLayer][Atlas] Pending atlas operations were cleared.')
+    );
     const glContext = gl;
-    images.forEach((image) => {
-      if (glContext && image.texture) {
-        glContext.deleteTexture(image.texture);
+    atlasPageTextures.forEach((texture) => {
+      if (glContext) {
+        glContext.deleteTexture(texture);
       }
+    });
+    atlasPageTextures.clear();
+    images.forEach((image) => {
       if (image.bitmap) {
         image.bitmap.close?.();
       }
     });
     images.clear();
+    atlasManager.clear();
+    atlasNeedsUpload = false;
     imageIdHandler.reset();
     imageHandleBuffersController.markDirty(images);
     sprites.forEach((sprite) => {
@@ -3907,7 +4148,6 @@ export const createSpriteLayer = <T = any>(
       HitTestTreeHandle
     >();
     hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
-    clearTextureQueue();
     ensureRenderTargetEntries();
     scheduleRender();
   };

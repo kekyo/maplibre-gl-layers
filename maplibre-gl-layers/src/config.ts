@@ -15,3 +15,9 @@ export const USE_SHADER_SURFACE_GEOMETRY = true;
 
 /** Whether to enable the NDC bias for surface rendering (disabled by default). */
 export const ENABLE_NDC_BIAS_SURFACE = true;
+
+/** Maximum number of atlas operations handled per processing pass. */
+export const ATLAS_QUEUE_CHUNK_SIZE = 32;
+
+/** Time budget (milliseconds) spent per atlas queue processing pass. */
+export const ATLAS_QUEUE_TIME_BUDGET_MS = 4;

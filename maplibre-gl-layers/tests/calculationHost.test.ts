@@ -147,6 +147,11 @@ const createImageResource = (id: string): RegisteredImage => ({
   height: 32,
   bitmap: {} as ImageBitmap,
   texture: {} as WebGLTexture,
+  atlasPageIndex: -1,
+  atlasU0: 0,
+  atlasV0: 0,
+  atlasU1: 1,
+  atlasV1: 1,
 });
 
 const originReference = createSpriteOriginReference();

@@ -480,6 +480,11 @@ export interface RegisteredImage {
   readonly height: number;
   readonly bitmap: ImageBitmap;
   texture: WebGLTexture | undefined;
+  atlasPageIndex: number;
+  atlasU0: number;
+  atlasV0: number;
+  atlasU1: number;
+  atlasV1: number;
 }
 
 /**

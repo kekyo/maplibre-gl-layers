@@ -261,6 +261,11 @@ struct ResourceInfo {
   double width = 0.0;
   double height = 0.0;
   bool textureReady = false;
+  double atlasPageIndex = -1.0;
+  double atlasU0 = 0.0;
+  double atlasV0 = 0.0;
+  double atlasU1 = 1.0;
+  double atlasV1 = 1.0;
 };
 
 static inline const ResourceInfo* findResourceByHandle(
@@ -1455,6 +1460,12 @@ static bool prepareDrawSpriteImageInternal(
   const BucketItem& bucketItem = *depth.item;
   const InputItemEntry& entry = *bucketItem.entry;
   const ResourceInfo& resource = *bucketItem.resource;
+  const double atlasU0 = resource.atlasU0;
+  const double atlasV0 = resource.atlasV0;
+  const double atlasU1 = resource.atlasU1;
+  const double atlasV1 = resource.atlasV1;
+  const double atlasUSpan = atlasU1 - atlasU0;
+  const double atlasVSpan = atlasV1 - atlasV0;
 
   if (!bucketItem.projectedValid || resource.width <= 0.0 ||
       resource.height <= 0.0) {
@@ -1655,7 +1666,9 @@ static bool prepareDrawSpriteImageInternal(
         storeVec4(vertexWrite, clipPosition);
       }
       const auto& uv = UV_CORNERS[cornerIndex];
-      storeVec2(vertexWrite, uv[0], uv[1]);
+      const double resolvedU = atlasU0 + uv[0] * atlasUSpan;
+      const double resolvedV = atlasV0 + uv[1] * atlasVSpan;
+      storeVec2(vertexWrite, resolvedU, resolvedV);
     }
 
     bool clipUniformEnabled = false;
@@ -1784,7 +1797,9 @@ static bool prepareDrawSpriteImageInternal(
                   0.0,
                   1.0);
       }
-      storeVec2(vertexWrite, resolvedCorners[idx].u, resolvedCorners[idx].v);
+      const double resolvedU = atlasU0 + resolvedCorners[idx].u * atlasUSpan;
+      const double resolvedV = atlasV0 + resolvedCorners[idx].v * atlasVSpan;
+      storeVec2(vertexWrite, resolvedU, resolvedV);
     }
 
     double* hitTestWrite = hitTestData.data();
@@ -2544,6 +2559,23 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
     info.width = entry.width;
     info.height = entry.height;
     info.textureReady = entry.textureReady != 0.0;
+    info.atlasPageIndex = entry.atlasPageIndex;
+    info.atlasU0 = entry.atlasU0;
+    info.atlasV0 = entry.atlasV0;
+    info.atlasU1 = entry.atlasU1;
+    info.atlasV1 = entry.atlasV1;
+    if (!std::isfinite(info.atlasU0)) {
+      info.atlasU0 = 0.0;
+    }
+    if (!std::isfinite(info.atlasV0)) {
+      info.atlasV0 = 0.0;
+    }
+    if (!std::isfinite(info.atlasU1)) {
+      info.atlasU1 = 1.0;
+    }
+    if (!std::isfinite(info.atlasV1)) {
+      info.atlasV1 = 1.0;
+    }
     resources[i] = info;
   }
 
