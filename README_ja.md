@@ -47,7 +47,7 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // MapLibreの準備が出来たら
 map.on('load', async () => {
-  // WASMを利用する場合は初期化します（呼ばない場合はJS計算のみ）
+  // SpriteLayerを初期化してMapLibreに追加します
   await initializeSpriteLayerHost();
   map.addLayer(spriteLayer);
 

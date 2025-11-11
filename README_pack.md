@@ -43,7 +43,7 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // When MapLibre is ready
 map.on('load', async () => {
-  // Optional: enable WASM acceleration (falls back to JS when unavailable)
+  // Initialize and add SpriteLayer to MapLibre
   await initializeSpriteLayerHost();
   map.addLayer(spriteLayer);
 
