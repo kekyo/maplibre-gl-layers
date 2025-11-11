@@ -6,7 +6,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,7 @@ const projectRoot = resolve(__dirname, '..');
 const repositoryRoot = resolve(projectRoot, '..');
 const wasmSourceDir = resolve(projectRoot, 'wasm');
 const wasmOutputDir = resolve(projectRoot, 'src/wasm');
+const wasmConfigFile = resolve(wasmOutputDir, 'config.json');
 const sourceFiles = [
   resolve(wasmSourceDir, 'projection_host.cpp'),
   resolve(wasmSourceDir, 'calculation_host.cpp'),
@@ -209,7 +210,7 @@ const createEmccArgs = (variant) => {
     '-s',
     'ENVIRONMENT=web,webview,worker,node',
     '-s',
-    'EXPORTED_FUNCTIONS=["_malloc","_free", "_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_projectLngLatToClipSpace","_calculateBillboardDepthKey","_calculateSurfaceDepthKey","_prepareDrawSpriteImages"]',
+    'EXPORTED_FUNCTIONS=["_malloc","_free","_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_projectLngLatToClipSpace","_calculateBillboardDepthKey","_calculateSurfaceDepthKey","_prepareDrawSpriteImages","_setThreadPoolSize"]',
     '-s',
     'ERROR_ON_UNDEFINED_SYMBOLS=0',
     '-mbulk-memory',
@@ -261,3 +262,8 @@ for (const variant of wasmVariants) {
     runWasmOpt(wasmOptArgs);
   }
 }
+
+const configData = {
+  pthreadPoolSize,
+};
+writeFileSync(wasmConfigFile, `${JSON.stringify(configData, null, 2)}\n`);

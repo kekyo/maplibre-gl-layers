@@ -4,6 +4,9 @@
 // Under MIT
 
 #include <emscripten/emscripten.h>
+#if defined(__EMSCRIPTEN_PTHREADS__)
+#include <emscripten/threading.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -26,6 +29,46 @@
 
 #include "projection_host.h"
 #include "param_layouts.h"
+
+#if defined(__EMSCRIPTEN_PTHREADS__)
+static std::size_t g_threadPoolLimit = 0;
+
+extern "C" {
+EMSCRIPTEN_KEEPALIVE void setThreadPoolSize(double value) {
+  if (std::isnan(value) || value <= 0.0) {
+    g_threadPoolLimit = 0;
+    return;
+  }
+  const double floored = std::floor(value + 0.5);
+  if (!std::isfinite(floored)) {
+    return;
+  }
+  const auto converted = static_cast<std::size_t>(floored);
+  g_threadPoolLimit = converted > 0 ? converted : 0;
+}
+}
+
+static inline std::size_t clampToAvailableThreads(std::size_t requested) {
+  if (g_threadPoolLimit > 0) {
+    return std::min<std::size_t>(requested, g_threadPoolLimit);
+  }
+  unsigned int hw = std::thread::hardware_concurrency();
+  if (hw == 0u) {
+    hw = 4u;
+  }
+  return std::min<std::size_t>(requested, static_cast<std::size_t>(hw));
+}
+#else
+extern "C" {
+EMSCRIPTEN_KEEPALIVE void setThreadPoolSize(double value) {
+  (void)value;
+}
+}
+
+static inline std::size_t clampToAvailableThreads(std::size_t requested) {
+  return requested;
+}
+#endif
 
 static inline double normalizeAngleDeg(double angle) {
   if (!std::isfinite(angle)) {
@@ -320,19 +363,6 @@ static inline bool tryGetPrecomputedCenter(const BucketItem& bucket,
   }
   return false;
 }
-
-struct ImageCenterCacheEntry {
-  bool hasAnchorApplied = false;
-  SpritePoint anchorApplied;
-  bool hasAnchorless = false;
-  SpritePoint anchorless;
-};
-
-using ImageCenterCache =
-    std::unordered_map<uint64_t, ImageCenterCacheEntry>;
-
-using SpriteCenterCacheMap =
-    std::unordered_map<int64_t, ImageCenterCache>;
 
 struct DepthItem {
   const BucketItem* item = nullptr;
@@ -632,6 +662,7 @@ static inline ResultBufferHeader* initializeResultHeader(double* resultPtr) {
 
 struct FrameConstants {
   double zoom = 0.0;
+  double zoomExp2 = 1.0;
   double worldSize = 0.0;
   double pixelPerMeter = 0.0;
   double cameraToCenterDistance = 0.0;
@@ -664,6 +695,7 @@ static inline FrameConstants readFrameConstants(const double* ptr,
     return constants;
   }
   constants.zoom = ptr[0];
+  constants.zoomExp2 = std::exp2(constants.zoom);
   constants.worldSize = ptr[1];
   constants.pixelPerMeter = ptr[2];
   constants.cameraToCenterDistance = ptr[3];
@@ -734,10 +766,10 @@ static inline void applySurfaceDisplacement(const SpriteLocation& base,
   out.z = alt;
 }
 
-static inline double calculateMetersPerPixelAtLatitude(double zoom,
+static inline double calculateMetersPerPixelAtLatitude(double zoomExp2,
                                                        double latitude) {
   const double cosLatitude = std::cos(latitude * DEG2RAD);
-  const double scale = std::pow(2.0, zoom);
+  const double scale = zoomExp2;
   const double circumference = 2.0 * PI * EARTH_RADIUS_METERS;
   return (cosLatitude * circumference) / (512.0 * scale);
 }
@@ -1102,27 +1134,11 @@ static SpriteScreenPoint computeImageCenter(
     bool useResolvedAnchor,
     const ProjectionContext& projection,
     const FrameConstants& frame,
-    SpriteCenterCacheMap& cache,
     const ResourceInfo& resource,
     double effectivePixelsPerMeter,
     const std::vector<BucketItem>& bucketItems,
     bool clipContextAvailable) {
   SpriteScreenPoint fallbackCenter = bucketItem.projected;
-
-  const int64_t spriteKey = bucketItem.spriteHandle;
-  auto& spriteCache = cache[spriteKey];
-  const uint64_t cacheKey = makeSpriteCenterCacheKey(
-      bucketItem.entry->subLayer, bucketItem.entry->order);
-  auto cacheFound = spriteCache.find(cacheKey);
-  if (cacheFound != spriteCache.end()) {
-    const ImageCenterCacheEntry& entry = cacheFound->second;
-    if (useResolvedAnchor && entry.hasAnchorApplied) {
-      return {entry.anchorApplied.x, entry.anchorApplied.y};
-    }
-    if (!useResolvedAnchor && entry.hasAnchorless) {
-      return {entry.anchorless.x, entry.anchorless.y};
-    }
-  }
 
   SpriteScreenPoint basePoint = bucketItem.projected;
 
@@ -1135,7 +1151,6 @@ static SpriteScreenPoint computeImageCenter(
                                      resolvedAnchor,
                                      projection,
                                      frame,
-                                     cache,
                                      *reference->resource,
                                      effectivePixelsPerMeter,
                                      bucketItems,
@@ -1227,13 +1242,6 @@ static SpriteScreenPoint computeImageCenter(
                         placement.center.y - placement.anchorShift.y};
   }
 
-  ImageCenterCacheEntry cacheEntry;
-  cacheEntry.anchorApplied = {anchorAppliedCenter.x, anchorAppliedCenter.y};
-  cacheEntry.anchorless = {anchorlessCenter.x, anchorlessCenter.y};
-  cacheEntry.hasAnchorApplied = true;
-  cacheEntry.hasAnchorless = true;
-  spriteCache[cacheKey] = cacheEntry;
-
   return useResolvedAnchor ? anchorAppliedCenter : anchorlessCenter;
 }
 
@@ -1241,7 +1249,6 @@ static void precomputeBucketCenters(std::vector<BucketItem>& bucketItems,
                                     const ProjectionContext& projection,
                                     const FrameConstants& frame,
                                     bool clipContextAvailable) {
-  SpriteCenterCacheMap cache;
   for (BucketItem& bucket : bucketItems) {
     if (bucket.entry == nullptr || bucket.resource == nullptr) {
       continue;
@@ -1259,7 +1266,6 @@ static void precomputeBucketCenters(std::vector<BucketItem>& bucketItems,
                            true,
                            projection,
                            frame,
-                           cache,
                            *bucket.resource,
                            effectivePixelsPerMeter,
                            bucketItems,
@@ -1272,7 +1278,6 @@ static void precomputeBucketCenters(std::vector<BucketItem>& bucketItems,
                            false,
                            projection,
                            frame,
-                           cache,
                            *bucket.resource,
                            effectivePixelsPerMeter,
                            bucketItems,
@@ -1298,7 +1303,7 @@ static inline bool ensureBucketEffectivePixelsPerMeter(
   }
 
   const double metersPerPixelAtLat =
-      calculateMetersPerPixelAtLatitude(frame.zoom,
+      calculateMetersPerPixelAtLatitude(frame.zoomExp2,
                                         bucketItem.spriteLocation.lat);
   if (!std::isfinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0.0) {
     return false;
@@ -1347,7 +1352,8 @@ static inline std::size_t determineDepthWorkerCount(std::size_t totalItems) {
   const std::size_t maxWorkers = static_cast<std::size_t>(hw);
   const std::size_t bySize =
       std::max<std::size_t>(1, totalItems / DEPTH_PARALLEL_SLICE);
-  return std::min<std::size_t>(maxWorkers, bySize);
+  return clampToAvailableThreads(
+      std::min<std::size_t>(maxWorkers, bySize));
 #else
   (void)totalItems;
   return 1;
@@ -1533,7 +1539,8 @@ static inline std::size_t determinePrepareWorkerCount(std::size_t totalItems) {
   const std::size_t maxWorkers = static_cast<std::size_t>(hw);
   const std::size_t bySize =
       std::max<std::size_t>(1, totalItems / PREPARE_PARALLEL_SLICE);
-  return std::min<std::size_t>(maxWorkers, bySize);
+  return clampToAvailableThreads(
+      std::min<std::size_t>(maxWorkers, bySize));
 #else
   (void)totalItems;
   return 1;

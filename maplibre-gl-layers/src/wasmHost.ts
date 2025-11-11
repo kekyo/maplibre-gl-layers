@@ -6,12 +6,17 @@
 
 import type { Releaseable } from './internalTypes';
 import type { SpriteLayerCalculationVariant } from './types';
+import wasmConfig from './wasm/config.json' assert { type: 'json' };
 
 //////////////////////////////////////////////////////////////////////////////////////
 
 const BUFFER_POOL_ENTRY_TTL_MS = 5_000;
 const BUFFER_POOL_SWEEP_INTERVAL_MS = 3_000;
 const BUFFER_POOL_MAX_REUSE_RATIO = 2;
+const CONFIGURED_PTHREAD_POOL_SIZE =
+  typeof wasmConfig?.pthreadPoolSize === 'number'
+    ? Math.max(0, Math.trunc(wasmConfig.pthreadPoolSize))
+    : 0;
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -378,6 +383,7 @@ interface RawProjectionWasmExports {
   readonly calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
   readonly _prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
   readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
+  readonly _setThreadPoolSize?: (count: number) => void;
 }
 
 /**
@@ -433,6 +439,14 @@ const instantiateThreadedProjectionWasm =
         return path;
       },
     })) as RawProjectionWasmExports;
+
+    const threadLimit = resolveThreadPoolLimit();
+    if (
+      threadLimit > 0 &&
+      typeof moduleInstance._setThreadPoolSize === 'function'
+    ) {
+      moduleInstance._setThreadPoolSize(threadLimit);
+    }
 
     return moduleInstance;
   };
@@ -934,4 +948,18 @@ export const prepareWasmHost = (): WasmHost => {
     throw new Error('Could not use WasmHost, needs before initialization.');
   }
   return currentWasmHost;
+};
+const resolveThreadPoolLimit = (): number => {
+  const hardware =
+    typeof navigator !== 'undefined' &&
+    typeof navigator.hardwareConcurrency === 'number'
+      ? navigator.hardwareConcurrency
+      : 0;
+  if (CONFIGURED_PTHREAD_POOL_SIZE > 0 && hardware > 0) {
+    return Math.min(CONFIGURED_PTHREAD_POOL_SIZE, hardware);
+  }
+  if (CONFIGURED_PTHREAD_POOL_SIZE > 0) {
+    return CONFIGURED_PTHREAD_POOL_SIZE;
+  }
+  return hardware;
 };
