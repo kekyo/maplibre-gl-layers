@@ -167,7 +167,12 @@ import {
   type AtlasPageState,
   createAtlasOperationQueue,
 } from './atlas';
-import { createDeferred, type Deferred } from 'async-primitives';
+import {
+  createDeferred,
+  onAbort,
+  type Deferred,
+  type Releasable,
+} from 'async-primitives';
 import { isSpriteLayerHostEnabled } from './runtime';
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -730,6 +735,16 @@ const createImageBitmapFromCanvas = async (
   throw new Error('ImageBitmap API is not supported in this environment.');
 };
 
+const toAbortError = (reason: unknown): Error => {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === 'string') {
+    return new Error(reason);
+  }
+  return new Error('Operation aborted');
+};
+
 /**
  * Builds a CSS font string from resolved text glyph options.
  * @param {ResolvedTextGlyphOptions} options - Resolved typography options.
@@ -1240,6 +1255,8 @@ export const createSpriteLayer = <T = any>(
     readonly dimensions: SpriteTextGlyphDimensions;
     readonly options?: SpriteTextGlyphOptions;
     readonly deferred: Deferred<boolean>;
+    readonly signal?: AbortSignal;
+    readonly abortHandle: Releasable | null;
   }
 
   const textGlyphQueue: TextGlyphQueueEntry[] = [];
@@ -1270,6 +1287,7 @@ export const createSpriteLayer = <T = any>(
       if (entry && entry.glyphId === imageId) {
         textGlyphQueue.splice(idx, 1);
         pendingTextGlyphIds.delete(imageId);
+        entry.abortHandle?.release();
         entry.deferred.reject(
           reason ??
             new Error(
@@ -1285,6 +1303,7 @@ export const createSpriteLayer = <T = any>(
       const entry = textGlyphQueue.shift();
       if (entry) {
         pendingTextGlyphIds.delete(entry.glyphId);
+        entry.abortHandle?.release();
         entry.deferred.reject(reason);
       }
     }
@@ -1293,11 +1312,20 @@ export const createSpriteLayer = <T = any>(
   const executeTextGlyphJob = async (
     entry: TextGlyphQueueEntry
   ): Promise<void> => {
+    if (entry.signal?.aborted) {
+      entry.abortHandle?.release();
+      entry.deferred.reject(entry.signal.reason);
+      pendingTextGlyphIds.delete(entry.glyphId);
+      return;
+    }
     if (images.has(entry.glyphId)) {
+      entry.abortHandle?.release();
       entry.deferred.resolve(false);
+      pendingTextGlyphIds.delete(entry.glyphId);
       return;
     }
     if (!pendingTextGlyphIds.has(entry.glyphId)) {
+      entry.abortHandle?.release();
       entry.deferred.reject(
         new Error(
           `[SpriteLayer][GlyphQueue] Image "${entry.glyphId}" was removed before generation.`
@@ -1351,6 +1379,8 @@ export const createSpriteLayer = <T = any>(
       }
       entry.deferred.reject(error);
     }
+    pendingTextGlyphIds.delete(entry.glyphId);
+    entry.abortHandle?.release();
   };
 
   const processTextGlyphQueueChunk = async (): Promise<void> => {
@@ -3775,7 +3805,8 @@ export const createSpriteLayer = <T = any>(
   const registerImage = async (
     imageId: string,
     imageSource: string | ImageBitmap,
-    options?: SpriteImageRegisterOptions
+    options?: SpriteImageRegisterOptions,
+    signal?: AbortSignal
   ): Promise<boolean> => {
     // Load from URL when given a string; otherwise reuse the provided bitmap directly.
     let bitmap: ImageBitmap;
@@ -3821,6 +3852,11 @@ export const createSpriteLayer = <T = any>(
     imageHandleBuffersController.markDirty(images);
 
     const deferred = createDeferred<boolean>();
+    const abortHandle = signal
+      ? onAbort(signal, () => {
+          deferred.reject(toAbortError(signal.reason));
+        })
+      : null;
     atlasQueue.enqueueUpsert({ imageId, bitmap, deferred });
 
     try {
@@ -3833,6 +3869,8 @@ export const createSpriteLayer = <T = any>(
       atlasManager.removeImage(imageId);
       bitmap.close?.();
       throw e;
+    } finally {
+      abortHandle?.release();
     }
   };
 
@@ -4073,20 +4111,29 @@ export const createSpriteLayer = <T = any>(
     textGlyphId: string,
     text: string,
     dimensions: SpriteTextGlyphDimensions,
-    options?: SpriteTextGlyphOptions
+    options?: SpriteTextGlyphOptions,
+    signal?: AbortSignal
   ): Promise<boolean> => {
-    if (images.has(textGlyphId)) {
+    if (images.has(textGlyphId) || pendingTextGlyphIds.has(textGlyphId)) {
       return true;
     }
 
     pendingTextGlyphIds.add(textGlyphId);
     const deferred = createDeferred<boolean>();
+    let glyphAbortHandle: Releasable | null = null;
+    if (signal) {
+      glyphAbortHandle = onAbort(signal, () => {
+        cancelPendingTextGlyphJob(textGlyphId, toAbortError(signal.reason));
+      });
+    }
     enqueueTextGlyphJob({
       glyphId: textGlyphId,
       text,
       dimensions,
       options,
       deferred,
+      signal,
+      abortHandle: glyphAbortHandle,
     });
 
     try {
