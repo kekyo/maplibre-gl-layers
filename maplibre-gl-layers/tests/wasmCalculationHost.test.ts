@@ -43,7 +43,7 @@ const RESULT_VERTEX_COMPONENT_LENGTH = 36;
 const RESULT_HIT_TEST_COMPONENT_LENGTH = 8;
 const RESULT_SURFACE_BLOCK_LENGTH = 68;
 const RESULT_COMMON_ITEM_LENGTH = 19;
-const RESOURCE_STRIDE = 4;
+const RESOURCE_STRIDE = 9;
 const RESULT_ITEM_STRIDE =
   RESULT_COMMON_ITEM_LENGTH +
   RESULT_VERTEX_COMPONENT_LENGTH +
@@ -200,6 +200,11 @@ const createRegisteredImage = (): RegisteredImage => ({
   height: 32,
   bitmap: {} as ImageBitmap,
   texture: undefined,
+  atlasPageIndex: 0,
+  atlasU0: 0,
+  atlasV0: 0,
+  atlasU1: 1,
+  atlasV1: 1,
 });
 
 const createResolvedScaling = (): ResolvedSpriteScalingOptions => ({

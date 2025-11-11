@@ -747,6 +747,20 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   const imageEntry = item.image;
   const imageResource = item.resource;
   const resolveOrigin = item.resolveOrigin;
+  const atlasU0 = Number.isFinite(imageResource.atlasU0)
+    ? imageResource.atlasU0
+    : 0;
+  const atlasV0 = Number.isFinite(imageResource.atlasV0)
+    ? imageResource.atlasV0
+    : 0;
+  const atlasU1 = Number.isFinite(imageResource.atlasU1)
+    ? imageResource.atlasU1
+    : 1;
+  const atlasV1 = Number.isFinite(imageResource.atlasV1)
+    ? imageResource.atlasV1
+    : 1;
+  const atlasUSpan = atlasU1 - atlasU0;
+  const atlasVSpan = atlasV1 - atlasV0;
 
   const spriteMercator = resolveSpriteMercator(projectionHost, item.sprite);
 
@@ -998,7 +1012,9 @@ export const prepareDrawSpriteImageInternal = <TTag>(
         clipCornerPositions[index] = [clipX, clipY, clipZ, clipW];
       }
 
-      const [u, v] = UV_CORNERS[index]!;
+      const [baseU, baseV] = UV_CORNERS[index]!;
+      const u = atlasU0 + baseU * atlasUSpan;
+      const v = atlasV0 + baseV * atlasVSpan;
       if (useShaderSurface) {
         const baseCorner = SURFACE_BASE_CORNERS[index]!;
         QUAD_VERTEX_SCRATCH[bufferOffset++] = baseCorner[0];
@@ -1223,8 +1239,10 @@ export const prepareDrawSpriteImageInternal = <TTag>(
         }
         QUAD_VERTEX_SCRATCH[bufferOffset++] = 0;
         QUAD_VERTEX_SCRATCH[bufferOffset++] = 1;
-        QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.u;
-        QUAD_VERTEX_SCRATCH[bufferOffset++] = corner.v;
+        const scaledU = atlasU0 + corner.u * atlasUSpan;
+        const scaledV = atlasV0 + corner.v * atlasVSpan;
+        QUAD_VERTEX_SCRATCH[bufferOffset++] = scaledU;
+        QUAD_VERTEX_SCRATCH[bufferOffset++] = scaledV;
       }
 
       for (let i = 0; i < corners.length; i++) {

@@ -47,10 +47,9 @@ uniform vec4 u_surfaceClipBasisEast;
 uniform vec4 u_surfaceClipBasisNorth;
 uniform float u_surfaceDepthBias;
 varying vec2 v_uv;
-vec2 computeBillboardCorner(vec2 uv) {
-  vec2 base = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+vec2 computeBillboardCorner(vec2 baseCorner) {
   vec2 anchorShift = vec2(u_billboardAnchor.x * u_billboardHalfSize.x, u_billboardAnchor.y * u_billboardHalfSize.y);
-  vec2 shifted = vec2(base.x * u_billboardHalfSize.x, base.y * u_billboardHalfSize.y) - anchorShift;
+  vec2 shifted = vec2(baseCorner.x * u_billboardHalfSize.x, baseCorner.y * u_billboardHalfSize.y) - anchorShift;
   float sinR = u_billboardSinCos.x;
   float cosR = u_billboardSinCos.y;
   vec2 rotated = vec2(
@@ -76,7 +75,7 @@ void main() {
   v_uv = a_uv;
   vec4 position;
   if (u_billboardMode > 0.5) {
-    vec2 screenPosition = computeBillboardCorner(a_uv);
+    vec2 screenPosition = computeBillboardCorner(a_position.xy);
     position = vec4(screenPosition, 0.0, 1.0);
   } else if (u_surfaceMode > 0.5) {
     vec2 baseCorner = vec2(a_position.x, a_position.y);

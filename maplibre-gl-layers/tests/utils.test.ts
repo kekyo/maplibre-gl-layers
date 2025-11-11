@@ -51,6 +51,11 @@ describe('createImageHandleBufferController', () => {
     height: handle * 20,
     bitmap: {} as ImageBitmap,
     texture,
+    atlasPageIndex: -1,
+    atlasU0: 0,
+    atlasV0: 0,
+    atlasU1: 1,
+    atlasV1: 1,
   });
 
   it('builds metadata arrays sized by highest handle and encodes texture readiness', () => {
