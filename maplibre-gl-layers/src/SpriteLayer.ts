@@ -153,6 +153,8 @@ import {
   SL_DEBUG,
   ATLAS_QUEUE_CHUNK_SIZE,
   ATLAS_QUEUE_TIME_BUDGET_MS,
+  TEXT_GLYPH_QUEUE_CHUNK_SIZE,
+  TEXT_GLYPH_QUEUE_TIME_BUDGET_MS,
 } from './config';
 import {
   createImageHandleBufferController,
@@ -165,7 +167,7 @@ import {
   type AtlasPageState,
   createAtlasOperationQueue,
 } from './atlas';
-import { createDeferred } from 'async-primitives';
+import { createDeferred, type Deferred } from 'async-primitives';
 import { isSpriteLayerHostEnabled } from './runtime';
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -1228,6 +1230,143 @@ export const createSpriteLayer = <T = any>(
       },
     }
   );
+
+  /** Pending text glyph identifiers awaiting generation. */
+  const pendingTextGlyphIds = new Set<string>();
+
+  interface TextGlyphQueueEntry {
+    readonly glyphId: string;
+    readonly text: string;
+    readonly dimensions: SpriteTextGlyphDimensions;
+    readonly options?: SpriteTextGlyphOptions;
+    readonly deferred: Deferred<boolean>;
+  }
+
+  const textGlyphQueue: TextGlyphQueueEntry[] = [];
+  let textGlyphQueueTimer: ReturnType<typeof setTimeout> | null = null;
+  let isProcessingTextGlyphQueue = false;
+
+  const now = (): number =>
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+  const scheduleTextGlyphQueueProcessing = (): void => {
+    if (textGlyphQueueTimer) {
+      return;
+    }
+    textGlyphQueueTimer = setTimeout(() => {
+      textGlyphQueueTimer = null;
+      void processTextGlyphQueueChunk();
+    }, 0);
+  };
+
+  const enqueueTextGlyphJob = (entry: TextGlyphQueueEntry): void => {
+    textGlyphQueue.push(entry);
+    scheduleTextGlyphQueueProcessing();
+  };
+
+  const cancelPendingTextGlyphJob = (imageId: string, reason?: Error): void => {
+    for (let idx = textGlyphQueue.length - 1; idx >= 0; idx -= 1) {
+      const entry = textGlyphQueue[idx];
+      if (entry && entry.glyphId === imageId) {
+        textGlyphQueue.splice(idx, 1);
+        pendingTextGlyphIds.delete(imageId);
+        entry.deferred.reject(
+          reason ??
+            new Error(
+              `[SpriteLayer][GlyphQueue] Image "${imageId}" was cancelled before generation.`
+            )
+        );
+      }
+    }
+  };
+
+  const rejectAllPendingTextGlyphJobs = (reason: Error): void => {
+    while (textGlyphQueue.length > 0) {
+      const entry = textGlyphQueue.shift();
+      if (entry) {
+        pendingTextGlyphIds.delete(entry.glyphId);
+        entry.deferred.reject(reason);
+      }
+    }
+  };
+
+  const executeTextGlyphJob = async (
+    entry: TextGlyphQueueEntry
+  ): Promise<void> => {
+    let registeredImage: RegisteredImage | null = null;
+    try {
+      const { bitmap, width, height } = await renderTextGlyphBitmap(
+        entry.text,
+        entry.dimensions,
+        entry.options
+      );
+      const handle = imageIdHandler.allocate(entry.glyphId);
+      registeredImage = {
+        id: entry.glyphId,
+        handle,
+        width,
+        height,
+        bitmap,
+        texture: undefined,
+        atlasPageIndex: ATLAS_PAGE_INDEX_NONE,
+        atlasU0: 0,
+        atlasV0: 0,
+        atlasU1: 1,
+        atlasV1: 1,
+      };
+      images.set(entry.glyphId, registeredImage);
+      imageIdHandler.store(handle, registeredImage);
+      updateSpriteImageHandles(entry.glyphId, handle);
+      imageHandleBuffersController.markDirty(images);
+
+      const atlasDeferred = createDeferred<boolean>();
+      atlasQueue.enqueueUpsert({
+        imageId: entry.glyphId,
+        bitmap,
+        deferred: atlasDeferred,
+      });
+      await atlasDeferred.promise;
+
+      entry.deferred.resolve(true);
+    } catch (error) {
+      if (registeredImage) {
+        images.delete(entry.glyphId);
+        imageIdHandler.release(entry.glyphId);
+        updateSpriteImageHandles(entry.glyphId, 0);
+        imageHandleBuffersController.markDirty(images);
+        atlasManager.removeImage(entry.glyphId);
+        registeredImage.bitmap.close?.();
+      }
+      entry.deferred.reject(error);
+    }
+  };
+
+  const processTextGlyphQueueChunk = async (): Promise<void> => {
+    if (isProcessingTextGlyphQueue || textGlyphQueue.length === 0) {
+      return;
+    }
+    isProcessingTextGlyphQueue = true;
+    const budgetStart = now();
+    let processedCount = 0;
+    try {
+      while (textGlyphQueue.length > 0) {
+        const entry = textGlyphQueue.shift()!;
+        await executeTextGlyphJob(entry);
+        processedCount += 1;
+        if (processedCount >= TEXT_GLYPH_QUEUE_CHUNK_SIZE) {
+          break;
+        }
+        if (now() - budgetStart >= TEXT_GLYPH_QUEUE_TIME_BUDGET_MS) {
+          break;
+        }
+      }
+    } finally {
+      isProcessingTextGlyphQueue = false;
+    }
+    if (textGlyphQueue.length > 0) {
+      scheduleTextGlyphQueueProcessing();
+    }
+  };
 
   /**
    * Determines whether any atlas page requires uploading or missing texture recreation.
@@ -3693,26 +3832,24 @@ export const createSpriteLayer = <T = any>(
    * @param {SpriteTextGlyphOptions} [options] - Additional styling options for the glyph.
    * @returns {Promise<boolean>} Resolves to `true` when registered; `false` if the ID already exists.
    */
-  const registerTextGlyph = async (
-    textGlyphId: string,
+  interface TextGlyphRenderResult {
+    readonly bitmap: ImageBitmap;
+    readonly width: number;
+    readonly height: number;
+  }
+
+  const renderTextGlyphBitmap = async (
     text: string,
     dimensions: SpriteTextGlyphDimensions,
     options?: SpriteTextGlyphOptions
-  ): Promise<boolean> => {
-    // Prevent accidental overwrites by refusing duplicate glyph IDs.
-    if (images.has(textGlyphId)) {
-      return false;
-    }
-
+  ): Promise<TextGlyphRenderResult> => {
     let lineHeight: number | undefined;
     let maxWidth: number | undefined;
     const isLineHeightMode = 'lineHeightPixel' in dimensions;
     if (isLineHeightMode) {
-      // When lineHeightPixel is provided, treat the glyph as a single-line label constrained vertically.
       const { lineHeightPixel } = dimensions as { lineHeightPixel: number };
       lineHeight = clampGlyphDimension(lineHeightPixel);
     } else {
-      // Otherwise we clamp against a maximum width constraint when rendering paragraphs.
       const { maxWidthPixel } = dimensions as { maxWidthPixel: number };
       maxWidth = clampGlyphDimension(maxWidthPixel);
     }
@@ -3746,11 +3883,9 @@ export const createSpriteLayer = <T = any>(
         maxWidth - borderWidth - padding.left - padding.right
       );
       if (contentWidthLimit < letterSpacingTotal) {
-        // Ensure we have enough room to inject spacing between glyphs.
         contentWidthLimit = letterSpacingTotal;
       }
 
-      // Reduce font size proportionally until the measured width fits inside the bounding box.
       if (text.length > 0 && measuredWidth > contentWidthLimit) {
         const initialRatio = contentWidthLimit / measuredWidth;
         fontSize = Math.max(
@@ -3775,7 +3910,6 @@ export const createSpriteLayer = <T = any>(
             MIN_TEXT_GLYPH_FONT_SIZE,
             Math.floor(fontSize * Math.max(ratio, 0.75))
           );
-          // Break ties by decrementing one pixel to guarantee progress.
           if (nextFontSize === fontSize) {
             fontSize = Math.max(MIN_TEXT_GLYPH_FONT_SIZE, fontSize - 1);
           } else {
@@ -3789,7 +3923,6 @@ export const createSpriteLayer = <T = any>(
           );
           guard += 1;
         }
-        // If we exit due to guard exhaustion, the current size is the best compromise.
       }
     }
 
@@ -3801,20 +3934,28 @@ export const createSpriteLayer = <T = any>(
     );
     const measuredHeight = measureTextHeight(measureCtx, text, fontSize);
 
-    const padding = resolved.paddingPixel;
-    const borderWidth = resolved.borderWidthPixel;
+    const paddingPixel = resolved.paddingPixel;
+    const borderWidthPixel = resolved.borderWidthPixel;
 
     const contentHeight = isLineHeightMode
-      ? // When the caller provided an explicit line height, honour it directly.
-        lineHeight!
-      : // Otherwise base the height on measured text metrics.
-        clampGlyphDimension(Math.ceil(measuredHeight));
+      ? lineHeight!
+      : clampGlyphDimension(Math.ceil(measuredHeight));
 
     const totalWidth = clampGlyphDimension(
-      Math.ceil(borderWidth + padding.left + padding.right + measuredWidth)
+      Math.ceil(
+        borderWidthPixel +
+          paddingPixel.left +
+          paddingPixel.right +
+          measuredWidth
+      )
     );
     const totalHeight = clampGlyphDimension(
-      Math.ceil(borderWidth + padding.top + padding.bottom + contentHeight)
+      Math.ceil(
+        borderWidthPixel +
+          paddingPixel.top +
+          paddingPixel.bottom +
+          contentHeight
+      )
     );
 
     const renderPixelRatio = resolved.renderPixelRatio;
@@ -3825,14 +3966,11 @@ export const createSpriteLayer = <T = any>(
     );
 
     const { canvas, ctx } = createCanvas2D(renderWidth, renderHeight);
-
     ctx.clearRect(0, 0, renderWidth, renderHeight);
     ctx.save();
     if (renderPixelRatio !== 1) {
-      // Scale the canvas so drawing commands operate in CSS pixel space.
       ctx.scale(renderPixelRatio, renderPixelRatio);
     }
-
     ctx.imageSmoothingEnabled = true;
 
     if (resolved.backgroundColor) {
@@ -3845,10 +3983,10 @@ export const createSpriteLayer = <T = any>(
       );
     }
 
-    if (resolved.borderColor && borderWidth > 0) {
-      const inset = borderWidth / 2;
-      const strokeWidth = Math.max(0, totalWidth - borderWidth);
-      const strokeHeight = Math.max(0, totalHeight - borderWidth);
+    if (resolved.borderColor && borderWidthPixel > 0) {
+      const inset = borderWidthPixel / 2;
+      const strokeWidth = Math.max(0, totalWidth - borderWidthPixel);
+      const strokeHeight = Math.max(0, totalHeight - borderWidthPixel);
       const strokeRadius = Math.max(0, resolved.borderRadiusPixel - inset);
       ctx.save();
       ctx.translate(inset, inset);
@@ -3858,23 +3996,23 @@ export const createSpriteLayer = <T = any>(
         strokeHeight,
         strokeRadius,
         resolved.borderColor,
-        borderWidth,
+        borderWidthPixel,
         resolved.borderSides
       );
       ctx.restore();
     }
 
-    const borderInset = borderWidth / 2;
+    const borderInset = borderWidthPixel / 2;
     const contentWidth = Math.max(
       0,
-      totalWidth - borderWidth - padding.left - padding.right
+      totalWidth - borderWidthPixel - paddingPixel.left - paddingPixel.right
     );
     const contentHeightInner = Math.max(
       0,
-      totalHeight - borderWidth - padding.top - padding.bottom
+      totalHeight - borderWidthPixel - paddingPixel.top - paddingPixel.bottom
     );
-    const contentLeft = borderInset + padding.left;
-    const contentTop = borderInset + padding.top;
+    const contentLeft = borderInset + paddingPixel.left;
+    const contentTop = borderInset + paddingPixel.top;
     const textY = contentTop + contentHeightInner / 2;
 
     const renderOptions = { ...resolved, fontSizePixel: fontSize };
@@ -3916,41 +4054,35 @@ export const createSpriteLayer = <T = any>(
       renderPixelRatio
     );
 
-    const handle = imageIdHandler.allocate(textGlyphId);
-    const image: RegisteredImage = {
-      id: textGlyphId,
-      handle,
-      width: totalWidth,
-      height: totalHeight,
-      bitmap,
-      texture: undefined,
-      atlasPageIndex: ATLAS_PAGE_INDEX_NONE,
-      atlasU0: 0,
-      atlasV0: 0,
-      atlasU1: 1,
-      atlasV1: 1,
-    };
-    images.set(textGlyphId, image);
-    imageIdHandler.store(handle, image);
-    updateSpriteImageHandles(textGlyphId, handle);
-    imageHandleBuffersController.markDirty(images);
+    return { bitmap, width: totalWidth, height: totalHeight };
+  };
 
+  const registerTextGlyph = async (
+    textGlyphId: string,
+    text: string,
+    dimensions: SpriteTextGlyphDimensions,
+    options?: SpriteTextGlyphOptions
+  ): Promise<boolean> => {
+    if (images.has(textGlyphId) || pendingTextGlyphIds.has(textGlyphId)) {
+      return false;
+    }
+
+    pendingTextGlyphIds.add(textGlyphId);
     const deferred = createDeferred<boolean>();
-    atlasQueue.enqueueUpsert({ imageId: textGlyphId, bitmap, deferred });
+    enqueueTextGlyphJob({
+      glyphId: textGlyphId,
+      text,
+      dimensions,
+      options,
+      deferred,
+    });
 
     try {
       return await deferred.promise;
-    } catch (e) {
-      images.delete(textGlyphId);
-      imageIdHandler.release(textGlyphId);
-      updateSpriteImageHandles(textGlyphId, 0);
-      imageHandleBuffersController.markDirty(images);
-      atlasManager.removeImage(textGlyphId);
-      bitmap.close?.();
-      throw e;
+    } finally {
+      pendingTextGlyphIds.delete(textGlyphId);
     }
   };
-
   /**
    * Unregisters an image and releases any associated GPU resources.
    * @param {string} imageId - Unique identifier of the image to remove.
@@ -3960,6 +4092,15 @@ export const createSpriteLayer = <T = any>(
     // Ensure the image exists.
     const image = images.get(imageId);
     if (!image) {
+      if (pendingTextGlyphIds.has(imageId)) {
+        cancelPendingTextGlyphJob(
+          imageId,
+          new Error(
+            `[SpriteLayer][GlyphQueue] Image "${imageId}" was unregistered before generation.`
+          )
+        );
+        return true;
+      }
       return false;
     }
 
@@ -4005,6 +4146,12 @@ export const createSpriteLayer = <T = any>(
    * @returns {void}
    */
   const unregisterAllImages = (): void => {
+    rejectAllPendingTextGlyphJobs(
+      new Error(
+        '[SpriteLayer][GlyphQueue] Pending glyph operations were cleared.'
+      )
+    );
+    pendingTextGlyphIds.clear();
     atlasQueue.rejectAll(
       new Error('[SpriteLayer][Atlas] Pending atlas operations were cleared.')
     );
