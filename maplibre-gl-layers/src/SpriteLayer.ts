@@ -160,8 +160,12 @@ import {
   createSpriteOriginReference,
   createRenderTargetBucketBuffers,
 } from './utils';
-import { createAtlasManager, type AtlasPageState } from './atlas';
-import { createDeferred, type Deferred } from 'async-primitives';
+import {
+  createAtlasManager,
+  type AtlasPageState,
+  createAtlasOperationQueue,
+} from './atlas';
+import { createDeferred } from 'async-primitives';
 import { isSpriteLayerHostEnabled } from './runtime';
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -1209,6 +1213,21 @@ export const createSpriteLayer = <T = any>(
   const atlasPageTextures = new Map<number, WebGLTexture>();
   /** Flag indicating atlas pages require GPU upload. */
   let atlasNeedsUpload = false;
+  /** Deferred handler invoked when the atlas queue processes entries. */
+  let handleAtlasQueueChunkProcessed: (() => void) | null = null;
+
+  const atlasQueue = createAtlasOperationQueue(
+    atlasManager,
+    {
+      maxOperationsPerPass: ATLAS_QUEUE_CHUNK_SIZE,
+      timeBudgetMs: ATLAS_QUEUE_TIME_BUDGET_MS,
+    },
+    {
+      onChunkProcessed: () => {
+        handleAtlasQueueChunkProcessed?.();
+      },
+    }
+  );
 
   /**
    * Determines whether any atlas page requires uploading or missing texture recreation.
@@ -1314,145 +1333,6 @@ export const createSpriteLayer = <T = any>(
       imageHandleBuffersController.markDirty(images);
     }
     atlasNeedsUpload = placementsChanged || shouldUploadAtlasPages();
-  };
-
-  interface AtlasUpsertQueueEntry {
-    readonly type: 'upsert';
-    readonly imageId: string;
-    readonly bitmap: ImageBitmap;
-    readonly deferred: Deferred<boolean>;
-  }
-
-  type AtlasQueueEntry = AtlasUpsertQueueEntry;
-
-  const atlasOperationQueue: AtlasQueueEntry[] = [];
-  let atlasQueueTimer: ReturnType<typeof setTimeout> | null = null;
-  let isProcessingAtlasQueue = false;
-
-  const processAtlasQueueChunk = (
-    timeBudgetMs: number = ATLAS_QUEUE_TIME_BUDGET_MS
-  ): {
-    processedAny: boolean;
-    hasRemaining: boolean;
-  } => {
-    if (isProcessingAtlasQueue) {
-      return {
-        processedAny: false,
-        hasRemaining: atlasOperationQueue.length > 0,
-      };
-    }
-    if (atlasOperationQueue.length === 0) {
-      return { processedAny: false, hasRemaining: false };
-    }
-    isProcessingAtlasQueue = true;
-    let processedAny = false;
-    const hasBudget = Number.isFinite(timeBudgetMs) && timeBudgetMs > 0;
-    const budgetStart = hasBudget
-      ? typeof performance !== 'undefined'
-        ? performance.now()
-        : Date.now()
-      : 0;
-    try {
-      let processedCount = 0;
-      while (atlasOperationQueue.length > 0) {
-        const entry = atlasOperationQueue.shift()!;
-        try {
-          switch (entry.type) {
-            case 'upsert':
-              atlasManager.upsertImage(entry.imageId, entry.bitmap);
-              entry.deferred.resolve(true);
-              processedAny = true;
-              break;
-          }
-        } catch (error) {
-          entry.deferred.reject(error);
-        }
-        processedCount += 1;
-        if (processedCount >= ATLAS_QUEUE_CHUNK_SIZE) {
-          break;
-        }
-        if (hasBudget) {
-          const now =
-            typeof performance !== 'undefined' ? performance.now() : Date.now();
-          if (now - budgetStart >= timeBudgetMs) {
-            break;
-          }
-        }
-      }
-      if (processedAny) {
-        syncAtlasPlacementsFromManager();
-      }
-      return {
-        processedAny,
-        hasRemaining: atlasOperationQueue.length > 0,
-      };
-    } finally {
-      isProcessingAtlasQueue = false;
-    }
-  };
-
-  const scheduleAtlasQueueProcessing = (): void => {
-    if (atlasQueueTimer) {
-      return;
-    }
-    atlasQueueTimer = setTimeout(() => {
-      atlasQueueTimer = null;
-      const { processedAny, hasRemaining } = processAtlasQueueChunk();
-      if (processedAny) {
-        scheduleRender();
-      }
-      if (hasRemaining) {
-        scheduleAtlasQueueProcessing();
-      }
-    }, 0);
-  };
-
-  const enqueueAtlasUpsertOperation = (
-    imageId: string,
-    bitmap: ImageBitmap,
-    deferred: Deferred<boolean>
-  ): void => {
-    atlasOperationQueue.push({
-      type: 'upsert',
-      imageId,
-      bitmap,
-      deferred,
-    });
-    scheduleAtlasQueueProcessing();
-  };
-
-  const flushAtlasQueueIfNeeded = (): void => {
-    if (atlasOperationQueue.length === 0) {
-      return;
-    }
-    const { processedAny, hasRemaining } = processAtlasQueueChunk();
-    if (processedAny) {
-      scheduleRender();
-    }
-    if (hasRemaining) {
-      scheduleAtlasQueueProcessing();
-    }
-  };
-
-  const cancelPendingAtlasOperations = (imageId: string): void => {
-    for (let idx = atlasOperationQueue.length - 1; idx >= 0; idx -= 1) {
-      const entry = atlasOperationQueue[idx]!;
-      if (entry.type === 'upsert' && entry.imageId === imageId) {
-        atlasOperationQueue.splice(idx, 1);
-        entry.deferred.reject(
-          new Error(
-            `[SpriteLayer][Atlas] Image "${imageId}" was unregistered before placement.`
-          )
-        );
-      }
-    }
-  };
-
-  const rejectAllPendingAtlasOperations = (reason: Error): void => {
-    while (atlasOperationQueue.length > 0) {
-      const entry = atlasOperationQueue.shift()!;
-      entry.deferred.reject(reason);
-    }
   };
 
   /**
@@ -2572,7 +2452,7 @@ export const createSpriteLayer = <T = any>(
     if (!gl) {
       return;
     }
-    flushAtlasQueueIfNeeded();
+    atlasQueue.flushPending();
     if (!atlasNeedsUpload) {
       return;
     }
@@ -2718,6 +2598,11 @@ export const createSpriteLayer = <T = any>(
     }
     isRenderScheduled = true;
     map.triggerRepaint();
+  };
+
+  handleAtlasQueueChunkProcessed = () => {
+    syncAtlasPlacementsFromManager();
+    scheduleRender();
   };
 
   /**
@@ -3785,7 +3670,7 @@ export const createSpriteLayer = <T = any>(
     imageHandleBuffersController.markDirty(images);
 
     const deferred = createDeferred<boolean>();
-    enqueueAtlasUpsertOperation(imageId, bitmap, deferred);
+    atlasQueue.enqueueUpsert({ imageId, bitmap, deferred });
 
     try {
       return await deferred.promise;
@@ -4051,7 +3936,7 @@ export const createSpriteLayer = <T = any>(
     imageHandleBuffersController.markDirty(images);
 
     const deferred = createDeferred<boolean>();
-    enqueueAtlasUpsertOperation(textGlyphId, bitmap, deferred);
+    atlasQueue.enqueueUpsert({ imageId: textGlyphId, bitmap, deferred });
 
     try {
       return await deferred.promise;
@@ -4078,7 +3963,12 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
-    cancelPendingAtlasOperations(imageId);
+    atlasQueue.cancelForImage(
+      imageId,
+      new Error(
+        `[SpriteLayer][Atlas] Image "${imageId}" was unregistered before placement.`
+      )
+    );
 
     // Remove image bounds
     sprites.forEach((sprite) => {
@@ -4115,7 +4005,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {void}
    */
   const unregisterAllImages = (): void => {
-    rejectAllPendingAtlasOperations(
+    atlasQueue.rejectAll(
       new Error('[SpriteLayer][Atlas] Pending atlas operations were cleared.')
     );
     const glContext = gl;

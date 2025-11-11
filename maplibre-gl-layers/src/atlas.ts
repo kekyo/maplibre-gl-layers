@@ -5,6 +5,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type { Canvas2DContext, Canvas2DSource } from './internalTypes';
+import type { Deferred } from 'async-primitives';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -41,6 +42,29 @@ export interface AtlasManager {
   readonly getPages: () => readonly AtlasPageState[];
   readonly markPageClean: (pageIndex: number) => void;
   readonly clear: () => void;
+}
+
+export interface AtlasQueueUpsertEntry {
+  readonly imageId: string;
+  readonly bitmap: ImageBitmap;
+  readonly deferred: Deferred<boolean>;
+}
+
+export interface AtlasQueueOptions {
+  readonly maxOperationsPerPass: number;
+  readonly timeBudgetMs: number;
+}
+
+export interface AtlasQueueCallbacks {
+  readonly onChunkProcessed: () => void;
+}
+
+export interface AtlasOperationQueue {
+  readonly enqueueUpsert: (entry: AtlasQueueUpsertEntry) => void;
+  readonly flushPending: () => void;
+  readonly cancelForImage: (imageId: string, reason?: Error) => void;
+  readonly rejectAll: (reason: Error) => void;
+  readonly pendingCount: number;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -415,6 +439,120 @@ export const createAtlasManager = (
     clear: (): void => {
       images.clear();
       pages = [];
+    },
+  };
+};
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+export const createAtlasOperationQueue = (
+  atlasManager: AtlasManager,
+  options: AtlasQueueOptions,
+  callbacks: AtlasQueueCallbacks
+): AtlasOperationQueue => {
+  const queue: AtlasQueueUpsertEntry[] = [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let isProcessing = false;
+
+  const normalizedMaxOps = Math.max(1, options.maxOperationsPerPass | 0);
+
+  const now = (): number =>
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+  const processChunk = (
+    timeBudgetMs: number = options.timeBudgetMs
+  ): { processedAny: boolean; hasRemaining: boolean } => {
+    if (isProcessing || queue.length === 0) {
+      return {
+        processedAny: false,
+        hasRemaining: queue.length > 0,
+      };
+    }
+    isProcessing = true;
+    let processedAny = false;
+    const hasBudget = Number.isFinite(timeBudgetMs) && timeBudgetMs > 0;
+    const budgetStart = hasBudget ? now() : 0;
+    try {
+      let processedCount = 0;
+      while (queue.length > 0) {
+        const entry = queue.shift()!;
+        try {
+          atlasManager.upsertImage(entry.imageId, entry.bitmap);
+          entry.deferred.resolve(true);
+          processedAny = true;
+        } catch (error) {
+          entry.deferred.reject(error);
+        }
+        processedCount += 1;
+        if (processedCount >= normalizedMaxOps) {
+          break;
+        }
+        if (hasBudget && now() - budgetStart >= timeBudgetMs) {
+          break;
+        }
+      }
+      if (processedAny) {
+        callbacks.onChunkProcessed();
+      }
+      return {
+        processedAny,
+        hasRemaining: queue.length > 0,
+      };
+    } finally {
+      isProcessing = false;
+    }
+  };
+
+  const schedule = (): void => {
+    if (timer || queue.length === 0) {
+      return;
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      const { hasRemaining } = processChunk();
+      if (hasRemaining) {
+        schedule();
+      }
+    }, 0);
+  };
+
+  const cancelEntriesForImage = (imageId: string, reason: Error): void => {
+    for (let idx = queue.length - 1; idx >= 0; idx -= 1) {
+      const entry = queue[idx];
+      if (entry && entry.imageId === imageId) {
+        queue.splice(idx, 1);
+        entry.deferred.reject(reason);
+      }
+    }
+  };
+
+  return {
+    enqueueUpsert: (entry: AtlasQueueUpsertEntry): void => {
+      queue.push(entry);
+      schedule();
+    },
+    flushPending: (): void => {
+      const { hasRemaining } = processChunk();
+      if (hasRemaining) {
+        schedule();
+      }
+    },
+    cancelForImage: (imageId: string, reason?: Error): void => {
+      const rejectionReason =
+        reason ??
+        new Error(
+          `[SpriteLayer][Atlas] Image "${imageId}" was cancelled before placement.`
+        );
+      cancelEntriesForImage(imageId, rejectionReason);
+    },
+    rejectAll: (reason: Error): void => {
+      while (queue.length > 0) {
+        const entry = queue.shift();
+        entry?.deferred.reject(reason);
+      }
+    },
+    get pendingCount(): number {
+      return queue.length;
     },
   };
 };
