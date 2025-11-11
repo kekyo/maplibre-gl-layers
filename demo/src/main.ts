@@ -218,18 +218,20 @@ type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
 /** Formats the movement speed multiplier for HUD display. */
 const formatMovementSpeedScale = (scale: number): string => {
   if (scale <= 0) {
-    return '0×';
+    return '0x';
   }
   if (scale >= 1) {
-    return `${scale.toFixed(1)}×`;
+    return `${scale.toFixed(1)}x`;
   }
-  return `${scale.toFixed(2)}×`;
+  return `${scale.toFixed(2)}x`;
 };
 
 const formatWasmVariantLabel = (
   variant: SpriteLayerCalculationVariant
 ): string => {
   switch (variant) {
+    case 'simd-mt':
+      return 'SIMD + Threads';
     case 'simd':
       return 'SIMD';
     case 'nosimd':
@@ -555,6 +557,19 @@ const createHud = () => {
             data-testid="status-wasm-mode"
           >${formatWasmVariantLabel(requestedCalculationVariant)}</span>
         </div>
+        <button
+          type="button"
+          class="toggle-button${
+            requestedCalculationVariant === 'simd-mt' ? ' active' : ''
+          }"
+          data-control="wasm-mode"
+          data-option="simd-mt"
+          data-label="Wasm SIMD + Threads"
+          aria-pressed="${requestedCalculationVariant === 'simd-mt'}"
+          data-testid="toggle-wasm-simd-mt"
+        >
+          Wasm SIMD + Threads
+        </button>
         <button
           type="button"
           class="toggle-button${

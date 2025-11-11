@@ -935,7 +935,11 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
 /**
  * Calculation variant. It is internal calculation methods.
  */
-export type SpriteLayerCalculationVariant = 'simd' | 'nosimd' | 'disabled';
+export type SpriteLayerCalculationVariant =
+  | 'simd-mt'
+  | 'simd'
+  | 'nosimd'
+  | 'disabled';
 
 /**
  * SpriteLayer host options.
@@ -943,6 +947,8 @@ export type SpriteLayerCalculationVariant = 'simd' | 'nosimd' | 'disabled';
 export interface SpriteLayerHostOptions {
   /**
    * Calculation variant. Default is `simd`.
+   * Use `simd-mt` to enable pthread/SIMD wasm when `SharedArrayBuffer` is available
+   * (i.e. cross-origin isolated contexts) and fall back to the other variants otherwise.
    */
   readonly variant?: SpriteLayerCalculationVariant;
   /**
