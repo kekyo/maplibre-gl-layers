@@ -42,9 +42,7 @@ uniform vec2 u_billboardHalfSize;
 uniform vec2 u_billboardAnchor;
 uniform vec2 u_billboardSinCos;
 uniform float u_surfaceClipEnabled;
-uniform vec4 u_surfaceClipCenter;
-uniform vec4 u_surfaceClipBasisEast;
-uniform vec4 u_surfaceClipBasisNorth;
+uniform mat4 u_surfaceClipMatrix;
 uniform float u_surfaceDepthBias;
 varying vec2 v_uv;
 vec2 computeBillboardCorner(vec2 baseCorner) {
@@ -65,9 +63,7 @@ vec4 computeSurfaceCorner(vec2 corner) {
   if (u_surfaceClipEnabled < 0.5) {
     return vec4(0.0, 0.0, 0.0, 1.0);
   }
-  vec4 clip = u_surfaceClipCenter
-    + (corner.x * u_surfaceClipBasisEast)
-    + (corner.y * u_surfaceClipBasisNorth);
+  vec4 clip = u_surfaceClipMatrix * vec4(1.0, corner.x, corner.y, 0.0);
   clip.z += u_surfaceDepthBias * clip.w;
   return clip;
 }

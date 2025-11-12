@@ -813,24 +813,32 @@ For example, if loading a SIMD calculation module fails, a different type is ret
 To release WASM when the SPA page terminates, call `releaseRuntimeHost()`.
 After release, it will operate using JavaScript computation until `initializeRuntimeHost()` is called again.
 
-#### Cross-origin isolation requirements (WASM multi-threading)
+#### WASM multi-threading limitation
 
 By specifying `simd-mt` for the `variant`, you can load a multithreaded module that enables parallel processing of WASM operations using multiple threads.
 However, `simd-mt` does not function simply by being specified.
 
-The multithreading variant utilizes `SharedArrayBuffer`, so it will not be enabled unless cross-origin isolation is satisfied on the browser side.
-The web server must include the following response headers:
+> Note: WASM multi-threading technology does not yet appear to be sufficiently practical.
+> While the code itself executed without issues, but significant constraints exist in the runtime environment.
+> The situation may improve in the future, such as through browser specification revisions, but please carefully consider its use at the production level.
 
-- Top-level HTML opened directly by the user: `Cross-Origin-Opener-Policy: same-origin`
-- That HTML and all Worker entries loaded from it (`dist/wasm/offloads-simd-mt.js`, `*.wasm` files, custom Worker bundles, etc.): `Cross-Origin-Embedder-Policy: require-corp` (or `credentialless` if you choose that)
-- Assets from other origins are blocked by COEP, so explicitly allow them with CORS or an appropriate `Cross-Origin-Resource-Policy` response
-
-If these conditions are not met, the `simd-mt` module will fail to load and fall back to `simd`.
+1. The multi-threading variant utilizes [`SharedArrayBuffer`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer), so it will not be enabled unless cross-origin isolation is satisfied on the browser side.
+   The web server must include the following response headers:
+   - Top-level HTML opened directly by the user: `Cross-Origin-Opener-Policy: same-origin`
+   - That HTML and all Worker entries loaded from it (`dist/wasm/offloads-simd-mt.js`, `*.wasm` files, custom Worker bundles, etc.): `Cross-Origin-Embedder-Policy: require-corp` (or `credentialless` if you choose that)
+   - Assets from other origins are blocked by COEP, so explicitly allow them with CORS or an appropriate `Cross-Origin-Resource-Policy` response
+   If these conditions are not met, the `simd-mt` module will fail to load and fall back to `simd`.
+2. The amount of memory used and the number of threads used must be statically determined during the WASM module build.
+   The WASM module included in the distribution package is set to 512MB/4 threads.
+   - The 512MB memory requirement is based on displaying 10,000 sprites with secondary images on the demo page.
+   - If memory usage exceeds the limit, an "OOM error" occurs within the WASM module's worker, causing all functions to stop.
+     Therefore, if your usage conditions differ from this assumption, you must build and deploy your own WASM module.
 
 Note: The [demo page](https://kekyo.github.io/maplibre-gl-layers/) is deployed on github.io, but unfortunately, github.io does not meet these requirements, so you cannot select `simd-mt` on the demo page.
 If you want to try it out quickly, clone the repository and run the demo page locally with `npm install && npm run dev`.
+The maintainer has verified that it works on Firefox on Ubuntu 24.04/22.04 (Build 144.0.2).
 
-When using `simd-mt` with a development server like Vite, COOP and COEP headers are also required.
+When using `simd-mt` with a development server like Vite, `COOP` and `COEP` headers are also required.
 For example, specify them in `vite.config.ts` as follows:
 
 ```typescript
@@ -885,6 +893,16 @@ console.log(`Actual variant used: ${effectiveVariant}`);
 - Improves minor interfaces
 - Adds route-oriented layer
 - Bug fixes
+
+## Motivation
+
+This API was designed because MapLibre's standard `Facilities` imposed significant functional constraints when displaying large numbers of moving objects or landmarks, and we wanted a simpler, more direct API for dynamic manipulation.
+
+MapLibre's Facilities API implements immutability.
+While this is beneficial in itself, it hinders dynamic handling of large numbers of coordinate points (sprites) and significantly degrades performance.
+
+`maplibre-gl-layers` abandons immutability and unifies the API as imperative.
+Even if you wish to introduce immutability, you can easily achieve it by wrapping this API.
 
 ## License
 
