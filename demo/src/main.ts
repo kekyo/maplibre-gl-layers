@@ -257,8 +257,8 @@ const {
 
 const simdThreadUnavailableMessage = isSimdThreadVariantSupported
   ? undefined
-  : (simdThreadUnavailableReason ??
-    'Enable cross-origin isolation (COOP/COEP) to use the SIMD + Threads mode.');
+  : simdThreadUnavailableReason ??
+    'Enable cross-origin isolation (COOP/COEP) to use the SIMD + Threads mode.';
 
 if (!isSimdThreadVariantSupported && simdThreadUnavailableMessage) {
   console.info(
@@ -498,6 +498,7 @@ let isAutoRotationEnabled = true;
 let isMovementInterpolationEnabled = true;
 let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
 let spriteScalingMode: 'standard' | 'unlimited' = 'standard';
+let showDebugBounds = false;
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
@@ -544,6 +545,11 @@ let secondaryImageOrbitDegrees = 0;
 let updateLocationInterpolationButton: (() => void) | undefined;
 /** UI updater for the mouse-events monitoring toggle. */
 let updateMouseEventsButton: (() => void) | undefined;
+/** UI updater for the debug bounds toggle. */
+let updateDebugBoundsButton: (() => void) | undefined;
+
+const shouldEnableHitTesting = () =>
+  isMouseEventsMonitoringEnabled || showDebugBounds;
 
 /**
  * Template that builds the application HUD.
@@ -717,16 +723,28 @@ const createHud = () => {
         </div>
       </section>
       <section id="selected-sprite" data-testid="section-selected-sprite">
-        <button
-          type="button"
-          class="toggle-button${isMouseEventsMonitoringEnabled ? ' active' : ''}"
-          data-control="mouse-events-toggle"
-          data-label="Mouse Events"
-          data-active-text="ON"
-          data-inactive-text="OFF"
-          aria-pressed="${isMouseEventsMonitoringEnabled}"
-          data-testid="toggle-mouse-events"
-        >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
+        <div class="toggle-button-row">
+          <button
+            type="button"
+            class="toggle-button${isMouseEventsMonitoringEnabled ? ' active' : ''}"
+            data-control="mouse-events-toggle"
+            data-label="Mouse Events"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${isMouseEventsMonitoringEnabled}"
+            data-testid="toggle-mouse-events"
+          >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
+          <button
+            type="button"
+            class="toggle-button${showDebugBounds ? ' active' : ''}"
+            data-control="debug-bounds-toggle"
+            data-label="Debug Bounds"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${showDebugBounds}"
+            data-testid="toggle-debug-bounds"
+          >Debug Bounds: ${showDebugBounds ? 'ON' : 'OFF'}</button>
+        </div>
         <p
           class="status-placeholder"
           data-selected-placeholder
@@ -1598,7 +1616,7 @@ const main = async () => {
     }
     isMouseEventsMonitoringEnabled = enabled;
     if (spriteLayer) {
-      spriteLayer.setHitTestEnabled(enabled);
+      spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
     }
     if (enabled) {
       attachSpriteMouseEvents();
@@ -1730,6 +1748,7 @@ const main = async () => {
           generateMipmaps: true,
           maxAnisotropy: 4,
         },
+        showDebugBounds,
       });
 
     /**
@@ -2865,6 +2884,21 @@ const main = async () => {
         });
       }
 
+      const debugBoundsButton = queryFirst<HTMLButtonElement>(
+        '[data-control="debug-bounds-toggle"]'
+      );
+      if (debugBoundsButton) {
+        updateDebugBoundsButton = () => {
+          setToggleButtonState(debugBoundsButton, showDebugBounds, 'binary');
+        };
+        updateDebugBoundsButton();
+        debugBoundsButton.addEventListener('click', () => {
+          showDebugBounds = !showDebugBounds;
+          updateDebugBoundsButton?.();
+          void rebuildSpriteLayer();
+        });
+      }
+
       const wasmModeButtons = Array.from(
         queryAll<HTMLButtonElement>('[data-control="wasm-mode"]')
       );
@@ -3611,7 +3645,7 @@ const main = async () => {
           });
         }
         map.addLayer(spriteLayer);
-        spriteLayer.setHitTestEnabled(isMouseEventsMonitoringEnabled);
+        spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
         if (isMouseEventsMonitoringEnabled) {
           attachSpriteMouseEvents();
         }

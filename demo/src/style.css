@@ -187,3 +187,13 @@ a {
   font-size: 12px;
   color: rgba(203, 213, 255, 0.75);
 }
+#selected-sprite .toggle-button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+#selected-sprite .toggle-button-row .toggle-button {
+  flex: 1 1 0;
+}
