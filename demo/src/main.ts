@@ -257,8 +257,8 @@ const {
 
 const simdThreadUnavailableMessage = isSimdThreadVariantSupported
   ? undefined
-  : simdThreadUnavailableReason ??
-    'Enable cross-origin isolation (COOP/COEP) to use the SIMD + Threads mode.';
+  : (simdThreadUnavailableReason ??
+    'Enable cross-origin isolation (COOP/COEP) to use the SIMD + Threads mode.');
 
 if (!isSimdThreadVariantSupported && simdThreadUnavailableMessage) {
   console.info(
@@ -489,7 +489,11 @@ type BasemapId = 'osm' | 'carto';
 /** Currently active animation mode, toggled from the control panel. */
 let currentAnimationMode: AnimationMode = 'random';
 /** Currently selected base map. */
-let currentBasemapId: BasemapId = 'osm';
+const prefersDarkScheme =
+  typeof window !== 'undefined'
+    ? window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    : false;
+let currentBasemapId: BasemapId = prefersDarkScheme ? 'carto' : 'osm';
 /** Sprite rendering mode, toggled between billboard and surface. */
 let currentSpriteMode: SpriteMode = 'surface';
 /** Whether the sprite auto-rotates to face the direction of travel. */
@@ -1395,6 +1399,13 @@ const main = async () => {
           source: 'carto',
           layout: {
             visibility: currentBasemapId === 'carto' ? 'visible' : 'none',
+          },
+          paint: {
+            'raster-brightness-min': 0.2,
+            'raster-brightness-max': 1,
+            'raster-contrast': 0.25,
+            'raster-saturation': -0.3,
+            'raster-fade-duration': 500,
           },
         },
       ],
