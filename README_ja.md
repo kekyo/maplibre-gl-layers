@@ -31,7 +31,7 @@
 import { Map } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
+  initializeRuntimeHost,
 } from 'maplibre-gl-layers';
 
 // MapLibreのインスタンスを生成します
@@ -47,8 +47,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // MapLibreの準備が出来たら
 map.on('load', async () => {
-  // WASMを利用する場合は初期化します（呼ばない場合はJS計算のみ）
-  await initializeSpriteLayerHost();
+  // SpriteLayerを初期化してMapLibreに追加します
+  await initializeRuntimeHost();
   map.addLayer(spriteLayer);
 
   // 指定した画像ファイルを表示で使用する為に、SpriteLayerに登録します
@@ -112,7 +112,7 @@ npm install maplibre-gl-layers
 import { Map } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
+  initializeRuntimeHost,
 } from 'maplibre-gl-layers';
 
 // MapLibreのインスタンスを生成します
@@ -129,8 +129,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // MapLibreの準備が出来たら
 map.on('load', async () => {
-  // 必要に応じてWASMを初期化（呼ばない場合はJS計算のみ）
-  await initializeSpriteLayerHost();
+  // SpriteLayerを初期化
+  await initializeRuntimeHost();
 
   // SpriteLayerをMapLibre地図に追加します
   map.addLayer(spriteLayer);
@@ -141,21 +141,6 @@ map.on('load', async () => {
 
 初期化作業はこれだけです！
 この後、描画させたい画像やテキストを準備して、スプライトの表示を行います。
-
-### WASMの有効化と解放
-
-SpriteLayer は既定では JavaScript 実装で動作します。`initializeSpriteLayerHost()` を一度呼び出すことで WASM ホストのロードを試行でき、引数にはバリアント（`'simd' | 'nosimd' | 'disabled'`）または `{ variant?, wasmBaseUrl? }` 形式のオプションを指定できます。呼び出さない場合や初期化に失敗した場合は、自動的に JS 計算にフォールバックします。
-
-```typescript
-await initializeSpriteLayerHost({
-  variant: 'simd',
-  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
-});
-```
-
-`wasmBaseUrl` を指定すると、npm パッケージに含まれる `dist/wasm` ディレクトリを任意の場所（CDN など）へコピーして運用できます。省略した場合は、配布された `dist` ディレクトリ直下にある `.wasm` をそのまま読み込みますので、Vite/Rollup/webpack 等で特別な設定は不要です。
-
-アプリケーション全体の終了などで WASM を解放したい場合は、`releaseSpriteLayerHost()` を呼び出してください。解放後は再度 `initializeSpriteLayerHost()` を呼び出すまで JS モードで動作します。
 
 ---
 
@@ -332,6 +317,8 @@ spriteLayer.addSprite('vehicle-anchor', {
 
 以下の例は、上向きの矢印画像の先端にアンカーを設定し画像を180度回転させて、下向きの矢印かつ矢印先端がアンカーとなるようにする例です:
 
+![Anchor-rotate](./images/anchor-rotate.png)
+
 ```typescript
 // 矢印の先端を地図上の現在地に固定したまま下向きに回転させる
 spriteLayer.addSprite('vehicle-anchor', {
@@ -452,7 +439,11 @@ spriteLayer.updateSprite(SPRITE_ID, {
 古い座標と新しい座標をどのようにして補間計算に使用するかは、補間の方法によって異なります:
 
 - フィードバック: 古い座標から新しい座標に向かって、指定された補間時間をかけて移動する。
+
+  ![Feedback](./images/feedback.png)
 - フィードフォワード: 古い座標から新しい座標に向かって、指定された補間時間をかけて移動したと仮定し、そのベクトルを補間時間だけ延長した座標を移動予測座標とし、新しい座標から移動予測座標に向かって、指定された補間時間をかけて移動する。
+
+  ![Feedforward](./images/feedforward.png)
 
 フィードバックでは、新しい座標を設定しても、アニメーションが終了するまではその座標に到達しないため、常に表示が遅れることになります。一方、フィードフォワードを使用すれば、移動予測座標付近に到達することが予想されるので、供給された座標と表示座標がかなり一致することが期待できます。
 
@@ -738,6 +729,8 @@ console.log(`透明度を調整したスプライト数: ${dimmed}`);
 
 `updateForEach` の第2引数で受け取るアップデータは再利用されます。コールバックの外に保持せず、その場で必要な変更を記述してください。現在の画像構成を調べたい場合は、`updater.getImageIndexMap()` でサブレイヤーとオーダーの組み合わせを取得できます。
 
+---
+
 ## 初期化オプション
 
 `createSpriteLayer(options?: SpriteLayerOptions)` では、スプライトレイヤーの識別子とスケーリング挙動を調整するためのオプションを指定できます。
@@ -780,6 +773,9 @@ const spriteLayer = createSpriteLayer({
 - `textureFiltering.generateMipmaps` - ミップマップ必須でないフィルターを選んだ場合でもミップマップを生成します。WebGL2 もしくは 2 のベキ乗サイズの画像で大きく縮小した際の画質を改善できます。WebGL1 かつ非 2 のベキ乗画像でミップマップが生成できない場合は、自動的に `linear` フィルターへフォールバックします。
 - `textureFiltering.maxAnisotropy` - `EXT_texture_filter_anisotropic` 拡張が利用できる場合に異方性フィルタリング係数を指定します (1 以上)。地表に沿ったスプライトを浅い角度から見た際のシャープさを維持できます。指定値は GPU の上限でクランプされ、ミップマップが存在する場合のみ適用されます。
 - `showDebugBounds` - `true` にするとスプライトのヒットテスト領域を赤枠で表示します。
+
+  ![debug-bounds](./images/debug-bounds.png)
+  
   ポインタイベントハンドラのデバッグ用途を想定しており、本番環境ではパフォーマンスのため `false` のままにすることを推奨します。
 
 これらの値（スケーリング／テクスチャフィルタリング）はレイヤー生成時に一度解決されます。動的に変更したい場合はレイヤーを再生成してください。
@@ -803,11 +799,124 @@ const spriteLayer = createSpriteLayer({
 });
 ```
 
-[デモページ](https://kekyo.github.io/maplibre-gl-layers/) では、 `STANDARD_SPRITE_SCALING_OPTIONS` を使用しているので、ズームイン・ズームアウトで何が起きるのかを確かめてみると良いでしょう。
+[デモページ](https://kekyo.github.io/maplibre-gl-layers/) では、`Standard`と`Unlimited`を切り替えるボタンがあります。ズームイン・ズームアウトで何が起きるのかを確かめてみると良いでしょう。
 
 注意: デフォルトのスケーリングオプションが「無制限」であるのは、制限を導入すると、正確なサイズ描画が失われるからです。特に画像やテキストの配置を試行錯誤する場合は、スケーリングオプションを無効化することを強くおすすめします。
 
 ---
+
+## WASMによる座標計算のオフロード
+
+SpriteLayer は既定では JavaScript 実装で座標計算を実行します。
+WASMランタイムモジュールの初期化を行うと、座標計算をWASMモジュールにオフロードします。
+
+`initializeRuntimeHost()` を一度呼び出すことで WASM ホストのロードを試行でき、引数には `{ variant?, wasmBaseUrl? }` 形式のオプションを指定できます。
+呼び出さない場合や初期化に失敗した場合は、自動的に JavaScript 計算にフォールバックします。
+
+```typescript
+// 初期化を実行して、選択された計算種別を得る
+const selectedVariant = await initializeRuntimeHost({
+  variant: 'simd',
+  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
+});
+```
+
+`variant`には、WASMモジュールの種別を指定できます。
+
+- `simd`はSIMD演算を使用します。
+- `nosimd`はSIMD演算を使用しません。
+- `simd-mt`はマルチスレッドかつSIMD演算を使用します（制約があります。後述）
+
+デフォルトは`simd`です。現在のブラウザはほぼSIMD演算をサポートしているので、デフォルトのままで問題ないでしょう。
+
+`wasmBaseUrl` を指定すると、npm パッケージに含まれる `dist/wasm` ディレクトリを任意の場所（CDN など）へコピーして運用できます。
+省略した場合は、配布された `dist` ディレクトリ直下にある `*.wasm` をそのまま読み込むので、Vite/Rollup/webpack 等で特別な設定は不要です。
+但し、サーバーは `Content-Type: application/wasm` ヘッダを付与する必要があります。
+これはブラウザの実装によりますが、正しいMIME typeが適用されていないと、WASMモジュールとしてロードできない可能性があるため注意してください。
+
+戻り値には、選択された計算種別が返されます。例えばSIMD計算モジュールのロードに失敗した場合は、異なる種別が返されます。
+
+SPAページの終了などで WASM を解放したい場合は、`releaseRuntimeHost()` を呼び出してください。
+解放後は再度 `initializeRuntimeHost()` を呼び出すまで JavaScript 計算で動作します。
+
+#### WASMマルチスレッド時の制約
+
+`variant`に`simd-mt`を指定することで、WASM演算をマルチスレッドで並列処理させる、マルチスレッドモジュールをロード出来ます。
+但し、`simd-mt`は指定するだけでは機能しません。
+
+> 注意: WASMマルチスレッド技術は、まだ十分に実用的では無さそうです。コード自体は問題なく動作しましたが、実行環境に大きな制約が存在します。
+> 今後、ブラウザの仕様が改定されるなどして状況が改善されるかもしれませんが、プロダクションレベルでの使用は十分検討してください。
+
+1. マルチスレッドのバリアントは [`SharedArrayBuffer`](https://developer.mozilla.org/ja/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer) を利用するため、ブラウザ側でクロスオリジン隔離 (cross-origin isolated) が満たされていないと有効化されません。
+   ウェブサーバーが、以下のレスポンスヘッダを付与する必要があります:
+   - ユーザーが直接開くトップレベル HTML: `Cross-Origin-Opener-Policy: same-origin`
+   - その HTML と、そこから読み込まれるすべての Worker エントリ（`dist/wasm/offloads-simd-mt.js` や `*.wasm`、独自の Worker バンドルなど）: `Cross-Origin-Embedder-Policy: require-corp`（もしくは `credentialless` を選択する場合はそちら）
+   - 別オリジンのアセットは COEP でブロックされるため、CORS もしくは `Cross-Origin-Resource-Policy` の適切な応答で明示的に許可する
+   これらの条件が満たされない場合は、`simd-mt`モジュールのロードに失敗するため、`simd`にフォールバックします。
+2. 使用メモリ量と使用スレッド数は、WASMモジュールのビルド時に静的に決定する必要があり、配布パッケージに含まれるWASMモジュールは、512MB/4スレッドになっています。
+   - 使用メモリ量512MBは、デモページにおいて、10000スプライトをセカンダリイメージとともに表示する場合に必要とする量です。
+   - 使用メモリ量が超えると、WASMモジュールのワーカー内でOOMが発生し、全ての機能が停止してしまいます。
+     したがって、あなたの使用条件で想定が異なる場合は、独自のWASMモジュールをビルドして配置する必要があります。
+
+補足: [デモページ](https://kekyo.github.io/maplibre-gl-layers/) はgithub.ioにデプロイしていますが、github.ioはこの要件を満たしていないため、残念ながらデモページで`simd-mt`を選択することは出来ません。
+手っ取り早く試してみたい場合は、リポジトリをクローンして、`npm install && npm run dev` でデモページをローカルで実行すると良いでしょう。
+メンテナーは、Firefox on Ubuntu 24.04/22.04 (Build 144.0.2)で動作確認しました。
+
+Viteのような開発サーバーで`simd-mt`を使用する場合も、`COOP`, `COEP`ヘッダが必要です。例えば、vite.config.tsで以下のように指定します:
+
+```typescript
+// COOP, COEPヘッダ
+const COOP_COEP_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
+export default defineConfig({
+  // 開発サーバー(vite dev)で実行するとき、全ての要求にヘッダを付与
+  server: {
+    headers: COOP_COEP_HEADERS,
+  },
+  // プレビューで実行するとき、全ての要求にヘッダを付与
+  preview: {
+    headers: COOP_COEP_HEADERS,
+  },
+});
+```
+
+また、`detectMultiThreadedModuleAvailability()`を使用すれば、マルチスレッドモジュールの使用可否を動的に判断できます。全体的な初期化の流れを示します:
+
+```typescript
+import {
+  initializeRuntimeHost,
+  detectMultiThreadedModuleAvailability,
+} from 'maplibre-gl-layers';
+
+// マルチスレッドモジュールを使用できるかどうか
+const { available, reason } = detectMultiThreadedModuleAvailability();
+if (!available) {
+  console.warn(
+    `SIMD + Threads は利用できません: ${reason ?? '理由不明の制約です'}`
+  );
+}
+
+// マルチスレッドモジュールを使用するか通常のSIMDモジュールを使用するかを選択
+const desiredVariant = available ? 'simd-mt' : 'simd';
+const effectiveVariant = await initializeRuntimeHost({
+  variant: desiredVariant,
+});
+console.log(`実際に使用されたバリアント: ${effectiveVariant}`);
+```
+
+---
+
+## 動機
+
+移動体や地物を大量に表示させたい場合に、MapLibre標準の`Facilities`では機能的な制約が大きかったのと、もっと簡単かつ直接的に動的な操作出来るAPIが欲しかったため設計しました。
+
+MapLibreのFacilitiesは、いわゆるイミュータビリティ（不変）を実現するAPIです。
+それ自体は良いことなのですが、多量の座標点（スプライト）を動的に扱うには邪魔で、パフォーマンスが著しく低下します。
+
+`maplibre-gl-layers`ではイミュータビリティを捨てて、命令的なAPIで統一しています。イミュータビリティを導入したい場合でも、このAPIをラップして容易に実現できるでしょう。
 
 ## ライセンス
 

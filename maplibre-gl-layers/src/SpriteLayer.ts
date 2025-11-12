@@ -15,7 +15,6 @@
 
 import { type Map as MapLibreMap } from 'maplibre-gl';
 import type { CustomRenderMethodInput } from 'maplibre-gl';
-import { createMutex } from 'async-primitives';
 
 import {
   type SpriteInit,
@@ -49,7 +48,6 @@ import {
   type SpriteTextGlyphPaddingPixel,
   type SpriteTextGlyphBorderSide,
   type SpriteImageRegisterOptions,
-  type SpriteLayerCalculationVariant,
 } from './types';
 import type {
   ResolvedTextureFilteringOptions,
@@ -61,7 +59,6 @@ import type {
   Canvas2DSource,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
-  SurfaceShaderInputs,
   ProjectionHost,
   PreparedDrawSpriteImageParams,
   RenderCalculationHost,
@@ -111,34 +108,17 @@ import {
   type Rect as LooseQuadTreeRect,
 } from './looseQuadTree';
 import {
-  POSITION_COMPONENT_COUNT,
-  UV_COMPONENT_COUNT,
-  VERTEX_STRIDE,
-  UV_OFFSET,
-  QUAD_VERTEX_COUNT,
-  VERTEX_SHADER_SOURCE,
-  FRAGMENT_SHADER_SOURCE,
-  INITIAL_QUAD_VERTICES,
-  DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
-  DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE,
-  DEBUG_OUTLINE_VERTEX_COUNT,
-  DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
-  DEBUG_OUTLINE_VERTEX_STRIDE,
-  DEBUG_OUTLINE_VERTEX_SCRATCH,
-  DEBUG_OUTLINE_COLOR,
   DEBUG_OUTLINE_CORNER_ORDER,
-  createShaderProgram,
+  createSpriteDrawProgram,
+  createDebugOutlineRenderer,
+  type SpriteDrawProgram,
+  type DebugOutlineRenderer,
 } from './shader';
 import { createCalculationHost } from './calculationHost';
 import {
   createProjectionHost,
   createProjectionHostParamsFromMapLibre,
 } from './projectionHost';
-import {
-  initializeWasmHost,
-  releaseWasmHost,
-  type WasmVariant,
-} from './wasmHost';
 import { createWasmProjectionHost } from './wasmProjectionHost';
 import { createWasmCalculationHost } from './wasmCalculationHost';
 import {
@@ -156,58 +136,31 @@ import {
   MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO,
   MIN_TEXT_GLYPH_FONT_SIZE,
 } from './const';
-import { SL_DEBUG } from './config';
+import {
+  SL_DEBUG,
+  ATLAS_QUEUE_CHUNK_SIZE,
+  ATLAS_QUEUE_TIME_BUDGET_MS,
+  TEXT_GLYPH_QUEUE_CHUNK_SIZE,
+  TEXT_GLYPH_QUEUE_TIME_BUDGET_MS,
+} from './config';
 import {
   createImageHandleBufferController,
   createIdHandler,
   createSpriteOriginReference,
   createRenderTargetBucketBuffers,
 } from './utils';
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-const spriteLayerHostInitializationMutex = createMutex();
-let spriteLayerHostVariant: WasmVariant = 'disabled';
-
-const isSpriteLayerHostEnabled = () => spriteLayerHostVariant !== 'disabled';
-
-export interface SpriteLayerHostOptions {
-  readonly variant?: SpriteLayerCalculationVariant;
-  readonly wasmBaseUrl?: string;
-}
-
-export const initializeSpriteLayerHost = async (
-  variantOrOptions?: SpriteLayerCalculationVariant | SpriteLayerHostOptions
-): Promise<SpriteLayerCalculationVariant> => {
-  const hostOptions =
-    typeof variantOrOptions === 'string' || variantOrOptions === undefined
-      ? { variant: variantOrOptions }
-      : variantOrOptions;
-  const locker = await spriteLayerHostInitializationMutex.lock();
-  try {
-    const requestedVariant = hostOptions.variant ?? 'simd';
-    if (requestedVariant === 'disabled') {
-      releaseSpriteLayerHost();
-      return 'disabled';
-    }
-    const forceReload = variantOrOptions !== undefined;
-    spriteLayerHostVariant = await initializeWasmHost(requestedVariant, {
-      force: forceReload,
-      wasmBaseUrl: hostOptions.wasmBaseUrl,
-    });
-    return spriteLayerHostVariant;
-  } finally {
-    locker.release();
-  }
-};
-
-export const releaseSpriteLayerHost = (): void => {
-  if (spriteLayerHostVariant === 'disabled') {
-    return;
-  }
-  spriteLayerHostVariant = 'disabled';
-  releaseWasmHost();
-};
+import {
+  createAtlasManager,
+  type AtlasPageState,
+  createAtlasOperationQueue,
+} from './atlas';
+import {
+  createDeferred,
+  onAbort,
+  type Deferred,
+  type Releasable,
+} from 'async-primitives';
+import { isSpriteLayerHostEnabled } from './runtime';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -248,6 +201,9 @@ export const releaseSpriteLayerHost = (): void => {
 
 /** Default threshold in meters for auto-rotation to treat movement as significant. */
 const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
+
+/** Sentinel used when an image has not been placed on any atlas page. */
+const ATLAS_PAGE_INDEX_NONE = -1;
 
 /** Query radius (in CSS pixels) when sampling the hit-test QuadTree. */
 const HIT_TEST_QUERY_RADIUS_PIXELS = 32;
@@ -1187,63 +1143,222 @@ export const createSpriteLayer = <T = any>(
   let gl: WebGLRenderingContext | null = null;
   /** MapLibre map instance provided to the custom layer. */
   let map: MapLibreMap | null = null;
-  /** Compiled WebGL program. */
-  let program: WebGLProgram | null = null;
-  /** Vertex buffer used for quad geometry. */
-  let vertexBuffer: WebGLBuffer | null = null;
-  /** Attribute location for vertex positions. */
-  let attribPositionLocation = -1;
-  /** Attribute location for UV coordinates. */
-  let attribUvLocation = -1;
-  /** Uniform location for the texture sampler. */
-  let uniformTextureLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for sprite opacity. */
-  let uniformOpacityLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the screen-to-clip scale vector. */
-  let uniformScreenToClipScaleLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the screen-to-clip offset vector. */
-  let uniformScreenToClipOffsetLocation: WebGLUniformLocation | null = null;
-  /** Uniform location toggling shader-based billboard geometry. */
-  let uniformBillboardModeLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the billboard center in screen space. */
-  let uniformBillboardCenterLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the billboard half-size in pixels. */
-  let uniformBillboardHalfSizeLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the billboard anchor vector. */
-  let uniformBillboardAnchorLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for billboard rotation sine/cosine. */
-  let uniformBillboardSinCosLocation: WebGLUniformLocation | null = null;
-  /** Uniform location toggling shader-based surface geometry. */
-  let uniformSurfaceModeLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for surface depth bias multiplier. */
-  let uniformSurfaceDepthBiasLocation: WebGLUniformLocation | null = null;
-  /** Uniform enabling clip-space surface reconstruction. */
-  let uniformSurfaceClipEnabledLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the surface clip-space center. */
-  let uniformSurfaceClipCenterLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the surface clip-space east basis vector. */
-  let uniformSurfaceClipBasisEastLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the surface clip-space north basis vector. */
-  let uniformSurfaceClipBasisNorthLocation: WebGLUniformLocation | null = null;
+  /** Sprite drawing helper encapsulating shader state. */
+  let spriteDrawProgram: SpriteDrawProgram<T> | null = null;
   /** Cached anisotropic filtering extension instance (when available). */
   let anisotropyExtension: EXT_texture_filter_anisotropic | null = null;
   /** Maximum anisotropy supported by the current context. */
   let maxSupportedAnisotropy = 1;
-  /** Debug outline shader program for rendering hit-test rectangles. */
-  let debugProgram: WebGLProgram | null = null;
-  /** Vertex buffer storing quad outline vertices during debug rendering. */
-  let debugVertexBuffer: WebGLBuffer | null = null;
-  /** Attribute location for debug outline vertex positions. */
-  let debugAttribPositionLocation = -1;
-  /** Uniform location for debug outline color. */
-  let debugUniformColorLocation: WebGLUniformLocation | null = null;
-  /** Debug uniform location for converting screen to clip space. */
-  let debugUniformScreenToClipScaleLocation: WebGLUniformLocation | null = null;
-  /** Debug uniform location for the screen-to-clip offset vector. */
-  let debugUniformScreenToClipOffsetLocation: WebGLUniformLocation | null =
-    null;
+  /** Helper used to render debug hit-test outlines. */
+  let debugOutlineRenderer: DebugOutlineRenderer | null = null;
 
   //////////////////////////////////////////////////////////////////////////
+
+  /** Sprite image atlas manager coordinating page packing. */
+  const atlasManager = createAtlasManager();
+  /** Active WebGL textures keyed by atlas page index. */
+  const atlasPageTextures = new Map<number, WebGLTexture>();
+  /** Flag indicating atlas pages require GPU upload. */
+  let atlasNeedsUpload = false;
+  /** Deferred handler invoked when the atlas queue processes entries. */
+  let handleAtlasQueueChunkProcessed: (() => void) | null = null;
+
+  const atlasQueue = createAtlasOperationQueue(
+    atlasManager,
+    {
+      maxOperationsPerPass: ATLAS_QUEUE_CHUNK_SIZE,
+      timeBudgetMs: ATLAS_QUEUE_TIME_BUDGET_MS,
+    },
+    {
+      onChunkProcessed: () => {
+        handleAtlasQueueChunkProcessed?.();
+      },
+    }
+  );
+
+  /** Pending text glyph identifiers awaiting generation. */
+  const pendingTextGlyphIds = new Set<string>();
+
+  interface TextGlyphQueueEntry {
+    readonly glyphId: string;
+    readonly text: string;
+    readonly dimensions: SpriteTextGlyphDimensions;
+    readonly options?: SpriteTextGlyphOptions;
+    readonly deferred: Deferred<boolean>;
+    readonly signal?: AbortSignal;
+    readonly abortHandle: Releasable | null;
+  }
+
+  const textGlyphQueue: TextGlyphQueueEntry[] = [];
+  let textGlyphQueueTimer: ReturnType<typeof setTimeout> | null = null;
+  let isProcessingTextGlyphQueue = false;
+
+  const now = (): number =>
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+  const scheduleTextGlyphQueueProcessing = (): void => {
+    if (textGlyphQueueTimer) {
+      return;
+    }
+    textGlyphQueueTimer = setTimeout(() => {
+      textGlyphQueueTimer = null;
+      void processTextGlyphQueueChunk();
+    }, 0);
+  };
+
+  const enqueueTextGlyphJob = (entry: TextGlyphQueueEntry): void => {
+    textGlyphQueue.push(entry);
+    scheduleTextGlyphQueueProcessing();
+  };
+
+  const cancelPendingTextGlyphJob = (imageId: string, reason?: Error): void => {
+    for (let idx = textGlyphQueue.length - 1; idx >= 0; idx -= 1) {
+      const entry = textGlyphQueue[idx];
+      if (entry && entry.glyphId === imageId) {
+        textGlyphQueue.splice(idx, 1);
+        pendingTextGlyphIds.delete(imageId);
+        entry.abortHandle?.release();
+        entry.deferred.reject(
+          reason ??
+            new Error(
+              `[SpriteLayer][GlyphQueue] Image "${imageId}" was cancelled before generation.`
+            )
+        );
+      }
+    }
+  };
+
+  const rejectAllPendingTextGlyphJobs = (reason: Error): void => {
+    while (textGlyphQueue.length > 0) {
+      const entry = textGlyphQueue.shift();
+      if (entry) {
+        pendingTextGlyphIds.delete(entry.glyphId);
+        entry.abortHandle?.release();
+        entry.deferred.reject(reason);
+      }
+    }
+  };
+
+  const executeTextGlyphJob = async (
+    entry: TextGlyphQueueEntry
+  ): Promise<void> => {
+    if (entry.signal?.aborted) {
+      entry.abortHandle?.release();
+      entry.deferred.reject(entry.signal.reason);
+      pendingTextGlyphIds.delete(entry.glyphId);
+      return;
+    }
+    if (images.has(entry.glyphId)) {
+      entry.abortHandle?.release();
+      entry.deferred.resolve(false);
+      pendingTextGlyphIds.delete(entry.glyphId);
+      return;
+    }
+    if (!pendingTextGlyphIds.has(entry.glyphId)) {
+      entry.abortHandle?.release();
+      entry.deferred.reject(
+        new Error(
+          `[SpriteLayer][GlyphQueue] Image "${entry.glyphId}" was removed before generation.`
+        )
+      );
+      return;
+    }
+    let registeredImage: RegisteredImage | null = null;
+    try {
+      const { bitmap, width, height } = await renderTextGlyphBitmap(
+        entry.text,
+        entry.dimensions,
+        entry.options
+      );
+      const handle = imageIdHandler.allocate(entry.glyphId);
+      registeredImage = {
+        id: entry.glyphId,
+        handle,
+        width,
+        height,
+        bitmap,
+        texture: undefined,
+        atlasPageIndex: ATLAS_PAGE_INDEX_NONE,
+        atlasU0: 0,
+        atlasV0: 0,
+        atlasU1: 1,
+        atlasV1: 1,
+      };
+      images.set(entry.glyphId, registeredImage);
+      imageIdHandler.store(handle, registeredImage);
+      updateSpriteImageHandles(entry.glyphId, handle);
+      imageHandleBuffersController.markDirty(images);
+
+      const atlasDeferred = createDeferred<boolean>();
+      atlasQueue.enqueueUpsert({
+        imageId: entry.glyphId,
+        bitmap,
+        deferred: atlasDeferred,
+      });
+      await atlasDeferred.promise;
+
+      entry.deferred.resolve(true);
+    } catch (error) {
+      if (registeredImage) {
+        images.delete(entry.glyphId);
+        imageIdHandler.release(entry.glyphId);
+        updateSpriteImageHandles(entry.glyphId, 0);
+        imageHandleBuffersController.markDirty(images);
+        atlasManager.removeImage(entry.glyphId);
+        registeredImage.bitmap.close?.();
+      }
+      entry.deferred.reject(error);
+    }
+    pendingTextGlyphIds.delete(entry.glyphId);
+    entry.abortHandle?.release();
+  };
+
+  const processTextGlyphQueueChunk = async (): Promise<void> => {
+    if (isProcessingTextGlyphQueue || textGlyphQueue.length === 0) {
+      return;
+    }
+    isProcessingTextGlyphQueue = true;
+    const budgetStart = now();
+    let processedCount = 0;
+    try {
+      while (textGlyphQueue.length > 0) {
+        const entry = textGlyphQueue.shift()!;
+        await executeTextGlyphJob(entry);
+        processedCount += 1;
+        if (processedCount >= TEXT_GLYPH_QUEUE_CHUNK_SIZE) {
+          break;
+        }
+        if (now() - budgetStart >= TEXT_GLYPH_QUEUE_TIME_BUDGET_MS) {
+          break;
+        }
+      }
+    } finally {
+      isProcessingTextGlyphQueue = false;
+    }
+    if (textGlyphQueue.length > 0) {
+      scheduleTextGlyphQueueProcessing();
+    }
+  };
+
+  /**
+   * Determines whether any atlas page requires uploading or missing texture recreation.
+   * @param pageStates Optional atlas page list to evaluate.
+   * @returns True when at least one page is dirty or lacks a matching GL texture.
+   */
+  const shouldUploadAtlasPages = (
+    pageStates?: readonly AtlasPageState[]
+  ): boolean => {
+    const pages = pageStates ?? atlasManager.getPages();
+    for (const page of pages) {
+      if (page.needsUpload) {
+        return true;
+      }
+      if (!atlasPageTextures.has(page.index)) {
+        return true;
+      }
+    }
+    return false;
+  };
 
   /**
    * Registry of loaded images, pairing ImageBitmaps with WebGL textures.
@@ -1284,34 +1399,51 @@ export const createSpriteLayer = <T = any>(
   const originReference = createSpriteOriginReference();
 
   /**
-   * Tracks queued image IDs to avoid duplicated uploads.
+   * Synchronizes atlas placements from the atlas manager into registered images.
+   * Marks atlas textures as dirty when placements change.
    */
-  const queuedTextureIds = new Set<string>();
-
-  /**
-   * Enqueues an image for GPU texture upload.
-   * @param {RegisteredImage} image - Registered image awaiting upload.
-   * @returns {void}
-   */
-  const queueTextureUpload = (image: RegisteredImage): void => {
-    queuedTextureIds.add(image.id);
-  };
-
-  /**
-   * Removes an image ID from the upload queue when no longer needed.
-   * @param {string} imageId - Identifier of the image to cancel.
-   * @returns {void}
-   */
-  const cancelQueuedTextureUpload = (imageId: string): void => {
-    queuedTextureIds.delete(imageId);
-  };
-
-  /**
-   * Clears all pending texture uploads.
-   * @returns {void}
-   */
-  const clearTextureQueue = (): void => {
-    queuedTextureIds.clear();
+  const syncAtlasPlacementsFromManager = (): void => {
+    let placementsChanged = false;
+    images.forEach((image, imageId) => {
+      const placement = atlasManager.getImagePlacement(imageId);
+      if (!placement) {
+        if (
+          image.atlasPageIndex !== ATLAS_PAGE_INDEX_NONE ||
+          image.atlasU0 !== 0 ||
+          image.atlasV0 !== 0 ||
+          image.atlasU1 !== 1 ||
+          image.atlasV1 !== 1
+        ) {
+          image.atlasPageIndex = ATLAS_PAGE_INDEX_NONE;
+          image.atlasU0 = 0;
+          image.atlasV0 = 0;
+          image.atlasU1 = 1;
+          image.atlasV1 = 1;
+          image.texture = undefined;
+          placementsChanged = true;
+        }
+        return;
+      }
+      if (
+        image.atlasPageIndex !== placement.pageIndex ||
+        image.atlasU0 !== placement.u0 ||
+        image.atlasV0 !== placement.v0 ||
+        image.atlasU1 !== placement.u1 ||
+        image.atlasV1 !== placement.v1
+      ) {
+        image.atlasPageIndex = placement.pageIndex;
+        image.atlasU0 = placement.u0;
+        image.atlasV0 = placement.v0;
+        image.atlasU1 = placement.u1;
+        image.atlasV1 = placement.v1;
+        image.texture = undefined;
+        placementsChanged = true;
+      }
+    });
+    if (placementsChanged) {
+      imageHandleBuffersController.markDirty(images);
+    }
+    atlasNeedsUpload = placementsChanged || shouldUploadAtlasPages();
   };
 
   /**
@@ -2428,47 +2560,56 @@ export const createSpriteLayer = <T = any>(
    * @returns {void}
    */
   const ensureTextures = (): void => {
-    // Defer texture creation until the WebGL context becomes available.
     if (!gl) {
       return;
     }
-    if (queuedTextureIds.size === 0) {
+    atlasQueue.flushPending();
+    if (!atlasNeedsUpload) {
       return;
     }
-    const glContext = gl;
 
-    // Iterates all queue item (image id)
-    queuedTextureIds.forEach((imageId) => {
-      // Extract image object
-      const image = images.get(imageId);
-      queuedTextureIds.delete(imageId);
-      if (!image || !image.bitmap) {
+    const glContext = gl;
+    const pages = atlasManager.getPages();
+    const activePageIndices = new Set<number>();
+    pages.forEach((page) => activePageIndices.add(page.index));
+
+    atlasPageTextures.forEach((texture, pageIndex) => {
+      if (!activePageIndices.has(pageIndex)) {
+        glContext.deleteTexture(texture);
+        atlasPageTextures.delete(pageIndex);
+      }
+    });
+
+    pages.forEach((page) => {
+      const requiresUpload =
+        page.needsUpload || !atlasPageTextures.has(page.index);
+      if (!requiresUpload) {
         return;
       }
-      if (image.texture) {
-        // Delete existing textures to avoid stale GPU data.
-        glContext.deleteTexture(image.texture);
-        image.texture = undefined;
-        imageHandleBuffersController.markDirty(images);
-      }
-      const texture = glContext.createTexture();
+
+      let texture = atlasPageTextures.get(page.index);
+      let isNewTexture = false;
       if (!texture) {
-        // Rendering cannot continue without GPU resources.
-        throw new Error('Failed to create texture.');
+        texture = glContext.createTexture();
+        if (!texture) {
+          throw new Error('Failed to create texture.');
+        }
+        atlasPageTextures.set(page.index, texture);
+        isNewTexture = true;
       }
       glContext.bindTexture(glContext.TEXTURE_2D, texture);
-      // Clamp wrapping to avoid sampling outside sprite edges.
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_WRAP_S,
-        glContext.CLAMP_TO_EDGE
-      );
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_WRAP_T,
-        glContext.CLAMP_TO_EDGE
-      );
-      // Enable premultiplied alpha for natural blending on the canvas.
+      if (isNewTexture) {
+        glContext.texParameteri(
+          glContext.TEXTURE_2D,
+          glContext.TEXTURE_WRAP_S,
+          glContext.CLAMP_TO_EDGE
+        );
+        glContext.texParameteri(
+          glContext.TEXTURE_2D,
+          glContext.TEXTURE_WRAP_T,
+          glContext.CLAMP_TO_EDGE
+        );
+      }
       glContext.pixelStorei(glContext.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
       glContext.texImage2D(
         glContext.TEXTURE_2D,
@@ -2476,10 +2617,9 @@ export const createSpriteLayer = <T = any>(
         glContext.RGBA,
         glContext.RGBA,
         glContext.UNSIGNED_BYTE,
-        image.bitmap
+        page.canvas as TexImageSource
       );
 
-      // Determine the desired filters up-front.
       let minFilterEnum = resolveGlMinFilter(
         glContext,
         resolvedTextureFiltering.minFilter
@@ -2495,12 +2635,11 @@ export const createSpriteLayer = <T = any>(
           typeof WebGL2RenderingContext !== 'undefined' &&
           glContext instanceof WebGL2RenderingContext;
         const canUseMipmaps =
-          isWebGL2 || (isPowerOfTwo(image.width) && isPowerOfTwo(image.height));
+          isWebGL2 || (isPowerOfTwo(page.width) && isPowerOfTwo(page.height));
         if (canUseMipmaps) {
           glContext.generateMipmap(glContext.TEXTURE_2D);
           usedMipmaps = true;
         } else {
-          // Fall back to linear filtering when mipmaps are unsupported.
           minFilterEnum = glContext.LINEAR;
         }
       }
@@ -2509,7 +2648,6 @@ export const createSpriteLayer = <T = any>(
         !usedMipmaps &&
         filterRequiresMipmaps(resolvedTextureFiltering.minFilter)
       ) {
-        // Without mipmaps the requested filter would produce incomplete textures.
         minFilterEnum = glContext.LINEAR;
       }
 
@@ -2543,9 +2681,18 @@ export const createSpriteLayer = <T = any>(
         }
       }
 
-      image.texture = texture;
-      imageHandleBuffersController.markDirty(images);
+      atlasManager.markPageClean(page.index);
     });
+
+    images.forEach((image) => {
+      if (image.atlasPageIndex !== ATLAS_PAGE_INDEX_NONE) {
+        image.texture = atlasPageTextures.get(image.atlasPageIndex);
+      } else {
+        image.texture = undefined;
+      }
+    });
+    imageHandleBuffersController.markDirty(images);
+    atlasNeedsUpload = shouldUploadAtlasPages(pages);
   };
 
   /**
@@ -2562,6 +2709,11 @@ export const createSpriteLayer = <T = any>(
     }
     isRenderScheduled = true;
     map.triggerRepaint();
+  };
+
+  handleAtlasQueueChunkProcessed = () => {
+    syncAtlasPlacementsFromManager();
+    scheduleRender();
   };
 
   /**
@@ -2775,230 +2927,10 @@ export const createSpriteLayer = <T = any>(
       }
     }
 
-    // Abort immediately if the vertex buffer cannot be created; rendering would be impossible.
-    const buffer = glContext.createBuffer();
-    if (!buffer) {
-      throw new Error('Failed to create vertex buffer.');
-    }
-
-    vertexBuffer = buffer;
-
-    // Initialize the quad vertex buffer reused across draws.
-    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
-    // Upload unit-quad vertices; they will be scaled later.
-    glContext.bufferData(
-      glContext.ARRAY_BUFFER,
-      INITIAL_QUAD_VERTICES,
-      glContext.DYNAMIC_DRAW
-    );
-
-    // Compile the shader program required for textured billboard rendering.
-    const shaderProgram = createShaderProgram(
-      glContext,
-      VERTEX_SHADER_SOURCE,
-      FRAGMENT_SHADER_SOURCE
-    );
-    program = shaderProgram;
-
-    // Bind the program so attribute configuration can follow.
-    glContext.useProgram(shaderProgram);
-
-    // Resolve attribute locations for positions and UVs; both are required.
-    attribPositionLocation = glContext.getAttribLocation(
-      shaderProgram,
-      'a_position'
-    );
-    attribUvLocation = glContext.getAttribLocation(shaderProgram, 'a_uv');
-    if (attribPositionLocation === -1 || attribUvLocation === -1) {
-      throw new Error('Failed to acquire attribute locations.');
-    }
-
-    // Fetch uniform locations for the texture sampler and opacity.
-    uniformTextureLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_texture'
-    );
-    uniformOpacityLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_opacity'
-    );
-    uniformScreenToClipScaleLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_screenToClipScale'
-    );
-    uniformScreenToClipOffsetLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_screenToClipOffset'
-    );
-    uniformBillboardModeLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardMode'
-    );
-    uniformBillboardCenterLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardCenter'
-    );
-    uniformBillboardHalfSizeLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardHalfSize'
-    );
-    uniformBillboardAnchorLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardAnchor'
-    );
-    uniformBillboardSinCosLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardSinCos'
-    );
-    uniformSurfaceModeLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceMode'
-    );
-    uniformSurfaceDepthBiasLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceDepthBias'
-    );
-    uniformSurfaceClipEnabledLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceClipEnabled'
-    );
-    uniformSurfaceClipCenterLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceClipCenter'
-    );
-    uniformSurfaceClipBasisEastLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceClipBasisEast'
-    );
-    uniformSurfaceClipBasisNorthLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceClipBasisNorth'
-    );
-    if (
-      !uniformTextureLocation ||
-      !uniformOpacityLocation ||
-      !uniformScreenToClipScaleLocation ||
-      !uniformScreenToClipOffsetLocation ||
-      !uniformBillboardModeLocation ||
-      !uniformBillboardCenterLocation ||
-      !uniformBillboardHalfSizeLocation ||
-      !uniformBillboardAnchorLocation ||
-      !uniformBillboardSinCosLocation ||
-      !uniformSurfaceModeLocation ||
-      !uniformSurfaceDepthBiasLocation ||
-      !uniformSurfaceClipEnabledLocation ||
-      !uniformSurfaceClipCenterLocation ||
-      !uniformSurfaceClipBasisEastLocation ||
-      !uniformSurfaceClipBasisNorthLocation
-    ) {
-      throw new Error('Failed to acquire uniform locations.');
-    }
-
-    // Enable vertex position attributes and configure their layer.
-    glContext.enableVertexAttribArray(attribPositionLocation);
-    glContext.vertexAttribPointer(
-      attribPositionLocation,
-      POSITION_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      0
-    );
-    // Enable UV attributes and configure their layer.
-    glContext.enableVertexAttribArray(attribUvLocation);
-    glContext.vertexAttribPointer(
-      attribUvLocation,
-      UV_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      UV_OFFSET
-    );
-
-    // Use texture unit 0 and set the default opacity to 1.0.
-    glContext.uniform1i(uniformTextureLocation, 0);
-    glContext.uniform1f(uniformOpacityLocation, 1.0);
-    // Default to an identity transform; render() will update these each frame.
-    glContext.uniform2f(uniformScreenToClipScaleLocation, 1.0, 1.0);
-    glContext.uniform2f(uniformScreenToClipOffsetLocation, 0.0, 0.0);
-    glContext.uniform1f(uniformSurfaceClipEnabledLocation, 0.0);
-    glContext.uniform4f(uniformSurfaceClipCenterLocation, 0.0, 0.0, 0.0, 1.0);
-    glContext.uniform4f(
-      uniformSurfaceClipBasisEastLocation,
-      0.0,
-      0.0,
-      0.0,
-      0.0
-    );
-    glContext.uniform4f(
-      uniformSurfaceClipBasisNorthLocation,
-      0.0,
-      0.0,
-      0.0,
-      0.0
-    );
-    glContext.uniform1f(uniformBillboardModeLocation, 0);
-    glContext.uniform2f(uniformBillboardCenterLocation, 0.0, 0.0);
-    glContext.uniform2f(uniformBillboardHalfSizeLocation, 0.0, 0.0);
-    glContext.uniform2f(uniformBillboardAnchorLocation, 0.0, 0.0);
-    glContext.uniform2f(uniformBillboardSinCosLocation, 0.0, 1.0);
-    glContext.uniform1f(uniformSurfaceModeLocation, 0);
-    glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
-
-    // Unbind the ARRAY_BUFFER once initialization is complete.
-    glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+    spriteDrawProgram = createSpriteDrawProgram<T>(glContext);
 
     if (showDebugBounds) {
-      const debugShaderProgram = createShaderProgram(
-        glContext,
-        DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
-        DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE
-      );
-      debugProgram = debugShaderProgram;
-      debugAttribPositionLocation = glContext.getAttribLocation(
-        debugShaderProgram,
-        'a_position'
-      );
-      if (debugAttribPositionLocation === -1) {
-        throw new Error('Failed to acquire debug attribute location.');
-      }
-      const colorLocation = glContext.getUniformLocation(
-        debugShaderProgram,
-        'u_color'
-      );
-      if (!colorLocation) {
-        throw new Error('Failed to acquire debug color uniform.');
-      }
-      debugUniformColorLocation = colorLocation;
-      debugUniformScreenToClipScaleLocation = glContext.getUniformLocation(
-        debugShaderProgram,
-        'u_screenToClipScale'
-      );
-      debugUniformScreenToClipOffsetLocation = glContext.getUniformLocation(
-        debugShaderProgram,
-        'u_screenToClipOffset'
-      );
-      if (
-        !debugUniformScreenToClipScaleLocation ||
-        !debugUniformScreenToClipOffsetLocation
-      ) {
-        throw new Error('Failed to acquire debug screen-to-clip uniforms.');
-      }
-      glContext.uniform2f(debugUniformScreenToClipScaleLocation, 1.0, 1.0);
-      glContext.uniform2f(debugUniformScreenToClipOffsetLocation, 0.0, 0.0);
-
-      const outlineBuffer = glContext.createBuffer();
-      if (!outlineBuffer) {
-        throw new Error('Failed to create debug vertex buffer.');
-      }
-      debugVertexBuffer = outlineBuffer;
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, outlineBuffer);
-      glContext.bufferData(
-        glContext.ARRAY_BUFFER,
-        DEBUG_OUTLINE_VERTEX_SCRATCH,
-        glContext.DYNAMIC_DRAW
-      );
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+      debugOutlineRenderer = createDebugOutlineRenderer(glContext);
     }
 
     // Request a render pass.
@@ -3022,25 +2954,21 @@ export const createSpriteLayer = <T = any>(
 
     const glContext = gl;
     if (glContext) {
-      images.forEach((image) => {
-        // Delete textures when present; otherwise there is nothing to reuse.
-        if (image.texture) {
-          glContext.deleteTexture(image.texture);
-        }
-        image.texture = undefined;
-        queueTextureUpload(image);
+      atlasPageTextures.forEach((texture) => {
+        glContext.deleteTexture(texture);
       });
-      if (vertexBuffer) {
-        glContext.deleteBuffer(vertexBuffer);
+      atlasPageTextures.clear();
+      images.forEach((image) => {
+        image.texture = undefined;
+      });
+      atlasNeedsUpload = true;
+      if (spriteDrawProgram) {
+        spriteDrawProgram.release();
+        spriteDrawProgram = null;
       }
-      if (debugVertexBuffer) {
-        glContext.deleteBuffer(debugVertexBuffer);
-      }
-      if (program) {
-        glContext.deleteProgram(program);
-      }
-      if (debugProgram) {
-        glContext.deleteProgram(debugProgram);
+      if (debugOutlineRenderer) {
+        debugOutlineRenderer.release();
+        debugOutlineRenderer = null;
       }
     }
 
@@ -3049,27 +2977,7 @@ export const createSpriteLayer = <T = any>(
 
     gl = null;
     map = null;
-    program = null;
-    vertexBuffer = null;
-    debugProgram = null;
-    debugVertexBuffer = null;
-    attribPositionLocation = -1;
-    attribUvLocation = -1;
-    debugAttribPositionLocation = -1;
-    uniformTextureLocation = null;
-    uniformOpacityLocation = null;
-    uniformScreenToClipScaleLocation = null;
-    uniformScreenToClipOffsetLocation = null;
-    uniformBillboardModeLocation = null;
-    uniformBillboardCenterLocation = null;
-    uniformBillboardHalfSizeLocation = null;
-    uniformBillboardAnchorLocation = null;
-    uniformBillboardSinCosLocation = null;
-    uniformSurfaceModeLocation = null;
-    uniformSurfaceDepthBiasLocation = null;
-    debugUniformColorLocation = null;
-    debugUniformScreenToClipScaleLocation = null;
-    debugUniformScreenToClipOffsetLocation = null;
+    debugOutlineRenderer = null;
     anisotropyExtension = null;
     maxSupportedAnisotropy = 1;
   };
@@ -3089,19 +2997,9 @@ export const createSpriteLayer = <T = any>(
     hitTestEntries.length = 0;
     hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
 
-    // Abort early if any critical resource (map, program, vertex buffer) is missing.
+    // Abort early if any critical resource (map or shader program) is missing.
     const mapInstance = map;
-    if (!mapInstance || !program || !vertexBuffer) {
-      return;
-    }
-
-    // Uniform locations must be resolved before drawing; skip the frame otherwise.
-    if (
-      !uniformOpacityLocation ||
-      !uniformTextureLocation ||
-      !uniformScreenToClipScaleLocation ||
-      !uniformScreenToClipOffsetLocation
-    ) {
+    if (!mapInstance || !spriteDrawProgram) {
       return;
     }
 
@@ -3205,200 +3103,20 @@ export const createSpriteLayer = <T = any>(
       glContext.disable(glContext.DEPTH_TEST);
       glContext.depthMask(false);
 
-      glContext.useProgram(program);
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
-      glContext.enableVertexAttribArray(attribPositionLocation);
-      glContext.vertexAttribPointer(
-        attribPositionLocation,
-        POSITION_COMPONENT_COUNT,
-        glContext.FLOAT,
-        false,
-        VERTEX_STRIDE,
-        0
-      );
-      glContext.enableVertexAttribArray(attribUvLocation);
-      glContext.vertexAttribPointer(
-        attribUvLocation,
-        UV_COMPONENT_COUNT,
-        glContext.FLOAT,
-        false,
-        VERTEX_STRIDE,
-        UV_OFFSET
-      );
-      glContext.uniform1i(uniformTextureLocation, 0);
-      const screenToClipScaleLocation = uniformScreenToClipScaleLocation!;
-      const screenToClipOffsetLocation = uniformScreenToClipOffsetLocation!;
-
-      let currentScaleX = Number.NaN;
-      let currentScaleY = Number.NaN;
-      let currentOffsetX = Number.NaN;
-      let currentOffsetY = Number.NaN;
-      const applyScreenToClipUniforms = (
-        scaleX: number,
-        scaleY: number,
-        offsetX: number,
-        offsetY: number
-      ): void => {
-        if (
-          scaleX !== currentScaleX ||
-          scaleY !== currentScaleY ||
-          offsetX !== currentOffsetX ||
-          offsetY !== currentOffsetY
-        ) {
-          glContext.uniform2f(screenToClipScaleLocation, scaleX, scaleY);
-          glContext.uniform2f(screenToClipOffsetLocation, offsetX, offsetY);
-          currentScaleX = scaleX;
-          currentScaleY = scaleY;
-          currentOffsetX = offsetX;
-          currentOffsetY = offsetY;
-        }
-      };
-
-      let currentSurfaceMode = Number.NaN;
-      const applySurfaceMode = (enabled: boolean): void => {
-        if (!uniformSurfaceModeLocation) {
-          return;
-        }
-        const value = enabled ? 1 : 0;
-        if (value !== currentSurfaceMode) {
-          glContext.uniform1f(uniformSurfaceModeLocation, value);
-          currentSurfaceMode = value;
-        }
-      };
-
-      let currentSurfaceClipEnabled = Number.NaN;
-      const applySurfaceClipUniforms = (
-        enabled: boolean,
-        inputs: SurfaceShaderInputs | null
-      ): void => {
-        if (
-          !uniformSurfaceClipEnabledLocation ||
-          !uniformSurfaceClipCenterLocation ||
-          !uniformSurfaceClipBasisEastLocation ||
-          !uniformSurfaceClipBasisNorthLocation
-        ) {
-          return;
-        }
-        const value = enabled ? 1 : 0;
-        if (value !== currentSurfaceClipEnabled) {
-          glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
-          currentSurfaceClipEnabled = value;
-        }
-        const clipCenter =
-          enabled && inputs ? inputs.clipCenter : { x: 0, y: 0, z: 0, w: 1 };
-        glContext.uniform4f(
-          uniformSurfaceClipCenterLocation,
-          clipCenter.x,
-          clipCenter.y,
-          clipCenter.z,
-          clipCenter.w
-        );
-        const clipBasisEast =
-          enabled && inputs ? inputs.clipBasisEast : { x: 0, y: 0, z: 0, w: 0 };
-        glContext.uniform4f(
-          uniformSurfaceClipBasisEastLocation,
-          clipBasisEast.x,
-          clipBasisEast.y,
-          clipBasisEast.z,
-          clipBasisEast.w
-        );
-        const clipBasisNorth =
-          enabled && inputs
-            ? inputs.clipBasisNorth
-            : { x: 0, y: 0, z: 0, w: 0 };
-        glContext.uniform4f(
-          uniformSurfaceClipBasisNorthLocation,
-          clipBasisNorth.x,
-          clipBasisNorth.y,
-          clipBasisNorth.z,
-          clipBasisNorth.w
-        );
-      };
+      const drawProgram = spriteDrawProgram;
+      drawProgram.beginFrame();
 
       let drawOrderCounter = 0;
-
-      const issueSpriteDraw = (
+      const drawPreparedSprite = (
         prepared: PreparedDrawSpriteImageParams<T>
       ): void => {
-        const { screenToClip } = prepared;
-        applyScreenToClipUniforms(
-          screenToClip.scaleX,
-          screenToClip.scaleY,
-          screenToClip.offsetX,
-          screenToClip.offsetY
-        );
-
-        applySurfaceMode(prepared.useShaderSurface);
-
-        const surfaceInputs = prepared.surfaceShaderInputs;
-        if (prepared.useShaderSurface && surfaceInputs) {
-          if (uniformSurfaceDepthBiasLocation) {
-            glContext.uniform1f(
-              uniformSurfaceDepthBiasLocation,
-              surfaceInputs.depthBiasNdc
-            );
-          }
-          applySurfaceClipUniforms(
-            prepared.surfaceClipEnabled,
-            prepared.surfaceClipEnabled ? surfaceInputs : null
-          );
-        } else {
-          if (uniformSurfaceDepthBiasLocation) {
-            glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
-          }
-          applySurfaceClipUniforms(false, null);
-        }
-
-        if (uniformBillboardModeLocation) {
-          glContext.uniform1f(
-            uniformBillboardModeLocation,
-            prepared.useShaderBillboard ? 1 : 0
-          );
-        }
-        if (prepared.useShaderBillboard && prepared.billboardUniforms) {
-          const uniforms = prepared.billboardUniforms;
-          if (uniformBillboardCenterLocation) {
-            glContext.uniform2f(
-              uniformBillboardCenterLocation,
-              uniforms.center.x,
-              uniforms.center.y
-            );
-          }
-          if (uniformBillboardHalfSizeLocation) {
-            glContext.uniform2f(
-              uniformBillboardHalfSizeLocation,
-              uniforms.halfWidth,
-              uniforms.halfHeight
-            );
-          }
-          if (uniformBillboardAnchorLocation) {
-            glContext.uniform2f(
-              uniformBillboardAnchorLocation,
-              uniforms.anchor.x,
-              uniforms.anchor.y
-            );
-          }
-          if (uniformBillboardSinCosLocation) {
-            glContext.uniform2f(
-              uniformBillboardSinCosLocation,
-              uniforms.sin,
-              uniforms.cos
-            );
-          }
-        }
-
-        const texture = prepared.imageResource.texture;
-        if (!texture) {
+        const didDraw = drawProgram.draw(prepared);
+        if (!didDraw) {
           return;
         }
 
-        glContext.bufferSubData(glContext.ARRAY_BUFFER, 0, prepared.vertexData);
-        glContext.uniform1f(uniformOpacityLocation, prepared.opacity);
-        glContext.activeTexture(glContext.TEXTURE0);
-        glContext.bindTexture(glContext.TEXTURE_2D, texture);
-        glContext.drawArrays(glContext.TRIANGLES, 0, QUAD_VERTEX_COUNT);
-
-        prepared.imageEntry.surfaceShaderInputs = surfaceInputs ?? undefined;
+        prepared.imageEntry.surfaceShaderInputs =
+          prepared.surfaceShaderInputs ?? undefined;
 
         if (prepared.hitTestCorners && prepared.hitTestCorners.length === 4) {
           registerHitTestEntry(
@@ -3456,6 +3174,8 @@ export const createSpriteLayer = <T = any>(
             screenToClipOffsetY,
           });
 
+          drawProgram.uploadVertexBatch(preparedItems);
+
           const preparedBySubLayer = new Map<
             number,
             PreparedDrawSpriteImageParams<T>[]
@@ -3484,7 +3204,7 @@ export const createSpriteLayer = <T = any>(
                 continue;
               }
               bucketImages.delete(prepared.imageEntry);
-              issueSpriteDraw(prepared);
+              drawPreparedSprite(prepared);
             }
           }
         } finally {
@@ -3492,74 +3212,17 @@ export const createSpriteLayer = <T = any>(
         }
       }
 
-      if (
-        showDebugBounds &&
-        debugProgram &&
-        debugVertexBuffer &&
-        debugUniformColorLocation &&
-        debugAttribPositionLocation !== -1
-      ) {
-        glContext.useProgram(debugProgram);
-        glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
-        glContext.enableVertexAttribArray(debugAttribPositionLocation);
-        glContext.vertexAttribPointer(
-          debugAttribPositionLocation,
-          DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
-          glContext.FLOAT,
-          false,
-          DEBUG_OUTLINE_VERTEX_STRIDE,
-          0
+      if (showDebugBounds && debugOutlineRenderer) {
+        debugOutlineRenderer.begin(
+          screenToClipScaleX,
+          screenToClipScaleY,
+          screenToClipOffsetX,
+          screenToClipOffsetY
         );
-        glContext.disable(glContext.DEPTH_TEST);
-        glContext.depthMask(false);
-        glContext.uniform4f(
-          debugUniformColorLocation,
-          DEBUG_OUTLINE_COLOR[0],
-          DEBUG_OUTLINE_COLOR[1],
-          DEBUG_OUTLINE_COLOR[2],
-          DEBUG_OUTLINE_COLOR[3]
-        );
-        if (
-          debugUniformScreenToClipScaleLocation &&
-          debugUniformScreenToClipOffsetLocation
-        ) {
-          glContext.uniform2f(
-            debugUniformScreenToClipScaleLocation,
-            screenToClipScaleX,
-            screenToClipScaleY
-          );
-          glContext.uniform2f(
-            debugUniformScreenToClipOffsetLocation,
-            screenToClipOffsetX,
-            screenToClipOffsetY
-          );
-        }
-
         for (const entry of hitTestEntries) {
-          let writeOffset = 0;
-          for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
-            const corner = entry.corners[cornerIndex]!;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
-          }
-          glContext.bufferSubData(
-            glContext.ARRAY_BUFFER,
-            0,
-            DEBUG_OUTLINE_VERTEX_SCRATCH
-          );
-          glContext.drawArrays(
-            glContext.LINE_LOOP,
-            0,
-            DEBUG_OUTLINE_VERTEX_COUNT
-          );
+          debugOutlineRenderer.drawOutline(entry.corners);
         }
-
-        glContext.depthMask(true);
-        glContext.enable(glContext.DEPTH_TEST);
-        glContext.disableVertexAttribArray(debugAttribPositionLocation);
-        glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+        debugOutlineRenderer.end();
       }
     } finally {
       projectionHost.release();
@@ -3583,7 +3246,8 @@ export const createSpriteLayer = <T = any>(
   const registerImage = async (
     imageId: string,
     imageSource: string | ImageBitmap,
-    options?: SpriteImageRegisterOptions
+    options?: SpriteImageRegisterOptions,
+    signal?: AbortSignal
   ): Promise<boolean> => {
     // Load from URL when given a string; otherwise reuse the provided bitmap directly.
     let bitmap: ImageBitmap;
@@ -3617,19 +3281,38 @@ export const createSpriteLayer = <T = any>(
       height: bitmap.height,
       bitmap,
       texture: undefined,
+      atlasPageIndex: ATLAS_PAGE_INDEX_NONE,
+      atlasU0: 0,
+      atlasV0: 0,
+      atlasU1: 1,
+      atlasV1: 1,
     };
     images.set(imageId, image);
     imageIdHandler.store(handle, image);
     updateSpriteImageHandles(imageId, handle);
     imageHandleBuffersController.markDirty(images);
 
-    // Queue the upload so the next draw refreshes the texture.
-    queueTextureUpload(image);
-    ensureTextures();
-    // Request a redraw so sprites using the new image update immediately.
-    scheduleRender();
+    const deferred = createDeferred<boolean>();
+    const abortHandle = signal
+      ? onAbort(signal, (error) => {
+          deferred.reject(error);
+        })
+      : null;
+    atlasQueue.enqueueUpsert({ imageId, bitmap, deferred });
 
-    return true;
+    try {
+      return await deferred.promise;
+    } catch (e) {
+      images.delete(imageId);
+      imageIdHandler.release(imageId);
+      updateSpriteImageHandles(imageId, 0);
+      imageHandleBuffersController.markDirty(images);
+      atlasManager.removeImage(imageId);
+      bitmap.close?.();
+      throw e;
+    } finally {
+      abortHandle?.release();
+    }
   };
 
   /**
@@ -3640,26 +3323,24 @@ export const createSpriteLayer = <T = any>(
    * @param {SpriteTextGlyphOptions} [options] - Additional styling options for the glyph.
    * @returns {Promise<boolean>} Resolves to `true` when registered; `false` if the ID already exists.
    */
-  const registerTextGlyph = async (
-    textGlyphId: string,
+  interface TextGlyphRenderResult {
+    readonly bitmap: ImageBitmap;
+    readonly width: number;
+    readonly height: number;
+  }
+
+  const renderTextGlyphBitmap = async (
     text: string,
     dimensions: SpriteTextGlyphDimensions,
     options?: SpriteTextGlyphOptions
-  ): Promise<boolean> => {
-    // Prevent accidental overwrites by refusing duplicate glyph IDs.
-    if (images.has(textGlyphId)) {
-      return false;
-    }
-
+  ): Promise<TextGlyphRenderResult> => {
     let lineHeight: number | undefined;
     let maxWidth: number | undefined;
     const isLineHeightMode = 'lineHeightPixel' in dimensions;
     if (isLineHeightMode) {
-      // When lineHeightPixel is provided, treat the glyph as a single-line label constrained vertically.
       const { lineHeightPixel } = dimensions as { lineHeightPixel: number };
       lineHeight = clampGlyphDimension(lineHeightPixel);
     } else {
-      // Otherwise we clamp against a maximum width constraint when rendering paragraphs.
       const { maxWidthPixel } = dimensions as { maxWidthPixel: number };
       maxWidth = clampGlyphDimension(maxWidthPixel);
     }
@@ -3693,11 +3374,9 @@ export const createSpriteLayer = <T = any>(
         maxWidth - borderWidth - padding.left - padding.right
       );
       if (contentWidthLimit < letterSpacingTotal) {
-        // Ensure we have enough room to inject spacing between glyphs.
         contentWidthLimit = letterSpacingTotal;
       }
 
-      // Reduce font size proportionally until the measured width fits inside the bounding box.
       if (text.length > 0 && measuredWidth > contentWidthLimit) {
         const initialRatio = contentWidthLimit / measuredWidth;
         fontSize = Math.max(
@@ -3722,7 +3401,6 @@ export const createSpriteLayer = <T = any>(
             MIN_TEXT_GLYPH_FONT_SIZE,
             Math.floor(fontSize * Math.max(ratio, 0.75))
           );
-          // Break ties by decrementing one pixel to guarantee progress.
           if (nextFontSize === fontSize) {
             fontSize = Math.max(MIN_TEXT_GLYPH_FONT_SIZE, fontSize - 1);
           } else {
@@ -3736,7 +3414,6 @@ export const createSpriteLayer = <T = any>(
           );
           guard += 1;
         }
-        // If we exit due to guard exhaustion, the current size is the best compromise.
       }
     }
 
@@ -3748,20 +3425,28 @@ export const createSpriteLayer = <T = any>(
     );
     const measuredHeight = measureTextHeight(measureCtx, text, fontSize);
 
-    const padding = resolved.paddingPixel;
-    const borderWidth = resolved.borderWidthPixel;
+    const paddingPixel = resolved.paddingPixel;
+    const borderWidthPixel = resolved.borderWidthPixel;
 
     const contentHeight = isLineHeightMode
-      ? // When the caller provided an explicit line height, honour it directly.
-        lineHeight!
-      : // Otherwise base the height on measured text metrics.
-        clampGlyphDimension(Math.ceil(measuredHeight));
+      ? lineHeight!
+      : clampGlyphDimension(Math.ceil(measuredHeight));
 
     const totalWidth = clampGlyphDimension(
-      Math.ceil(borderWidth + padding.left + padding.right + measuredWidth)
+      Math.ceil(
+        borderWidthPixel +
+          paddingPixel.left +
+          paddingPixel.right +
+          measuredWidth
+      )
     );
     const totalHeight = clampGlyphDimension(
-      Math.ceil(borderWidth + padding.top + padding.bottom + contentHeight)
+      Math.ceil(
+        borderWidthPixel +
+          paddingPixel.top +
+          paddingPixel.bottom +
+          contentHeight
+      )
     );
 
     const renderPixelRatio = resolved.renderPixelRatio;
@@ -3772,14 +3457,11 @@ export const createSpriteLayer = <T = any>(
     );
 
     const { canvas, ctx } = createCanvas2D(renderWidth, renderHeight);
-
     ctx.clearRect(0, 0, renderWidth, renderHeight);
     ctx.save();
     if (renderPixelRatio !== 1) {
-      // Scale the canvas so drawing commands operate in CSS pixel space.
       ctx.scale(renderPixelRatio, renderPixelRatio);
     }
-
     ctx.imageSmoothingEnabled = true;
 
     if (resolved.backgroundColor) {
@@ -3792,10 +3474,10 @@ export const createSpriteLayer = <T = any>(
       );
     }
 
-    if (resolved.borderColor && borderWidth > 0) {
-      const inset = borderWidth / 2;
-      const strokeWidth = Math.max(0, totalWidth - borderWidth);
-      const strokeHeight = Math.max(0, totalHeight - borderWidth);
+    if (resolved.borderColor && borderWidthPixel > 0) {
+      const inset = borderWidthPixel / 2;
+      const strokeWidth = Math.max(0, totalWidth - borderWidthPixel);
+      const strokeHeight = Math.max(0, totalHeight - borderWidthPixel);
       const strokeRadius = Math.max(0, resolved.borderRadiusPixel - inset);
       ctx.save();
       ctx.translate(inset, inset);
@@ -3805,23 +3487,23 @@ export const createSpriteLayer = <T = any>(
         strokeHeight,
         strokeRadius,
         resolved.borderColor,
-        borderWidth,
+        borderWidthPixel,
         resolved.borderSides
       );
       ctx.restore();
     }
 
-    const borderInset = borderWidth / 2;
+    const borderInset = borderWidthPixel / 2;
     const contentWidth = Math.max(
       0,
-      totalWidth - borderWidth - padding.left - padding.right
+      totalWidth - borderWidthPixel - paddingPixel.left - paddingPixel.right
     );
     const contentHeightInner = Math.max(
       0,
-      totalHeight - borderWidth - padding.top - padding.bottom
+      totalHeight - borderWidthPixel - paddingPixel.top - paddingPixel.bottom
     );
-    const contentLeft = borderInset + padding.left;
-    const contentTop = borderInset + padding.top;
+    const contentLeft = borderInset + paddingPixel.left;
+    const contentTop = borderInset + paddingPixel.top;
     const textY = contentTop + contentHeightInner / 2;
 
     const renderOptions = { ...resolved, fontSizePixel: fontSize };
@@ -3863,27 +3545,44 @@ export const createSpriteLayer = <T = any>(
       renderPixelRatio
     );
 
-    const handle = imageIdHandler.allocate(textGlyphId);
-    const image: RegisteredImage = {
-      id: textGlyphId,
-      handle,
-      width: totalWidth,
-      height: totalHeight,
-      bitmap,
-      texture: undefined,
-    };
-    images.set(textGlyphId, image);
-    imageIdHandler.store(handle, image);
-    updateSpriteImageHandles(textGlyphId, handle);
-    imageHandleBuffersController.markDirty(images);
-
-    queueTextureUpload(image);
-    ensureTextures();
-    scheduleRender();
-
-    return true;
+    return { bitmap, width: totalWidth, height: totalHeight };
   };
 
+  const registerTextGlyph = async (
+    textGlyphId: string,
+    text: string,
+    dimensions: SpriteTextGlyphDimensions,
+    options?: SpriteTextGlyphOptions,
+    signal?: AbortSignal
+  ): Promise<boolean> => {
+    if (images.has(textGlyphId) || pendingTextGlyphIds.has(textGlyphId)) {
+      return true;
+    }
+
+    pendingTextGlyphIds.add(textGlyphId);
+    const deferred = createDeferred<boolean>();
+    let glyphAbortHandle: Releasable | null = null;
+    if (signal) {
+      glyphAbortHandle = onAbort(signal, (error) => {
+        cancelPendingTextGlyphJob(textGlyphId, error);
+      });
+    }
+    enqueueTextGlyphJob({
+      glyphId: textGlyphId,
+      text,
+      dimensions,
+      options,
+      deferred,
+      signal,
+      abortHandle: glyphAbortHandle,
+    });
+
+    try {
+      return await deferred.promise;
+    } finally {
+      pendingTextGlyphIds.delete(textGlyphId);
+    }
+  };
   /**
    * Unregisters an image and releases any associated GPU resources.
    * @param {string} imageId - Unique identifier of the image to remove.
@@ -3893,8 +3592,24 @@ export const createSpriteLayer = <T = any>(
     // Ensure the image exists.
     const image = images.get(imageId);
     if (!image) {
+      if (pendingTextGlyphIds.has(imageId)) {
+        cancelPendingTextGlyphJob(
+          imageId,
+          new Error(
+            `[SpriteLayer][GlyphQueue] Image "${imageId}" was unregistered before generation.`
+          )
+        );
+        return true;
+      }
       return false;
     }
+
+    atlasQueue.cancelForImage(
+      imageId,
+      new Error(
+        `[SpriteLayer][Atlas] Image "${imageId}" was unregistered before placement.`
+      )
+    );
 
     // Remove image bounds
     sprites.forEach((sprite) => {
@@ -3907,19 +3622,17 @@ export const createSpriteLayer = <T = any>(
       });
     });
 
-    // Delete the bound texture if present.
-    const glContext = gl;
-    if (glContext && image.texture) {
-      glContext.deleteTexture(image.texture);
+    if (image.bitmap) {
+      image.bitmap.close?.();
     }
-
-    cancelQueuedTextureUpload(imageId);
 
     // Remove the image entry.
     images.delete(imageId);
     imageIdHandler.release(imageId);
     updateSpriteImageHandles(imageId, 0);
     imageHandleBuffersController.markDirty(images);
+    atlasManager.removeImage(imageId);
+    syncAtlasPlacementsFromManager();
 
     // Rebuild render targets now that the image is gone.
     ensureRenderTargetEntries();
@@ -3933,16 +3646,30 @@ export const createSpriteLayer = <T = any>(
    * @returns {void}
    */
   const unregisterAllImages = (): void => {
+    rejectAllPendingTextGlyphJobs(
+      new Error(
+        '[SpriteLayer][GlyphQueue] Pending glyph operations were cleared.'
+      )
+    );
+    pendingTextGlyphIds.clear();
+    atlasQueue.rejectAll(
+      new Error('[SpriteLayer][Atlas] Pending atlas operations were cleared.')
+    );
     const glContext = gl;
-    images.forEach((image) => {
-      if (glContext && image.texture) {
-        glContext.deleteTexture(image.texture);
+    atlasPageTextures.forEach((texture) => {
+      if (glContext) {
+        glContext.deleteTexture(texture);
       }
+    });
+    atlasPageTextures.clear();
+    images.forEach((image) => {
       if (image.bitmap) {
         image.bitmap.close?.();
       }
     });
     images.clear();
+    atlasManager.clear();
+    atlasNeedsUpload = false;
     imageIdHandler.reset();
     imageHandleBuffersController.markDirty(images);
     sprites.forEach((sprite) => {
@@ -3958,7 +3685,6 @@ export const createSpriteLayer = <T = any>(
       HitTestTreeHandle
     >();
     hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
-    clearTextureQueue();
     ensureRenderTargetEntries();
     scheduleRender();
   };

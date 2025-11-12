@@ -4,6 +4,9 @@
 // Under MIT
 
 #include <emscripten/emscripten.h>
+#if defined(__EMSCRIPTEN_PTHREADS__)
+#include <emscripten/threading.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -16,6 +19,9 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#if defined(__EMSCRIPTEN_PTHREADS__)
+#include <thread>
+#endif
 
 #ifdef SIMD_ENABLED
 #include <wasm_simd128.h>
@@ -23,6 +29,46 @@
 
 #include "projection_host.h"
 #include "param_layouts.h"
+
+#if defined(__EMSCRIPTEN_PTHREADS__)
+static std::size_t g_threadPoolLimit = 0;
+
+extern "C" {
+EMSCRIPTEN_KEEPALIVE void setThreadPoolSize(double value) {
+  if (std::isnan(value) || value <= 0.0) {
+    g_threadPoolLimit = 0;
+    return;
+  }
+  const double floored = std::floor(value + 0.5);
+  if (!std::isfinite(floored)) {
+    return;
+  }
+  const auto converted = static_cast<std::size_t>(floored);
+  g_threadPoolLimit = converted > 0 ? converted : 0;
+}
+}
+
+static inline std::size_t clampToAvailableThreads(std::size_t requested) {
+  if (g_threadPoolLimit > 0) {
+    return std::min<std::size_t>(requested, g_threadPoolLimit);
+  }
+  unsigned int hw = std::thread::hardware_concurrency();
+  if (hw == 0u) {
+    hw = 4u;
+  }
+  return std::min<std::size_t>(requested, static_cast<std::size_t>(hw));
+}
+#else
+extern "C" {
+EMSCRIPTEN_KEEPALIVE void setThreadPoolSize(double value) {
+  (void)value;
+}
+}
+
+static inline std::size_t clampToAvailableThreads(std::size_t requested) {
+  return requested;
+}
+#endif
 
 static inline double normalizeAngleDeg(double angle) {
   if (!std::isfinite(angle)) {
@@ -261,6 +307,11 @@ struct ResourceInfo {
   double width = 0.0;
   double height = 0.0;
   bool textureReady = false;
+  double atlasPageIndex = -1.0;
+  double atlasU0 = 0.0;
+  double atlasV0 = 0.0;
+  double atlasU1 = 1.0;
+  double atlasV1 = 1.0;
 };
 
 static inline const ResourceInfo* findResourceByHandle(
@@ -293,20 +344,25 @@ struct BucketItem {
   double effectivePixelsPerMeter = 0.0;
   bool hasEffectivePixelsPerMeter = false;
   RotationCache rotation;
+  SpriteScreenPoint resolvedAnchorCenter;
+  bool hasResolvedAnchorCenter = false;
+  SpriteScreenPoint anchorlessCenter;
+  bool hasAnchorlessCenter = false;
 };
 
-struct ImageCenterCacheEntry {
-  bool hasAnchorApplied = false;
-  SpritePoint anchorApplied;
-  bool hasAnchorless = false;
-  SpritePoint anchorless;
-};
-
-using ImageCenterCache =
-    std::unordered_map<uint64_t, ImageCenterCacheEntry>;
-
-using SpriteCenterCacheMap =
-    std::unordered_map<int64_t, ImageCenterCache>;
+static inline bool tryGetPrecomputedCenter(const BucketItem& bucket,
+                                           bool useResolvedAnchor,
+                                           SpriteScreenPoint& out) {
+  if (useResolvedAnchor && bucket.hasResolvedAnchorCenter) {
+    out = bucket.resolvedAnchorCenter;
+    return true;
+  }
+  if (!useResolvedAnchor && bucket.hasAnchorlessCenter) {
+    out = bucket.anchorlessCenter;
+    return true;
+  }
+  return false;
+}
 
 struct DepthItem {
   const BucketItem* item = nullptr;
@@ -319,10 +375,16 @@ struct DepthItem {
 
 struct DepthCollectionResult {
   std::vector<DepthItem> items;
-  SpriteCenterCacheMap centerCache;
 };
 
 struct ProjectionContext;
+struct FrameConstants;
+
+static inline bool ensureBucketEffectivePixelsPerMeter(
+    BucketItem& bucketItem,
+    const ProjectionContext& projectionContext,
+    const FrameConstants& frame);
+
 
 /**
  * @brief Parameters required to compute surface sprite centers and bounds.
@@ -600,6 +662,7 @@ static inline ResultBufferHeader* initializeResultHeader(double* resultPtr) {
 
 struct FrameConstants {
   double zoom = 0.0;
+  double zoomExp2 = 1.0;
   double worldSize = 0.0;
   double pixelPerMeter = 0.0;
   double cameraToCenterDistance = 0.0;
@@ -632,6 +695,7 @@ static inline FrameConstants readFrameConstants(const double* ptr,
     return constants;
   }
   constants.zoom = ptr[0];
+  constants.zoomExp2 = std::exp2(constants.zoom);
   constants.worldSize = ptr[1];
   constants.pixelPerMeter = ptr[2];
   constants.cameraToCenterDistance = ptr[3];
@@ -702,10 +766,10 @@ static inline void applySurfaceDisplacement(const SpriteLocation& base,
   out.z = alt;
 }
 
-static inline double calculateMetersPerPixelAtLatitude(double zoom,
+static inline double calculateMetersPerPixelAtLatitude(double zoomExp2,
                                                        double latitude) {
   const double cosLatitude = std::cos(latitude * DEG2RAD);
-  const double scale = std::pow(2.0, zoom);
+  const double scale = zoomExp2;
   const double circumference = 2.0 * PI * EARTH_RADIUS_METERS;
   return (cosLatitude * circumference) / (512.0 * scale);
 }
@@ -1070,27 +1134,11 @@ static SpriteScreenPoint computeImageCenter(
     bool useResolvedAnchor,
     const ProjectionContext& projection,
     const FrameConstants& frame,
-    SpriteCenterCacheMap& cache,
     const ResourceInfo& resource,
     double effectivePixelsPerMeter,
     const std::vector<BucketItem>& bucketItems,
     bool clipContextAvailable) {
   SpriteScreenPoint fallbackCenter = bucketItem.projected;
-
-  const int64_t spriteKey = bucketItem.spriteHandle;
-  auto& spriteCache = cache[spriteKey];
-  const uint64_t cacheKey = makeSpriteCenterCacheKey(
-      bucketItem.entry->subLayer, bucketItem.entry->order);
-  auto cacheFound = spriteCache.find(cacheKey);
-  if (cacheFound != spriteCache.end()) {
-    const ImageCenterCacheEntry& entry = cacheFound->second;
-    if (useResolvedAnchor && entry.hasAnchorApplied) {
-      return {entry.anchorApplied.x, entry.anchorApplied.y};
-    }
-    if (!useResolvedAnchor && entry.hasAnchorless) {
-      return {entry.anchorless.x, entry.anchorless.y};
-    }
-  }
 
   SpriteScreenPoint basePoint = bucketItem.projected;
 
@@ -1103,7 +1151,6 @@ static SpriteScreenPoint computeImageCenter(
                                      resolvedAnchor,
                                      projection,
                                      frame,
-                                     cache,
                                      *reference->resource,
                                      effectivePixelsPerMeter,
                                      bucketItems,
@@ -1195,14 +1242,49 @@ static SpriteScreenPoint computeImageCenter(
                         placement.center.y - placement.anchorShift.y};
   }
 
-  ImageCenterCacheEntry cacheEntry;
-  cacheEntry.anchorApplied = {anchorAppliedCenter.x, anchorAppliedCenter.y};
-  cacheEntry.anchorless = {anchorlessCenter.x, anchorlessCenter.y};
-  cacheEntry.hasAnchorApplied = true;
-  cacheEntry.hasAnchorless = true;
-  spriteCache[cacheKey] = cacheEntry;
-
   return useResolvedAnchor ? anchorAppliedCenter : anchorlessCenter;
+}
+
+static void precomputeBucketCenters(std::vector<BucketItem>& bucketItems,
+                                    const ProjectionContext& projection,
+                                    const FrameConstants& frame,
+                                    bool clipContextAvailable) {
+  for (BucketItem& bucket : bucketItems) {
+    if (bucket.entry == nullptr || bucket.resource == nullptr) {
+      continue;
+    }
+    if (!bucket.projectedValid) {
+      continue;
+    }
+    if (!ensureBucketEffectivePixelsPerMeter(bucket, projection, frame)) {
+      continue;
+    }
+
+    const double effectivePixelsPerMeter = bucket.effectivePixelsPerMeter;
+    SpriteScreenPoint resolvedCenter =
+        computeImageCenter(bucket,
+                           true,
+                           projection,
+                           frame,
+                           *bucket.resource,
+                           effectivePixelsPerMeter,
+                           bucketItems,
+                           clipContextAvailable);
+    bucket.resolvedAnchorCenter = resolvedCenter;
+    bucket.hasResolvedAnchorCenter = true;
+
+    SpriteScreenPoint anchorlessCenter =
+        computeImageCenter(bucket,
+                           false,
+                           projection,
+                           frame,
+                           *bucket.resource,
+                           effectivePixelsPerMeter,
+                           bucketItems,
+                           clipContextAvailable);
+    bucket.anchorlessCenter = anchorlessCenter;
+    bucket.hasAnchorlessCenter = true;
+  }
 }
 
 /**
@@ -1221,7 +1303,7 @@ static inline bool ensureBucketEffectivePixelsPerMeter(
   }
 
   const double metersPerPixelAtLat =
-      calculateMetersPerPixelAtLatitude(frame.zoom,
+      calculateMetersPerPixelAtLatitude(frame.zoomExp2,
                                         bucketItem.spriteLocation.lat);
   if (!std::isfinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0.0) {
     return false;
@@ -1246,22 +1328,68 @@ static inline bool ensureBucketEffectivePixelsPerMeter(
   return true;
 }
 
-static DepthCollectionResult collectDepthSortedItemsInternal(
-    std::vector<BucketItem>& bucketItems,
-    const ProjectionContext& projectionContext,
-    const FrameConstants& frame,
-    bool clipContextAvailable,
-    bool enableSurfaceBias) {
-  DepthCollectionResult result;
-  auto& centerCache = result.centerCache;
-  std::vector<DepthItem> depthItems;
-  depthItems.reserve(bucketItems.size());
+struct DepthWorkerContext {
+  std::vector<BucketItem>* bucketItems = nullptr;
+  const ProjectionContext* projectionContext = nullptr;
+  const FrameConstants* frame = nullptr;
+  bool enableSurfaceBias = false;
+};
+
+#if defined(__EMSCRIPTEN_PTHREADS__)
+constexpr std::size_t DEPTH_PARALLEL_MIN_ITEMS = 512;
+constexpr std::size_t DEPTH_PARALLEL_SLICE = 256;
+#endif
+
+static inline std::size_t determineDepthWorkerCount(std::size_t totalItems) {
+#if defined(__EMSCRIPTEN_PTHREADS__)
+  if (totalItems < DEPTH_PARALLEL_MIN_ITEMS) {
+    return 1;
+  }
+  unsigned int hw = std::thread::hardware_concurrency();
+  if (hw == 0u) {
+    hw = 4u;
+  }
+  const std::size_t maxWorkers = static_cast<std::size_t>(hw);
+  const std::size_t bySize =
+      std::max<std::size_t>(1, totalItems / DEPTH_PARALLEL_SLICE);
+  return clampToAvailableThreads(
+      std::min<std::size_t>(maxWorkers, bySize));
+#else
+  (void)totalItems;
+  return 1;
+#endif
+}
+
+static void processDepthRange(const DepthWorkerContext& ctx,
+                              std::size_t startIndex,
+                              std::size_t endIndex,
+                              std::vector<DepthItem>& outDepthItems) {
+  outDepthItems.clear();
+  if (ctx.bucketItems == nullptr || ctx.projectionContext == nullptr ||
+      ctx.frame == nullptr) {
+    return;
+  }
+
+  auto& bucketItems = *ctx.bucketItems;
+  const ProjectionContext& projectionContext = *ctx.projectionContext;
+  const FrameConstants& frame = *ctx.frame;
+
+  if (startIndex >= bucketItems.size()) {
+    return;
+  }
+  endIndex = std::min(endIndex, bucketItems.size());
+  if (startIndex >= endIndex) {
+    return;
+  }
+
+  outDepthItems.reserve(endIndex - startIndex);
 
   const auto* triangleIndices = TRIANGLE_INDICES.data();
   const int triangleIndexCount =
       static_cast<int>(TRIANGLE_INDICES.size());
 
-  for (BucketItem& bucketItem : bucketItems) {
+  for (std::size_t idx = startIndex; idx < endIndex; ++idx) {
+    BucketItem& bucketItem = bucketItems[idx];
     if (bucketItem.entry == nullptr || bucketItem.resource == nullptr) {
       continue;
     }
@@ -1280,16 +1408,8 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
 
     const double effectivePixelsPerMeter = bucketItem.effectivePixelsPerMeter;
 
-    SpriteScreenPoint depthCenter = computeImageCenter(
-        bucketItem,
-        true,
-        projectionContext,
-        frame,
-        centerCache,
-        *bucketItem.resource,
-        effectivePixelsPerMeter,
-        bucketItems,
-        clipContextAvailable);
+    SpriteScreenPoint depthCenter = bucketItem.projected;
+    tryGetPrecomputedCenter(bucketItem, true, depthCenter);
 
     double depthKey = 0.0;
     const bool isSurface = std::lround(bucketItem.entry->mode) == 0;
@@ -1334,16 +1454,9 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
         if (reference && reference->resource) {
           const bool useAnchorDisplacement =
               toBool(bucketItem.entry->originUseResolvedAnchor);
-          const SpriteScreenPoint originCenter = computeImageCenter(
-              *reference,
-              useAnchorDisplacement,
-              projectionContext,
-              frame,
-              centerCache,
-              *reference->resource,
-              effectivePixelsPerMeter,
-              bucketItems,
-              clipContextAvailable);
+          SpriteScreenPoint originCenter = reference->projected;
+          tryGetPrecomputedCenter(*reference, useAnchorDisplacement,
+                                  originCenter);
           SpriteLocation reprojection{};
           if (unprojectSpritePoint(projectionContext,
                                    SpritePoint{originCenter.x, originCenter.y},
@@ -1353,7 +1466,7 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
         }
       }
 
-      const bool applyBias = enableSurfaceBias;
+      const bool applyBias = ctx.enableSurfaceBias;
       const double clampedOrder =
           std::fmin(bucketItem.entry->order, frame.orderMax - 1.0);
       const double biasIndex = bucketItem.entry->subLayer * frame.orderBucket +
@@ -1361,9 +1474,10 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
       const double depthBiasNdc = applyBias ? -(biasIndex * frame.epsNdc) : 0.0;
 
       std::array<double, SURFACE_CLIP_CORNER_COUNT * 2> displacementData{};
-      for (std::size_t idx = 0; idx < SURFACE_CLIP_CORNER_COUNT; ++idx) {
-        displacementData[idx * 2 + 0] = cornerDisplacements[idx].east;
-        displacementData[idx * 2 + 1] = cornerDisplacements[idx].north;
+      for (std::size_t corner = 0; corner < SURFACE_CLIP_CORNER_COUNT;
+           ++corner) {
+        displacementData[corner * 2 + 0] = cornerDisplacements[corner].east;
+        displacementData[corner * 2 + 1] = cornerDisplacements[corner].north;
       }
 
       const int displacementCount =
@@ -1404,7 +1518,94 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
     }
 
     depthEntry.depthKey = depthKey;
-    depthItems.push_back(depthEntry);
+  outDepthItems.push_back(std::move(depthEntry));
+  }
+}
+
+#if defined(__EMSCRIPTEN_PTHREADS__)
+constexpr std::size_t PREPARE_PARALLEL_MIN_ITEMS = 256;
+constexpr std::size_t PREPARE_PARALLEL_SLICE = 128;
+#endif
+
+static inline std::size_t determinePrepareWorkerCount(std::size_t totalItems) {
+#if defined(__EMSCRIPTEN_PTHREADS__)
+  if (totalItems < PREPARE_PARALLEL_MIN_ITEMS) {
+    return 1;
+  }
+  unsigned int hw = std::thread::hardware_concurrency();
+  if (hw == 0u) {
+    hw = 4u;
+  }
+  const std::size_t maxWorkers = static_cast<std::size_t>(hw);
+  const std::size_t bySize =
+      std::max<std::size_t>(1, totalItems / PREPARE_PARALLEL_SLICE);
+  return clampToAvailableThreads(
+      std::min<std::size_t>(maxWorkers, bySize));
+#else
+  (void)totalItems;
+  return 1;
+#endif
+}
+
+static DepthCollectionResult collectDepthSortedItemsInternal(
+    std::vector<BucketItem>& bucketItems,
+    const ProjectionContext& projectionContext,
+    const FrameConstants& frame,
+    bool clipContextAvailable,
+    bool enableSurfaceBias) {
+  (void)clipContextAvailable;
+  DepthCollectionResult result;
+  std::vector<DepthItem> depthItems;
+  depthItems.reserve(bucketItems.size());
+
+  DepthWorkerContext ctx;
+  ctx.bucketItems = &bucketItems;
+  ctx.projectionContext = &projectionContext;
+  ctx.frame = &frame;
+  ctx.enableSurfaceBias = enableSurfaceBias;
+
+  const std::size_t workerCount =
+      determineDepthWorkerCount(bucketItems.size());
+
+  if (workerCount <= 1) {
+    processDepthRange(ctx, 0, bucketItems.size(), depthItems);
+  } else {
+#if defined(__EMSCRIPTEN_PTHREADS__)
+    std::vector<std::vector<DepthItem>> workerOutputs(workerCount);
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+
+    const std::size_t sliceSize =
+        (bucketItems.size() + workerCount - 1) / workerCount;
+
+    for (std::size_t workerIndex = 0; workerIndex < workerCount; ++workerIndex) {
+      const std::size_t start = workerIndex * sliceSize;
+      if (start >= bucketItems.size()) {
+        break;
+      }
+      const std::size_t end = std::min(bucketItems.size(), start + sliceSize);
+      workers.emplace_back(
+          [ctx, start, end, &workerOutputs, workerIndex]() {
+            processDepthRange(ctx, start, end, workerOutputs[workerIndex]);
+          });
+    }
+
+    for (std::thread& worker : workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+
+    depthItems.clear();
+    depthItems.reserve(bucketItems.size());
+    for (auto& workerVector : workerOutputs) {
+      for (DepthItem& item : workerVector) {
+        depthItems.push_back(std::move(item));
+      }
+    }
+#else
+    processDepthRange(ctx, 0, bucketItems.size(), depthItems);
+#endif
   }
 
   std::sort(depthItems.begin(), depthItems.end(),
@@ -1435,7 +1636,6 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
 
 static bool prepareDrawSpriteImageInternal(
     const DepthItem& depth,
-    SpriteCenterCacheMap& centerCache,
     const ProjectionContext& projectionContext,
     const FrameConstants& frame,
     bool clipContextAvailable,
@@ -1455,6 +1655,12 @@ static bool prepareDrawSpriteImageInternal(
   const BucketItem& bucketItem = *depth.item;
   const InputItemEntry& entry = *bucketItem.entry;
   const ResourceInfo& resource = *bucketItem.resource;
+  const double atlasU0 = resource.atlasU0;
+  const double atlasV0 = resource.atlasV0;
+  const double atlasU1 = resource.atlasU1;
+  const double atlasV1 = resource.atlasV1;
+  const double atlasUSpan = atlasU1 - atlasU0;
+  const double atlasVSpan = atlasV1 - atlasV0;
 
   if (!bucketItem.projectedValid || resource.width <= 0.0 ||
       resource.height <= 0.0) {
@@ -1477,15 +1683,9 @@ static bool prepareDrawSpriteImageInternal(
           resolveOriginBucketItem(bucketItem, bucketItems);
       if (reference && reference->resource) {
         const bool useAnchor = toBool(entry.originUseResolvedAnchor);
-        baseProjected = computeImageCenter(*reference,
-                                           useAnchor,
-                                           projectionContext,
-                                           frame,
-                                           centerCache,
-                                           *reference->resource,
-                                           effectivePixelsPerMeter,
-                                           bucketItems,
-                                           clipContextAvailable);
+        SpriteScreenPoint originCenter = reference->projected;
+        tryGetPrecomputedCenter(*reference, useAnchor, originCenter);
+        baseProjected = originCenter;
       }
     }
 
@@ -1655,7 +1855,9 @@ static bool prepareDrawSpriteImageInternal(
         storeVec4(vertexWrite, clipPosition);
       }
       const auto& uv = UV_CORNERS[cornerIndex];
-      storeVec2(vertexWrite, uv[0], uv[1]);
+      const double resolvedU = atlasU0 + uv[0] * atlasUSpan;
+      const double resolvedV = atlasV0 + uv[1] * atlasVSpan;
+      storeVec2(vertexWrite, resolvedU, resolvedV);
     }
 
     bool clipUniformEnabled = false;
@@ -1784,7 +1986,9 @@ static bool prepareDrawSpriteImageInternal(
                   0.0,
                   1.0);
       }
-      storeVec2(vertexWrite, resolvedCorners[idx].u, resolvedCorners[idx].v);
+      const double resolvedU = atlasU0 + resolvedCorners[idx].u * atlasUSpan;
+      const double resolvedV = atlasV0 + resolvedCorners[idx].v * atlasVSpan;
+      storeVec2(vertexWrite, resolvedU, resolvedV);
     }
 
     double* hitTestWrite = hitTestData.data();
@@ -2544,6 +2748,23 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
     info.width = entry.width;
     info.height = entry.height;
     info.textureReady = entry.textureReady != 0.0;
+    info.atlasPageIndex = entry.atlasPageIndex;
+    info.atlasU0 = entry.atlasU0;
+    info.atlasV0 = entry.atlasV0;
+    info.atlasU1 = entry.atlasU1;
+    info.atlasV1 = entry.atlasV1;
+    if (!std::isfinite(info.atlasU0)) {
+      info.atlasU0 = 0.0;
+    }
+    if (!std::isfinite(info.atlasV0)) {
+      info.atlasV0 = 0.0;
+    }
+    if (!std::isfinite(info.atlasU1)) {
+      info.atlasU1 = 1.0;
+    }
+    if (!std::isfinite(info.atlasV1)) {
+      info.atlasV1 = 1.0;
+    }
     resources[i] = info;
   }
 
@@ -2571,6 +2792,11 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
     bucketItems[i] = bucket;
   }
 
+  precomputeBucketCenters(bucketItems,
+                          projectionContext,
+                          frame,
+                          clipContextAvailable);
+
   DepthCollectionResult depthResult = collectDepthSortedItemsInternal(
       bucketItems,
       projectionContext,
@@ -2578,33 +2804,93 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
       clipContextAvailable,
       enableSurfaceBias);
 
+  const std::size_t depthCount = depthResult.items.size();
+  std::vector<double> stagedResults(depthCount * RESULT_ITEM_STRIDE, 0.0);
+  std::vector<uint8_t> preparedFlags(depthCount, 0);
+  std::vector<uint8_t> hitTestFlags(depthCount, 0);
+  std::vector<uint8_t> surfaceFlags(depthCount, 0);
+
+  auto prepareRange = [&](std::size_t start, std::size_t end) {
+    if (start >= depthCount) {
+      return;
+    }
+    end = std::min(end, depthCount);
+    double* stagedBase = stagedResults.data();
+    for (std::size_t idx = start; idx < end; ++idx) {
+      const DepthItem& depth = depthResult.items[idx];
+      double* itemBase = stagedBase + idx * RESULT_ITEM_STRIDE;
+      bool itemHasHitTest = false;
+      bool itemHasSurfaceInputs = false;
+      if (prepareDrawSpriteImageInternal(depth,
+                                         projectionContext,
+                                         frame,
+                                         clipContextAvailable,
+                                         useShaderBillboardGeometry,
+                                         useShaderSurfaceGeometry,
+                                         bucketItems,
+                                         itemBase,
+                                         itemHasHitTest,
+                                         itemHasSurfaceInputs)) {
+        preparedFlags[idx] = 1;
+        if (itemHasHitTest) {
+          hitTestFlags[idx] = 1;
+        }
+        if (itemHasSurfaceInputs) {
+          surfaceFlags[idx] = 1;
+        }
+      }
+    }
+  };
+
+  const std::size_t prepareWorkerCount =
+      determinePrepareWorkerCount(depthCount);
+  if (prepareWorkerCount <= 1 || depthCount == 0) {
+    prepareRange(0, depthCount);
+  } else {
+#if defined(__EMSCRIPTEN_PTHREADS__)
+    std::vector<std::thread> workers;
+    workers.reserve(prepareWorkerCount);
+    const std::size_t sliceSize =
+        (depthCount + prepareWorkerCount - 1) / prepareWorkerCount;
+    for (std::size_t workerIndex = 0; workerIndex < prepareWorkerCount;
+         ++workerIndex) {
+      const std::size_t start = workerIndex * sliceSize;
+      if (start >= depthCount) {
+        break;
+      }
+      const std::size_t end = std::min(depthCount, start + sliceSize);
+      workers.emplace_back([&, start, end]() { prepareRange(start, end); });
+    }
+    for (std::thread& worker : workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+#else
+    prepareRange(0, depthCount);
+#endif
+  }
+
   double* writePtr = resultPtr + RESULT_HEADER_LENGTH;
   std::size_t preparedCount = 0;
   bool hasHitTest = false;
   bool hasSurfaceInputs = false;
 
-  for (const DepthItem& depth : depthResult.items) {
+  for (std::size_t idx = 0; idx < depthCount; ++idx) {
     if (preparedCount >= itemCount) {
       break;
     }
-    double* itemBase = writePtr + preparedCount * RESULT_ITEM_STRIDE;
-    bool itemHasHitTest = false;
-    bool itemHasSurfaceInputs = false;
-    if (prepareDrawSpriteImageInternal(depth,
-                                       depthResult.centerCache,
-                                       projectionContext,
-                                       frame,
-                                       clipContextAvailable,
-                                       useShaderBillboardGeometry,
-                                       useShaderSurfaceGeometry,
-                                       bucketItems,
-                                       itemBase,
-                                       itemHasHitTest,
-                                       itemHasSurfaceInputs)) {
-      preparedCount += 1;
-      hasHitTest = hasHitTest || itemHasHitTest;
-      hasSurfaceInputs = hasSurfaceInputs || itemHasSurfaceInputs;
+    if (preparedFlags[idx] == 0) {
+      continue;
     }
+    double* stagedBase = stagedResults.data() + idx * RESULT_ITEM_STRIDE;
+    double* dest = writePtr + preparedCount * RESULT_ITEM_STRIDE;
+    std::memcpy(dest,
+                stagedBase,
+                sizeof(double) * RESULT_ITEM_STRIDE);
+    preparedCount += 1;
+    hasHitTest = hasHitTest || (hitTestFlags[idx] != 0);
+    hasSurfaceInputs = hasSurfaceInputs || (surfaceFlags[idx] != 0);
   }
 
   resultHeader->preparedCount = static_cast<double>(preparedCount);

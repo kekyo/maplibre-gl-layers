@@ -12,6 +12,11 @@
  */
 
 import type { SpriteAnchor, SpriteScreenPoint } from './types';
+import type {
+  PreparedDrawSpriteImageParams,
+  Releaseable,
+  SurfaceShaderInputs,
+} from './internalTypes';
 import { DEG2RAD, UV_CORNERS } from './const';
 
 /** Number of components per vertex (clipPosition.xyzw + uv.xy). */
@@ -42,15 +47,12 @@ uniform vec2 u_billboardHalfSize;
 uniform vec2 u_billboardAnchor;
 uniform vec2 u_billboardSinCos;
 uniform float u_surfaceClipEnabled;
-uniform vec4 u_surfaceClipCenter;
-uniform vec4 u_surfaceClipBasisEast;
-uniform vec4 u_surfaceClipBasisNorth;
+uniform mat4 u_surfaceClipMatrix;
 uniform float u_surfaceDepthBias;
 varying vec2 v_uv;
-vec2 computeBillboardCorner(vec2 uv) {
-  vec2 base = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+vec2 computeBillboardCorner(vec2 baseCorner) {
   vec2 anchorShift = vec2(u_billboardAnchor.x * u_billboardHalfSize.x, u_billboardAnchor.y * u_billboardHalfSize.y);
-  vec2 shifted = vec2(base.x * u_billboardHalfSize.x, base.y * u_billboardHalfSize.y) - anchorShift;
+  vec2 shifted = vec2(baseCorner.x * u_billboardHalfSize.x, baseCorner.y * u_billboardHalfSize.y) - anchorShift;
   float sinR = u_billboardSinCos.x;
   float cosR = u_billboardSinCos.y;
   vec2 rotated = vec2(
@@ -66,9 +68,7 @@ vec4 computeSurfaceCorner(vec2 corner) {
   if (u_surfaceClipEnabled < 0.5) {
     return vec4(0.0, 0.0, 0.0, 1.0);
   }
-  vec4 clip = u_surfaceClipCenter
-    + (corner.x * u_surfaceClipBasisEast)
-    + (corner.y * u_surfaceClipBasisNorth);
+  vec4 clip = u_surfaceClipMatrix * vec4(1.0, corner.x, corner.y, 0.0);
   clip.z += u_surfaceDepthBias * clip.w;
   return clip;
 }
@@ -76,7 +76,7 @@ void main() {
   v_uv = a_uv;
   vec4 position;
   if (u_billboardMode > 0.5) {
-    vec2 screenPosition = computeBillboardCorner(a_uv);
+    vec2 screenPosition = computeBillboardCorner(a_position.xy);
     position = vec4(screenPosition, 0.0, 1.0);
   } else if (u_surfaceMode > 0.5) {
     vec2 baseCorner = vec2(a_position.x, a_position.y);
@@ -272,4 +272,647 @@ export const createShaderProgram = (
   }
 
   return program;
+};
+
+const SURFACE_CLIP_MATRIX_IDENTITY = new Float32Array([
+  0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+]);
+
+const FLOATS_PER_VERTEX = VERTEX_COMPONENT_COUNT;
+const FLOATS_PER_SPRITE = QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT;
+
+export interface SpriteDrawProgram<TTag> extends Releaseable {
+  beginFrame(): void;
+  uploadVertexBatch(items: PreparedDrawSpriteImageParams<TTag>[]): void;
+  draw(prepared: PreparedDrawSpriteImageParams<TTag>): boolean;
+}
+
+export const createSpriteDrawProgram = <TTag>(
+  glContext: WebGLRenderingContext
+): SpriteDrawProgram<TTag> => {
+  const vertexBuffer = glContext.createBuffer();
+  if (!vertexBuffer) {
+    throw new Error('Failed to create vertex buffer.');
+  }
+
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+  glContext.bufferData(
+    glContext.ARRAY_BUFFER,
+    INITIAL_QUAD_VERTICES,
+    glContext.DYNAMIC_DRAW
+  );
+
+  let vertexBufferCapacityFloats = INITIAL_QUAD_VERTICES.length;
+
+  const program = createShaderProgram(
+    glContext,
+    VERTEX_SHADER_SOURCE,
+    FRAGMENT_SHADER_SOURCE
+  );
+  glContext.useProgram(program);
+
+  const attribPositionLocation = glContext.getAttribLocation(
+    program,
+    'a_position'
+  );
+  const attribUvLocation = glContext.getAttribLocation(program, 'a_uv');
+  if (attribPositionLocation === -1 || attribUvLocation === -1) {
+    glContext.deleteBuffer(vertexBuffer);
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire attribute locations.');
+  }
+
+  const uniformTextureLocation = glContext.getUniformLocation(
+    program,
+    'u_texture'
+  );
+  const uniformOpacityLocation = glContext.getUniformLocation(
+    program,
+    'u_opacity'
+  );
+  const uniformScreenToClipScaleLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipScale'
+  );
+  const uniformScreenToClipOffsetLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipOffset'
+  );
+  const uniformBillboardModeLocation = glContext.getUniformLocation(
+    program,
+    'u_billboardMode'
+  );
+  const uniformBillboardCenterLocation = glContext.getUniformLocation(
+    program,
+    'u_billboardCenter'
+  );
+  const uniformBillboardHalfSizeLocation = glContext.getUniformLocation(
+    program,
+    'u_billboardHalfSize'
+  );
+  const uniformBillboardAnchorLocation = glContext.getUniformLocation(
+    program,
+    'u_billboardAnchor'
+  );
+  const uniformBillboardSinCosLocation = glContext.getUniformLocation(
+    program,
+    'u_billboardSinCos'
+  );
+  const uniformSurfaceModeLocation = glContext.getUniformLocation(
+    program,
+    'u_surfaceMode'
+  );
+  const uniformSurfaceDepthBiasLocation = glContext.getUniformLocation(
+    program,
+    'u_surfaceDepthBias'
+  );
+  const uniformSurfaceClipEnabledLocation = glContext.getUniformLocation(
+    program,
+    'u_surfaceClipEnabled'
+  );
+  const uniformSurfaceClipMatrixLocation = glContext.getUniformLocation(
+    program,
+    'u_surfaceClipMatrix'
+  );
+
+  if (
+    !uniformTextureLocation ||
+    !uniformOpacityLocation ||
+    !uniformScreenToClipScaleLocation ||
+    !uniformScreenToClipOffsetLocation ||
+    !uniformBillboardModeLocation ||
+    !uniformBillboardCenterLocation ||
+    !uniformBillboardHalfSizeLocation ||
+    !uniformBillboardAnchorLocation ||
+    !uniformBillboardSinCosLocation ||
+    !uniformSurfaceModeLocation ||
+    !uniformSurfaceDepthBiasLocation ||
+    !uniformSurfaceClipEnabledLocation ||
+    !uniformSurfaceClipMatrixLocation
+  ) {
+    glContext.deleteBuffer(vertexBuffer);
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire uniform locations.');
+  }
+
+  glContext.uniform1i(uniformTextureLocation, 0);
+  glContext.uniform1f(uniformOpacityLocation, 1.0);
+  glContext.uniform2f(uniformScreenToClipScaleLocation, 1.0, 1.0);
+  glContext.uniform2f(uniformScreenToClipOffsetLocation, 0.0, 0.0);
+  glContext.uniform1f(uniformSurfaceClipEnabledLocation, 0.0);
+  glContext.uniformMatrix4fv(
+    uniformSurfaceClipMatrixLocation,
+    false,
+    SURFACE_CLIP_MATRIX_IDENTITY
+  );
+  glContext.uniform1f(uniformBillboardModeLocation, 0);
+  glContext.uniform2f(uniformBillboardCenterLocation, 0.0, 0.0);
+  glContext.uniform2f(uniformBillboardHalfSizeLocation, 0.0, 0.0);
+  glContext.uniform2f(uniformBillboardAnchorLocation, 0.0, 0.0);
+  glContext.uniform2f(uniformBillboardSinCosLocation, 0.0, 1.0);
+  glContext.uniform1f(uniformSurfaceModeLocation, 0);
+  glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
+
+  const vertexBatchOffsets = new Map<
+    PreparedDrawSpriteImageParams<TTag>,
+    number
+  >();
+  let batchedVertexScratch = new Float32Array(FLOATS_PER_SPRITE);
+
+  const ensureVertexBatchCapacity = (requiredFloatCount: number): void => {
+    if (batchedVertexScratch.length >= requiredFloatCount) {
+      return;
+    }
+    let capacity = batchedVertexScratch.length || FLOATS_PER_SPRITE;
+    while (capacity < requiredFloatCount) {
+      capacity *= 2;
+    }
+    batchedVertexScratch = new Float32Array(capacity);
+  };
+
+  const ensureVertexBufferCapacity = (requiredFloatCount: number): void => {
+    if (requiredFloatCount <= vertexBufferCapacityFloats) {
+      return;
+    }
+    let capacity = Math.max(vertexBufferCapacityFloats, FLOATS_PER_SPRITE);
+    while (capacity < requiredFloatCount) {
+      capacity *= 2;
+    }
+    glContext.bufferData(
+      glContext.ARRAY_BUFFER,
+      capacity * FLOAT_SIZE,
+      glContext.DYNAMIC_DRAW
+    );
+    vertexBufferCapacityFloats = capacity;
+  };
+
+  const orphanVertexBuffer = (): void => {
+    glContext.bufferData(
+      glContext.ARRAY_BUFFER,
+      vertexBufferCapacityFloats * FLOAT_SIZE,
+      glContext.DYNAMIC_DRAW
+    );
+  };
+
+  let currentScaleX = Number.NaN;
+  let currentScaleY = Number.NaN;
+  let currentOffsetX = Number.NaN;
+  let currentOffsetY = Number.NaN;
+  let currentSurfaceMode = Number.NaN;
+  let currentSurfaceClipEnabled = Number.NaN;
+  const currentSurfaceClipMatrix = new Float32Array(16);
+  currentSurfaceClipMatrix.fill(Number.NaN);
+  const surfaceClipMatrixScratch = new Float32Array(16);
+  let currentSurfaceDepthBias = Number.NaN;
+  let currentBillboardMode = Number.NaN;
+  const currentBillboardCenter = { x: Number.NaN, y: Number.NaN };
+  const currentBillboardHalfSize = { x: Number.NaN, y: Number.NaN };
+  const currentBillboardAnchor = { x: Number.NaN, y: Number.NaN };
+  const currentBillboardSinCos = { x: Number.NaN, y: Number.NaN };
+  let currentOpacity = Number.NaN;
+  let currentBoundTexture: WebGLTexture | null = null;
+
+  const resetFrameState = (): void => {
+    currentScaleX = Number.NaN;
+    currentScaleY = Number.NaN;
+    currentOffsetX = Number.NaN;
+    currentOffsetY = Number.NaN;
+    currentSurfaceMode = Number.NaN;
+    currentSurfaceClipEnabled = Number.NaN;
+    currentSurfaceClipMatrix.fill(Number.NaN);
+    currentSurfaceDepthBias = Number.NaN;
+    currentBillboardMode = Number.NaN;
+    currentBillboardCenter.x = Number.NaN;
+    currentBillboardCenter.y = Number.NaN;
+    currentBillboardHalfSize.x = Number.NaN;
+    currentBillboardHalfSize.y = Number.NaN;
+    currentBillboardAnchor.x = Number.NaN;
+    currentBillboardAnchor.y = Number.NaN;
+    currentBillboardSinCos.x = Number.NaN;
+    currentBillboardSinCos.y = Number.NaN;
+    currentOpacity = Number.NaN;
+    currentBoundTexture = null;
+    vertexBatchOffsets.clear();
+  };
+
+  const matricesEqual = (a: Float32Array, b: Float32Array): boolean => {
+    for (let index = 0; index < a.length; index++) {
+      if (a[index] !== b[index]) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const writeSurfaceClipMatrix = (
+    target: Float32Array,
+    inputs: SurfaceShaderInputs
+  ): void => {
+    const center = inputs.clipCenter;
+    const basisEast = inputs.clipBasisEast;
+    const basisNorth = inputs.clipBasisNorth;
+    target[0] = center.x;
+    target[1] = center.y;
+    target[2] = center.z;
+    target[3] = center.w;
+    target[4] = basisEast.x;
+    target[5] = basisEast.y;
+    target[6] = basisEast.z;
+    target[7] = basisEast.w;
+    target[8] = basisNorth.x;
+    target[9] = basisNorth.y;
+    target[10] = basisNorth.z;
+    target[11] = basisNorth.w;
+    target[12] = 0;
+    target[13] = 0;
+    target[14] = 0;
+    target[15] = 0;
+  };
+
+  const applyScreenToClipUniforms = (
+    scaleX: number,
+    scaleY: number,
+    offsetX: number,
+    offsetY: number
+  ): void => {
+    if (
+      scaleX !== currentScaleX ||
+      scaleY !== currentScaleY ||
+      offsetX !== currentOffsetX ||
+      offsetY !== currentOffsetY
+    ) {
+      glContext.uniform2f(uniformScreenToClipScaleLocation, scaleX, scaleY);
+      glContext.uniform2f(uniformScreenToClipOffsetLocation, offsetX, offsetY);
+      currentScaleX = scaleX;
+      currentScaleY = scaleY;
+      currentOffsetX = offsetX;
+      currentOffsetY = offsetY;
+    }
+  };
+
+  const applySurfaceMode = (enabled: boolean): void => {
+    const value = enabled ? 1 : 0;
+    if (value !== currentSurfaceMode) {
+      glContext.uniform1f(uniformSurfaceModeLocation, value);
+      currentSurfaceMode = value;
+    }
+  };
+
+  const applySurfaceClipUniforms = (
+    enabled: boolean,
+    inputs: SurfaceShaderInputs | null
+  ): void => {
+    const hasInputs = Boolean(enabled && inputs);
+    const value = hasInputs ? 1 : 0;
+    if (value !== currentSurfaceClipEnabled) {
+      glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
+      currentSurfaceClipEnabled = value;
+    }
+    if (!hasInputs || !inputs) {
+      return;
+    }
+    writeSurfaceClipMatrix(surfaceClipMatrixScratch, inputs);
+    if (!matricesEqual(surfaceClipMatrixScratch, currentSurfaceClipMatrix)) {
+      glContext.uniformMatrix4fv(
+        uniformSurfaceClipMatrixLocation,
+        false,
+        surfaceClipMatrixScratch
+      );
+      currentSurfaceClipMatrix.set(surfaceClipMatrixScratch);
+    }
+  };
+
+  const beginFrame = (): void => {
+    glContext.useProgram(program);
+    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+    glContext.enableVertexAttribArray(attribPositionLocation);
+    glContext.vertexAttribPointer(
+      attribPositionLocation,
+      POSITION_COMPONENT_COUNT,
+      glContext.FLOAT,
+      false,
+      VERTEX_STRIDE,
+      0
+    );
+    glContext.enableVertexAttribArray(attribUvLocation);
+    glContext.vertexAttribPointer(
+      attribUvLocation,
+      UV_COMPONENT_COUNT,
+      glContext.FLOAT,
+      false,
+      VERTEX_STRIDE,
+      UV_OFFSET
+    );
+    resetFrameState();
+  };
+
+  const uploadVertexBatch = (
+    items: PreparedDrawSpriteImageParams<TTag>[]
+  ): void => {
+    vertexBatchOffsets.clear();
+    if (items.length === 0) {
+      return;
+    }
+    let requiredFloatCount = 0;
+    for (const prepared of items) {
+      requiredFloatCount += prepared.vertexData.length;
+    }
+    ensureVertexBatchCapacity(requiredFloatCount);
+    let floatOffset = 0;
+    let vertexOffset = 0;
+    for (const prepared of items) {
+      const data = prepared.vertexData;
+      batchedVertexScratch.set(data, floatOffset);
+      vertexBatchOffsets.set(prepared, vertexOffset);
+      floatOffset += data.length;
+      vertexOffset += data.length / FLOATS_PER_VERTEX;
+    }
+    const uploadView = batchedVertexScratch.subarray(0, floatOffset);
+    ensureVertexBufferCapacity(uploadView.length);
+    orphanVertexBuffer();
+    glContext.bufferSubData(glContext.ARRAY_BUFFER, 0, uploadView);
+  };
+
+  const draw = (prepared: PreparedDrawSpriteImageParams<TTag>): boolean => {
+    const { screenToClip } = prepared;
+    applyScreenToClipUniforms(
+      screenToClip.scaleX,
+      screenToClip.scaleY,
+      screenToClip.offsetX,
+      screenToClip.offsetY
+    );
+
+    applySurfaceMode(prepared.useShaderSurface);
+
+    const surfaceInputs = prepared.surfaceShaderInputs;
+    if (prepared.useShaderSurface && surfaceInputs) {
+      const depthBias = surfaceInputs.depthBiasNdc;
+      if (depthBias !== currentSurfaceDepthBias) {
+        glContext.uniform1f(uniformSurfaceDepthBiasLocation, depthBias);
+        currentSurfaceDepthBias = depthBias;
+      }
+      applySurfaceClipUniforms(
+        prepared.surfaceClipEnabled,
+        prepared.surfaceClipEnabled ? surfaceInputs : null
+      );
+    } else {
+      if (currentSurfaceDepthBias !== 0) {
+        glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
+        currentSurfaceDepthBias = 0;
+      }
+      applySurfaceClipUniforms(false, null);
+    }
+
+    const billboardMode = prepared.useShaderBillboard ? 1 : 0;
+    if (billboardMode !== currentBillboardMode) {
+      glContext.uniform1f(uniformBillboardModeLocation, billboardMode);
+      currentBillboardMode = billboardMode;
+    }
+    if (prepared.useShaderBillboard && prepared.billboardUniforms) {
+      const uniforms = prepared.billboardUniforms;
+      if (
+        uniforms.center.x !== currentBillboardCenter.x ||
+        uniforms.center.y !== currentBillboardCenter.y
+      ) {
+        glContext.uniform2f(
+          uniformBillboardCenterLocation,
+          uniforms.center.x,
+          uniforms.center.y
+        );
+        currentBillboardCenter.x = uniforms.center.x;
+        currentBillboardCenter.y = uniforms.center.y;
+      }
+      if (
+        uniforms.halfWidth !== currentBillboardHalfSize.x ||
+        uniforms.halfHeight !== currentBillboardHalfSize.y
+      ) {
+        glContext.uniform2f(
+          uniformBillboardHalfSizeLocation,
+          uniforms.halfWidth,
+          uniforms.halfHeight
+        );
+        currentBillboardHalfSize.x = uniforms.halfWidth;
+        currentBillboardHalfSize.y = uniforms.halfHeight;
+      }
+      if (
+        uniforms.anchor.x !== currentBillboardAnchor.x ||
+        uniforms.anchor.y !== currentBillboardAnchor.y
+      ) {
+        glContext.uniform2f(
+          uniformBillboardAnchorLocation,
+          uniforms.anchor.x,
+          uniforms.anchor.y
+        );
+        currentBillboardAnchor.x = uniforms.anchor.x;
+        currentBillboardAnchor.y = uniforms.anchor.y;
+      }
+      if (
+        uniforms.sin !== currentBillboardSinCos.x ||
+        uniforms.cos !== currentBillboardSinCos.y
+      ) {
+        glContext.uniform2f(
+          uniformBillboardSinCosLocation,
+          uniforms.sin,
+          uniforms.cos
+        );
+        currentBillboardSinCos.x = uniforms.sin;
+        currentBillboardSinCos.y = uniforms.cos;
+      }
+    }
+
+    const texture = prepared.imageResource.texture;
+    if (!texture) {
+      return false;
+    }
+
+    if (prepared.opacity !== currentOpacity) {
+      glContext.uniform1f(uniformOpacityLocation, prepared.opacity);
+      currentOpacity = prepared.opacity;
+    }
+    if (currentBoundTexture !== texture) {
+      glContext.activeTexture(glContext.TEXTURE0);
+      glContext.bindTexture(glContext.TEXTURE_2D, texture);
+      currentBoundTexture = texture;
+    }
+
+    const vertexOffset = vertexBatchOffsets.get(prepared);
+    if (vertexOffset === undefined) {
+      return false;
+    }
+
+    glContext.drawArrays(glContext.TRIANGLES, vertexOffset, QUAD_VERTEX_COUNT);
+    return true;
+  };
+
+  const release = (): void => {
+    glContext.deleteBuffer(vertexBuffer);
+    glContext.deleteProgram(program);
+  };
+
+  return {
+    beginFrame,
+    uploadVertexBatch,
+    draw,
+    release,
+  };
+};
+
+export interface DebugOutlineRenderer extends Releaseable {
+  begin(
+    screenToClipScaleX: number,
+    screenToClipScaleY: number,
+    screenToClipOffsetX: number,
+    screenToClipOffsetY: number
+  ): void;
+  drawOutline(
+    corners: readonly [
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+    ]
+  ): void;
+  end(): void;
+}
+
+export const createDebugOutlineRenderer = (
+  glContext: WebGLRenderingContext
+): DebugOutlineRenderer => {
+  const program = createShaderProgram(
+    glContext,
+    DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
+    DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE
+  );
+
+  const attribPositionLocation = glContext.getAttribLocation(
+    program,
+    'a_position'
+  );
+  if (attribPositionLocation === -1) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire debug attribute location.');
+  }
+
+  const uniformColorLocation = glContext.getUniformLocation(program, 'u_color');
+  const uniformScreenToClipScaleLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipScale'
+  );
+  const uniformScreenToClipOffsetLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipOffset'
+  );
+  if (
+    !uniformColorLocation ||
+    !uniformScreenToClipScaleLocation ||
+    !uniformScreenToClipOffsetLocation
+  ) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire debug uniforms.');
+  }
+
+  const vertexBuffer = glContext.createBuffer();
+  if (!vertexBuffer) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to create debug vertex buffer.');
+  }
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+  glContext.bufferData(
+    glContext.ARRAY_BUFFER,
+    DEBUG_OUTLINE_VERTEX_SCRATCH,
+    glContext.DYNAMIC_DRAW
+  );
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+
+  let active = false;
+
+  const begin = (
+    screenToClipScaleX: number,
+    screenToClipScaleY: number,
+    screenToClipOffsetX: number,
+    screenToClipOffsetY: number
+  ): void => {
+    glContext.useProgram(program);
+    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+    glContext.enableVertexAttribArray(attribPositionLocation);
+    glContext.vertexAttribPointer(
+      attribPositionLocation,
+      DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
+      glContext.FLOAT,
+      false,
+      DEBUG_OUTLINE_VERTEX_STRIDE,
+      0
+    );
+    glContext.disable(glContext.DEPTH_TEST);
+    glContext.depthMask(false);
+    glContext.uniform4f(
+      uniformColorLocation,
+      DEBUG_OUTLINE_COLOR[0],
+      DEBUG_OUTLINE_COLOR[1],
+      DEBUG_OUTLINE_COLOR[2],
+      DEBUG_OUTLINE_COLOR[3]
+    );
+    glContext.uniform2f(
+      uniformScreenToClipScaleLocation,
+      screenToClipScaleX,
+      screenToClipScaleY
+    );
+    glContext.uniform2f(
+      uniformScreenToClipOffsetLocation,
+      screenToClipOffsetX,
+      screenToClipOffsetY
+    );
+    active = true;
+  };
+
+  const drawOutline = (
+    corners: readonly [
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+    ]
+  ): void => {
+    if (!active) {
+      return;
+    }
+    let writeOffset = 0;
+    for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
+      const corner = corners[cornerIndex]!;
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+    }
+    glContext.bufferSubData(
+      glContext.ARRAY_BUFFER,
+      0,
+      DEBUG_OUTLINE_VERTEX_SCRATCH
+    );
+    glContext.drawArrays(glContext.LINE_LOOP, 0, DEBUG_OUTLINE_VERTEX_COUNT);
+  };
+
+  const end = (): void => {
+    if (!active) {
+      return;
+    }
+    glContext.depthMask(true);
+    glContext.enable(glContext.DEPTH_TEST);
+    glContext.disableVertexAttribArray(attribPositionLocation);
+    glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+    active = false;
+  };
+
+  const release = (): void => {
+    end();
+    glContext.deleteBuffer(vertexBuffer);
+    glContext.deleteProgram(program);
+  };
+
+  return {
+    begin,
+    drawOutline,
+    end,
+    release,
+  };
 };

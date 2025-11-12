@@ -30,7 +30,7 @@ Here is a minimal example that adds a single sprite:
 import { Map } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
+  initializeRuntimeHost,
 } from 'maplibre-gl-layers';
 
 // Create the MapLibre instance
@@ -46,8 +46,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // Add the layer after the map finishes loading
 map.on('load', async () => {
-  // Optional: enable WASM acceleration (falls back to JS when unavailable)
-  await initializeSpriteLayerHost();
+  // Initialize and add SpriteLayer to MapLibre
+  await initializeRuntimeHost();
   map.addLayer(spriteLayer);
 
   // Register an image that can be referenced by sprites
@@ -110,7 +110,7 @@ First create a `SpriteLayer` instance and add it to the MapLibre map.
 import { Map } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
+  initializeRuntimeHost,
 } from 'maplibre-gl-layers';
 
 // Create the MapLibre map with your desired style and initial view
@@ -126,8 +126,8 @@ const spriteLayer = createSpriteLayer({ id: 'vehicles' });
 
 // When MapLibre is ready
 map.on('load', async () => {
-  // Enable WASM acceleration (optional, defaults to JS calculations)
-  await initializeSpriteLayerHost();
+  // Initialize SpriteLayer
+  await initializeRuntimeHost();
 
   // Add the layer once
   map.addLayer(spriteLayer);
@@ -137,21 +137,6 @@ map.on('load', async () => {
 ```
 
 That is all you need for the initial setup. After this, prepare the images and text you want to render and start displaying sprites.
-
-### Enabling and releasing WASM acceleration
-
-SpriteLayer uses the JavaScript implementation by default. Call `initializeSpriteLayerHost()` once—optionally passing either a variant (`'simd' | 'nosimd' | 'disabled'`) or an options object `{ variant?, wasmBaseUrl? }`—to attempt loading the WebAssembly host. When initialization fails or is skipped, the layer continues to operate via CPU calculations.
-
-```typescript
-await initializeSpriteLayerHost({
-  variant: 'simd',
-  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
-});
-```
-
-Use `wasmBaseUrl` when you copy the packaged `dist/wasm` directory to a different location (for example, a CDN or a custom public path). If it is omitted, the loader fetches the `.wasm` files directly next to the distributed `dist` files, allowing Vite/Rollup/webpack users to consume the npm package without extra configuration.
-
-When you no longer need the WebAssembly host—such as when the entire application is shutting down—call `releaseSpriteLayerHost()`. After releasing, the layer automatically falls back to the JavaScript implementation until `initializeSpriteLayerHost()` is called again.
 
 ## Registering Images and Text
 
@@ -311,6 +296,8 @@ spriteLayer.addSprite('vehicle-label', {
 
 The following example sets an anchor at the tip of an upward-pointing arrow image, rotates the image 180 degrees, and makes it a downward-pointing arrow with the arrow tip as the anchor:
 
+![Anchor-rotate](./images/anchor-rotate.png)
+
 ```typescript
 // Keep the arrow anchored at its tip while rotating it downward
 spriteLayer.addSprite('vehicle-rotated', {
@@ -429,7 +416,11 @@ spriteLayer.updateSprite(SPRITE_ID, {
 How the old and new coordinates are used for interpolation calculations depends on the interpolation method:
 
 - **Feedback**: Moves from the old coordinates to the new coordinates over the specified interpolation time.
+
+  ![Feedback](./images/feedback.png)
 - **Feedforward**: Assumes movement from the old coordinates to the new coordinates over the specified interpolation time. Extends this vector by the interpolation time to obtain the predicted movement coordinates. Then moves from the new coordinates to the predicted movement coordinates over the specified interpolation time.
+
+  ![Feedforward](./images/feedforward.png)
 
 With feedback, even if a new coordinate is set, the animation won't reach that coordinate until it finishes, so there will always be a display delay. On the other hand, using feedforward allows reaching near the predicted movement coordinate, so the supplied coordinate and the displayed coordinate can be expected to match quite closely.
 
@@ -717,6 +708,8 @@ console.log(`Sprites with adjusted opacity: ${dimmed}`);
 
 The updater passed to `updateForEach` is reusable. Avoid storing it outside the callback; apply changes immediately. To inspect the current image layout, call `updater.getImageIndexMap()` and iterate through the available sub-layer and order pairs.
 
+---
+
 ## Initialize Options
 
 `createSpriteLayer(options?: SpriteLayerOptions)` accepts a small set of configuration values that govern how sprites are identified and scaled on the map.
@@ -761,6 +754,9 @@ const spriteLayer = createSpriteLayer({
 - `textureFiltering.generateMipmaps` - Forces mipmap generation even when the chosen filter does not require it, improving quality for aggressively downscaled sprites on WebGL2 or power-of-two images. When the context cannot build mipmaps (for example WebGL1 with non power-of-two textures) the layer falls back to linear filtering automatically.
 - `textureFiltering.maxAnisotropy` - Requests anisotropic filtering (>= 1) when the runtime exposes `EXT_texture_filter_anisotropic`, helping surface-aligned sprites remain sharp at shallow viewing angles. The requested value is clamped to the GPU limit and only applied when mipmaps are available.
 - `showDebugBounds` - When `true`, the layer overlays red outlines representing sprite hit-test regions.
+
+  ![debug-bounds](./images/debug-bounds.png)
+
   This is intended for debugging pointer interaction event handler and should remain `false` in production for best performance.
 
 All scaling values and texture filtering values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
@@ -784,9 +780,119 @@ const spriteLayer = createSpriteLayer({
 });
 ```
 
-The [demo page](https://kekyo.github.io/maplibre-gl-layers/) uses `STANDARD_SPRITE_SCALING_OPTIONS`, so it's a good idea to check what happens when you zoom in and out.
+The [demo page](https://kekyo.github.io/maplibre-gl-layers/) features a button to switch between `Standard` and `Unlimited`. You may want to check what happens when you zoom in and out.
 
 Note: The default scaling option is set to “Unlimited” because introducing restrictions causes loss of precise size rendering. We strongly recommend disabling the scaling option, especially when experimenting with image and text placement.
+
+---
+
+## Enabling WASM acceleration
+
+By default, SpriteLayer performs coordinate calculations using its JavaScript implementation.
+Initializing the WASM runtime module offloads coordinate calculations to the WASM module.
+
+You can attempt to load the WASM host by calling `initializeRuntimeHost()` once, specifying options in the form of `{ variant?, wasmBaseUrl? }` as arguments.
+If you do not call it or if initialization fails, it will automatically fall back to JavaScript calculations.
+
+```typescript
+// Execute initialization to obtain the selected calculation type
+const selectedVariant = await initializeRuntimeHost({
+  variant: 'simd',
+  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
+});
+```
+
+The `variant` parameter specifies the type of WASM module.
+
+* `simd` uses SIMD operations.
+* `nosimd` does not use SIMD operations.
+* `simd-mt` uses multithreading and SIMD operations (with limitations; see below).
+
+The default is `simd`. Since most modern browsers support SIMD operations, the default setting should be fine.
+
+By specifying `wasmBaseUrl`, you can copy the `dist/wasm` directory included in the npm package to any location (such as a CDN) for operation.
+If omitted, `*.wasm` files located directly under the distributed `dist` directory will be loaded as-is,
+requiring no special configuration in Vite/Rollup/webpack, etc.
+However, the server must include the `Content-Type: application/wasm` header.
+Note that depending on the browser implementation, if the correct MIME type is not applied, the module may not load as a WASM module.
+
+The return value indicates the selected calculation type.
+For example, if loading a SIMD calculation module fails, a different type is returned.
+
+To release WASM when the SPA page terminates, call `releaseRuntimeHost()`.
+After release, it will operate using JavaScript computation until `initializeRuntimeHost()` is called again.
+
+#### WASM multi-threading limitation
+
+By specifying `simd-mt` for the `variant`, you can load a multithreaded module that enables parallel processing of WASM operations using multiple threads.
+However, `simd-mt` does not function simply by being specified.
+
+> Note: WASM multi-threading technology does not yet appear to be sufficiently practical.
+> While the code itself executed without issues, but significant constraints exist in the runtime environment.
+> The situation may improve in the future, such as through browser specification revisions, but please carefully consider its use at the production level.
+
+1. The multi-threading variant utilizes [`SharedArrayBuffer`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer), so it will not be enabled unless cross-origin isolation is satisfied on the browser side.
+   The web server must include the following response headers:
+   - Top-level HTML opened directly by the user: `Cross-Origin-Opener-Policy: same-origin`
+   - That HTML and all Worker entries loaded from it (`dist/wasm/offloads-simd-mt.js`, `*.wasm` files, custom Worker bundles, etc.): `Cross-Origin-Embedder-Policy: require-corp` (or `credentialless` if you choose that)
+   - Assets from other origins are blocked by COEP, so explicitly allow them with CORS or an appropriate `Cross-Origin-Resource-Policy` response
+   If these conditions are not met, the `simd-mt` module will fail to load and fall back to `simd`.
+2. The amount of memory used and the number of threads used must be statically determined during the WASM module build.
+   The WASM module included in the distribution package is set to 512MB/4 threads.
+   - The 512MB memory requirement is based on displaying 10,000 sprites with secondary images on the demo page.
+   - If memory usage exceeds the limit, an "OOM error" occurs within the WASM module's worker, causing all functions to stop.
+     Therefore, if your usage conditions differ from this assumption, you must build and deploy your own WASM module.
+
+Note: The [demo page](https://kekyo.github.io/maplibre-gl-layers/) is deployed on github.io, but unfortunately, github.io does not meet these requirements, so you cannot select `simd-mt` on the demo page.
+If you want to try it out quickly, clone the repository and run the demo page locally with `npm install && npm run dev`.
+The maintainer has verified that it works on Firefox on Ubuntu 24.04/22.04 (Build 144.0.2).
+
+When using `simd-mt` with a development server like Vite, `COOP` and `COEP` headers are also required.
+For example, specify them in `vite.config.ts` as follows:
+
+```typescript
+// COOP, COEP headers
+const COOP_COEP_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
+export default defineConfig({
+  // When running the development server (vite dev)
+  server: {
+    headers: COOP_COEP_HEADERS,
+  },
+  // When running in preview
+  preview: {
+    headers: COOP_COEP_HEADERS,
+  },
+});
+```
+
+Additionally, you can dynamically determine whether multi-threaded modules are available using `detectMultiThreadedModuleAvailability()`.
+Here is the overall initialization flow:
+
+```typescript
+import {
+  initializeRuntimeHost,
+  detectMultiThreadedModuleAvailability,
+} from ‘maplibre-gl-layers’;
+
+// Determine if multi-threaded modules are available
+const { available, reason } = detectMultiThreadedModuleAvailability();
+if (!available) {
+  console.warn(
+    `SIMD + Threads unavailable: ${reason ?? 'Unknown constraint'}`
+  );
+}
+
+// Choose between using the multithreaded module or the regular SIMD module
+const desiredVariant = available ? 'simd-mt' : 'simd';
+const effectiveVariant = await initializeRuntimeHost({
+  variant: desiredVariant,
+});
+console.log(`Actual variant used: ${effectiveVariant}`);
+```
 
 ---
 
@@ -796,6 +902,16 @@ Note: The default scaling option is set to “Unlimited” because introducing r
 - Improves minor interfaces
 - Adds route-oriented layer
 - Bug fixes
+
+## Motivation
+
+This API was designed because MapLibre's standard `Facilities` imposed significant functional constraints when displaying large numbers of moving objects or landmarks, and we wanted a simpler, more direct API for dynamic manipulation.
+
+MapLibre's Facilities API implements immutability.
+While this is beneficial in itself, it hinders dynamic handling of large numbers of coordinate points (sprites) and significantly degrades performance.
+
+`maplibre-gl-layers` abandons immutability and unifies the API as imperative.
+Even if you wish to introduce immutability, you can easily achieve it by wrapping this API.
 
 ## License
 

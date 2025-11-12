@@ -381,7 +381,7 @@ export const createWasmCalculateSurfaceDepthKey = (
 const INPUT_HEADER_LENGTH = 15;
 const INPUT_FRAME_CONSTANT_LENGTH = 24;
 const INPUT_MATRIX_LENGTH = 48;
-const RESOURCE_STRIDE = 4;
+const RESOURCE_STRIDE = 9;
 const SPRITE_STRIDE = 6;
 const ITEM_STRIDE = 27;
 const INPUT_BASE_LENGTH =
@@ -1000,10 +1000,27 @@ const convertToWasmProjectionState = <TTag>(
         parameterBuffer[cursor++] = resource.width;
         parameterBuffer[cursor++] = resource.height;
         parameterBuffer[cursor++] = resource.texture ? 1 : 0;
+        parameterBuffer[cursor++] =
+          typeof resource.atlasPageIndex === 'number'
+            ? resource.atlasPageIndex
+            : -1;
+        parameterBuffer[cursor++] =
+          typeof resource.atlasU0 === 'number' ? resource.atlasU0 : 0;
+        parameterBuffer[cursor++] =
+          typeof resource.atlasV0 === 'number' ? resource.atlasV0 : 0;
+        parameterBuffer[cursor++] =
+          typeof resource.atlasU1 === 'number' ? resource.atlasU1 : 1;
+        parameterBuffer[cursor++] =
+          typeof resource.atlasV1 === 'number' ? resource.atlasV1 : 1;
       } else {
         parameterBuffer[cursor++] = 0;
         parameterBuffer[cursor++] = 0;
         parameterBuffer[cursor++] = 0;
+        parameterBuffer[cursor++] = -1;
+        parameterBuffer[cursor++] = 0;
+        parameterBuffer[cursor++] = 0;
+        parameterBuffer[cursor++] = 1;
+        parameterBuffer[cursor++] = 1;
       }
     }
 

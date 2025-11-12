@@ -32,82 +32,55 @@ a {
 
 #panel {
   position: absolute;
-  top: 16px;
-  left: 16px;
-  max-width: 340px;
-  padding: 16px 20px 24px 20px;
-  border-radius: 12px;
+  top: 1rem;
+  left: 1rem;
+  max-width: 22rem;
+  max-height: calc(100vh - 2rem);
+  padding: 0.5rem 1rem 1rem 1rem;
+  border-radius: 0.5rem;
   background: rgba(100, 60, 60, 0.65);
-  box-shadow: 0 16px 32px rgba(100, 60, 60, 0.35);
-  backdrop-filter: blur(4px);
-  line-height: 1.5;
-  font-size: 14px;
-}
-
-#panel h1 {
-  font-size: 18px;
-  font-weight: 600;
-}
-
-#panel h2 {
-  font-size: 17px;
-  font-weight: 500;
-}
-
-#controls {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  min-width: 390px;
-  max-width: 450px;
-  max-height: calc(100vh - 32px);
-  padding: 16px 20px 24px 20px;
-  border-radius: 12px;
-  background: rgba(100, 60, 60, 0.65);
-  box-shadow: 0 16px 32px rgba(100, 60, 60, 0.35);
-  backdrop-filter: blur(4px);
-  line-height: 1.5;
-  font-size: 14px;
+  box-shadow: 0 1rem 2rem rgba(100, 60, 60, 0.35);
+  backdrop-filter: blur(0.3rem);
+  line-height: 1.2rem;
+  font-size: 0.83rem;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
 }
 
-#controls h1 {
-  font-size: 18px;
+#panel h1 {
+  font-size: 1rem;
   font-weight: 600;
 }
 
-#controls h2 {
-  font-size: 17px;
+#panel h2 {
+  font-size: 0.8rem;
   font-weight: 500;
 }
 
 #map-status {
-  margin: 12px 0 16px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  margin: 1rem 0 1rem;
+  padding: 0.7rem 0.7rem;
+  border-radius: 0.5rem;
   background: rgba(100, 60, 60, 0.4);
-  border: 1px solid rgba(100, 60, 60, 0.2);
 }
 
 #map-status h2 {
-  margin: 0 0 8px;
-  font-size: 15px;
+  margin: 0 0 0.6rem;
+  font-size: 0.9rem;
   font-weight: 600;
 }
 
 #selected-sprite {
-  margin: 12px 0 0;
-  padding: 10px 12px;
-  border-radius: 8px;
+  margin: 1rem 0 0;
+  padding: 0.7rem 0.7rem;
+  border-radius: 0.5rem;
   background: rgba(1128, 80, 80, 0.4);
-  border: 1px solid rgba(100, 60, 60, 0.2);
 }
 
 #selected-sprite h2 {
-  margin: 0 0 8px;
-  font-size: 15px;
+  margin: 0 0 1rem;
+  font-size: 1.2rem;
   font-weight: 600;
 }
 
@@ -115,8 +88,8 @@ a {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: 0.9rem;
+  line-height: 1.1rem;
 }
 
 .status-row + .status-row {
@@ -133,8 +106,37 @@ a {
   color: #f9fafb;
 }
 
+#controls {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  min-width: 20rem;
+  max-width: 34rem;
+  max-height: calc(100vh - 2rem);
+  padding: 0.5rem 1rem 1rem 1rem;
+  border-radius: 0.5rem;
+  background: rgba(100, 60, 60, 0.65);
+  box-shadow: 0 1rem 2rem rgba(100, 60, 60, 0.35);
+  backdrop-filter: blur(0.3rem);
+  line-height: 1.2rem;
+  font-size: 0.83rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+
+#controls h1 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+#controls h2 {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
 .control-group {
-  margin-bottom: 16px;
+  margin-bottom: 1rem;
 }
 
 .control-group:last-of-type {
@@ -142,36 +144,36 @@ a {
 }
 
 .button-row {
-  margin-top: 8px;
+  margin-top: 1rem;
   display: flex;
-  gap: 8px;
+  gap: 1rem;
 }
 
 .secondary-interpolation-group {
-  margin-top: 8px;
+  margin-top: 0.5rem;
 }
 
 .range-control {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 12px;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
 }
 
 .range-control:last-of-type {
-  margin-bottom: 8px;
+  margin-bottom: 1rem;
 }
 
 .range-label {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 12px;
+  font-size: 0.9rem;
   color: #cbd5f5;
 }
 
 .range-value {
-  margin-left: 8px;
+  margin-left: 0.9rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: #f8fafc;
@@ -183,7 +185,18 @@ a {
 }
 
 .control-hint {
-  margin: 6px 0 0;
-  font-size: 12px;
+  margin: 0.5rem 0 0;
+  font-size: 1rem;
   color: rgba(203, 213, 255, 0.75);
+}
+
+#selected-sprite .toggle-button-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+#selected-sprite .toggle-button-row .toggle-button {
+  flex: 1 1 0;
 }

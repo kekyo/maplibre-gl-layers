@@ -54,8 +54,9 @@ const copyWasmArtifactsPlugin = (): Plugin => ({
     if (!existsSync(wasmDestDir)) {
       mkdirSync(wasmDestDir, { recursive: true });
     }
+    const allowedSuffixes = ['.wasm', '.js', '.worker.js'];
     for (const entry of readdirSync(wasmSourceDir)) {
-      if (!entry.endsWith('.wasm')) {
+      if (!allowedSuffixes.some((suffix) => entry.endsWith(suffix))) {
         continue;
       }
       const src = resolve(wasmSourceDir, entry);

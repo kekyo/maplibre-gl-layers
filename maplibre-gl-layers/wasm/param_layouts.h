@@ -17,7 +17,7 @@
 constexpr std::size_t INPUT_HEADER_LENGTH = 15;
 constexpr std::size_t INPUT_FRAME_CONSTANT_LENGTH = 24;
 constexpr std::size_t INPUT_MATRIX_LENGTH = 48;
-constexpr std::size_t RESOURCE_STRIDE = 4;
+constexpr std::size_t RESOURCE_STRIDE = 9;
 constexpr std::size_t SPRITE_STRIDE = 6;
 constexpr std::size_t ITEM_STRIDE = 27;
 
@@ -58,6 +58,11 @@ struct InputResourceEntry {
   double width;
   double height;
   double textureReady;
+  double atlasPageIndex;
+  double atlasU0;
+  double atlasV0;
+  double atlasU1;
+  double atlasV1;
 };
 
 static_assert(sizeof(InputResourceEntry) == RESOURCE_STRIDE * sizeof(double));

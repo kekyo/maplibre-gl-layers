@@ -10,8 +10,9 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Map, type MapOptions, type SourceSpecification } from 'maplibre-gl';
 import {
   createSpriteLayer,
-  initializeSpriteLayerHost,
-  releaseSpriteLayerHost,
+  detectMultiThreadedModuleAvailability,
+  initializeRuntimeHost,
+  releaseRuntimeHost,
   STANDARD_SPRITE_SCALING_OPTIONS,
   UNLIMITED_SPRITE_SCALING_OPTIONS,
   type SpriteLayerCalculationVariant,
@@ -218,18 +219,20 @@ type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
 /** Formats the movement speed multiplier for HUD display. */
 const formatMovementSpeedScale = (scale: number): string => {
   if (scale <= 0) {
-    return '0×';
+    return '0x';
   }
   if (scale >= 1) {
-    return `${scale.toFixed(1)}×`;
+    return `${scale.toFixed(1)}x`;
   }
-  return `${scale.toFixed(2)}×`;
+  return `${scale.toFixed(2)}x`;
 };
 
 const formatWasmVariantLabel = (
   variant: SpriteLayerCalculationVariant
 ): string => {
   switch (variant) {
+    case 'simd-mt':
+      return 'SIMD + Threads';
     case 'simd':
       return 'SIMD';
     case 'nosimd':
@@ -246,6 +249,22 @@ const resolveSpriteScalingOptions = () =>
   spriteScalingMode === 'standard'
     ? STANDARD_SPRITE_SCALING_OPTIONS
     : UNLIMITED_SPRITE_SCALING_OPTIONS;
+
+const {
+  available: isSimdThreadVariantSupported,
+  reason: simdThreadUnavailableReason,
+} = detectMultiThreadedModuleAvailability();
+
+const simdThreadUnavailableMessage = isSimdThreadVariantSupported
+  ? undefined
+  : (simdThreadUnavailableReason ??
+    'Enable cross-origin isolation (COOP/COEP) to use the SIMD + Threads mode.');
+
+if (!isSimdThreadVariantSupported && simdThreadUnavailableMessage) {
+  console.info(
+    `[SpriteLayer Demo] Disabling SIMD + Threads button: ${simdThreadUnavailableMessage}`
+  );
+}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -470,7 +489,11 @@ type BasemapId = 'osm' | 'carto';
 /** Currently active animation mode, toggled from the control panel. */
 let currentAnimationMode: AnimationMode = 'random';
 /** Currently selected base map. */
-let currentBasemapId: BasemapId = 'osm';
+const prefersDarkScheme =
+  typeof window !== 'undefined'
+    ? window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    : false;
+let currentBasemapId: BasemapId = prefersDarkScheme ? 'carto' : 'osm';
 /** Sprite rendering mode, toggled between billboard and surface. */
 let currentSpriteMode: SpriteMode = 'surface';
 /** Whether the sprite auto-rotates to face the direction of travel. */
@@ -479,6 +502,7 @@ let isAutoRotationEnabled = true;
 let isMovementInterpolationEnabled = true;
 let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
 let spriteScalingMode: 'standard' | 'unlimited' = 'standard';
+let showDebugBounds = false;
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
@@ -525,6 +549,11 @@ let secondaryImageOrbitDegrees = 0;
 let updateLocationInterpolationButton: (() => void) | undefined;
 /** UI updater for the mouse-events monitoring toggle. */
 let updateMouseEventsButton: (() => void) | undefined;
+/** UI updater for the debug bounds toggle. */
+let updateDebugBoundsButton: (() => void) | undefined;
+
+const shouldEnableHitTesting = () =>
+  isMouseEventsMonitoringEnabled || showDebugBounds;
 
 /**
  * Template that builds the application HUD.
@@ -538,23 +567,46 @@ const createHud = () => {
     orbitOffsetDegInterpolationMode === 'feedforward';
   const orbitMetersFeedforwardEnabled =
     orbitOffsetMetersInterpolationMode === 'feedforward';
+  const simdMtButtonActive =
+    isSimdThreadVariantSupported && requestedCalculationVariant === 'simd-mt';
+  const simdMtButtonExtraAttributes = (() => {
+    if (isSimdThreadVariantSupported) {
+      return '';
+    }
+    const titleAttr = simdThreadUnavailableMessage
+      ? ` title="${simdThreadUnavailableMessage}"`
+      : '';
+    return ` disabled data-disabled="true"${titleAttr}`;
+  })();
   return `
     <div id="map" data-testid="map-canvas"></div>
     <aside id="panel" data-testid="panel-info">
-      <h1 data-testid="panel-title">MapLibre <a href="${repository_url}" target="_blank">SpriteLayer ${version}</a> Demo</h1>
+      <h1 data-testid="panel-title"><a href="${repository_url}" target="_blank">maplibre-gl-layer ${version} demo</a></h1>
       <p>
         Each sprite stays clamped to the ground and randomly chooses between screen-aligned and map-aligned orientations. Increase the count to as many as ${MAX_NUMBER_OF_SPRITES} sprites when needed.
       </p>
       <p>Pan, tilt, or zoom the map to inspect how the sprites respond.</p>
       <div class="control-group" data-testid="group-wasm-mode">
         <div class="status-row">
-          <span class="status-label">Active</span>
+          <span class="status-label">Calculation method</span>
           <span
             class="status-value"
             data-status="wasm-mode-status"
             data-testid="status-wasm-mode"
           >${formatWasmVariantLabel(requestedCalculationVariant)}</span>
         </div>
+        <button
+          type="button"
+          class="toggle-button${simdMtButtonActive ? ' active' : ''}"
+          data-control="wasm-mode"
+          data-option="simd-mt"
+          data-label="Wasm SIMD + Threads"
+          aria-pressed="${simdMtButtonActive}"
+          data-testid="toggle-wasm-simd-mt"
+          ${simdMtButtonExtraAttributes}
+        >
+          Wasm SIMD + Threads
+        </button>
         <button
           type="button"
           class="toggle-button${
@@ -588,11 +640,11 @@ const createHud = () => {
           }"
           data-control="wasm-mode"
           data-option="disabled"
-          data-label="Disabled"
+          data-label="JavaScript"
           aria-pressed="${requestedCalculationVariant === 'disabled'}"
           data-testid="toggle-wasm-disabled"
         >
-          Disabled
+          JavaScript
         </button>
       </div>
       <div class="control-group" data-testid="group-scaling-mode">
@@ -675,16 +727,28 @@ const createHud = () => {
         </div>
       </section>
       <section id="selected-sprite" data-testid="section-selected-sprite">
-        <button
-          type="button"
-          class="toggle-button${isMouseEventsMonitoringEnabled ? ' active' : ''}"
-          data-control="mouse-events-toggle"
-          data-label="Mouse Events"
-          data-active-text="ON"
-          data-inactive-text="OFF"
-          aria-pressed="${isMouseEventsMonitoringEnabled}"
-          data-testid="toggle-mouse-events"
-        >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
+        <div class="toggle-button-row">
+          <button
+            type="button"
+            class="toggle-button${isMouseEventsMonitoringEnabled ? ' active' : ''}"
+            data-control="mouse-events-toggle"
+            data-label="Mouse Events"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${isMouseEventsMonitoringEnabled}"
+            data-testid="toggle-mouse-events"
+          >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
+          <button
+            type="button"
+            class="toggle-button${showDebugBounds ? ' active' : ''}"
+            data-control="debug-bounds-toggle"
+            data-label="Debug Bounds"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${showDebugBounds}"
+            data-testid="toggle-debug-bounds"
+          >Debug Bounds: ${showDebugBounds ? 'ON' : 'OFF'}</button>
+        </div>
         <p
           class="status-placeholder"
           data-selected-placeholder
@@ -1336,6 +1400,13 @@ const main = async () => {
           layout: {
             visibility: currentBasemapId === 'carto' ? 'visible' : 'none',
           },
+          paint: {
+            'raster-brightness-min': 0.2,
+            'raster-brightness-max': 1,
+            'raster-contrast': 0.25,
+            'raster-saturation': -0.3,
+            'raster-fade-duration': 500,
+          },
         },
       ],
     },
@@ -1556,7 +1627,7 @@ const main = async () => {
     }
     isMouseEventsMonitoringEnabled = enabled;
     if (spriteLayer) {
-      spriteLayer.setHitTestEnabled(enabled);
+      spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
     }
     if (enabled) {
       attachSpriteMouseEvents();
@@ -1688,6 +1759,7 @@ const main = async () => {
           generateMipmaps: true,
           maxAnisotropy: 4,
         },
+        showDebugBounds,
       });
 
     /**
@@ -2823,6 +2895,21 @@ const main = async () => {
         });
       }
 
+      const debugBoundsButton = queryFirst<HTMLButtonElement>(
+        '[data-control="debug-bounds-toggle"]'
+      );
+      if (debugBoundsButton) {
+        updateDebugBoundsButton = () => {
+          setToggleButtonState(debugBoundsButton, showDebugBounds, 'binary');
+        };
+        updateDebugBoundsButton();
+        debugBoundsButton.addEventListener('click', () => {
+          showDebugBounds = !showDebugBounds;
+          updateDebugBoundsButton?.();
+          void rebuildSpriteLayer();
+        });
+      }
+
       const wasmModeButtons = Array.from(
         queryAll<HTMLButtonElement>('[data-control="wasm-mode"]')
       );
@@ -2841,8 +2928,17 @@ const main = async () => {
             if (!option) {
               return;
             }
-            setToggleButtonState(button, displayedVariant === option, 'select');
-            button.disabled = wasmModePending;
+            const isUnsupportedSimdMt =
+              option === 'simd-mt' && !isSimdThreadVariantSupported;
+            setToggleButtonState(
+              button,
+              !isUnsupportedSimdMt && displayedVariant === option,
+              'select'
+            );
+            button.disabled = wasmModePending || isUnsupportedSimdMt;
+            if (isUnsupportedSimdMt && simdThreadUnavailableMessage) {
+              button.title = simdThreadUnavailableMessage;
+            }
           });
           if (wasmModeStatusEl) {
             if (wasmModePending) {
@@ -2862,7 +2958,11 @@ const main = async () => {
             return;
           }
           button.addEventListener('click', async () => {
-            if (wasmModePending || requestedCalculationVariant === option) {
+            if (
+              (option === 'simd-mt' && !isSimdThreadVariantSupported) ||
+              wasmModePending ||
+              requestedCalculationVariant === option
+            ) {
               return;
             }
             wasmModePending = true;
@@ -3548,15 +3648,15 @@ const main = async () => {
 
         spriteLayer = createSpriteLayerInstance();
         if (requestedCalculationVariant === 'disabled') {
-          releaseSpriteLayerHost();
+          releaseRuntimeHost();
           currentCalculationVariant = 'disabled';
         } else {
-          currentCalculationVariant = await initializeSpriteLayerHost(
-            requestedCalculationVariant
-          );
+          currentCalculationVariant = await initializeRuntimeHost({
+            variant: requestedCalculationVariant,
+          });
         }
         map.addLayer(spriteLayer);
-        spriteLayer.setHitTestEnabled(isMouseEventsMonitoringEnabled);
+        spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
         if (isMouseEventsMonitoringEnabled) {
           attachSpriteMouseEvents();
         }
