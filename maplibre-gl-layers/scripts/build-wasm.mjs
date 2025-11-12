@@ -41,7 +41,7 @@ const pthreadPoolSize = Math.max(
 
 const pthreadMemoryMegabytes = Math.max(
   16,
-  parsePositiveInteger(process.env.WASM_PTHREAD_MEMORY_MB, 256)
+  parsePositiveInteger(process.env.WASM_PTHREAD_MEMORY_MB, 512)
 );
 const pthreadMemoryBytes = pthreadMemoryMegabytes * 1024 * 1024;
 

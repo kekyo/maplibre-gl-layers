@@ -830,24 +830,30 @@ const selectedVariant = await initializeRuntimeHost({
 SPAページの終了などで WASM を解放したい場合は、`releaseRuntimeHost()` を呼び出してください。
 解放後は再度 `initializeRuntimeHost()` を呼び出すまで JavaScript 計算で動作します。
 
-#### WASMマルチスレッド時のクロスオリジン隔離要件
+#### WASMマルチスレッド時の制約
 
 `variant`に`simd-mt`を指定することで、WASM演算をマルチスレッドで並列処理させる、マルチスレッドモジュールをロード出来ます。
 但し、`simd-mt`は指定するだけでは機能しません。
 
-マルチスレッドのバリアントは `SharedArrayBuffer` を利用するため、ブラウザ側でクロスオリジン隔離 (cross-origin isolated) が満たされていないと有効化されません。
-ウェブサーバーが、以下のレスポンスヘッダを付与する必要があります:
+> 注意: WASMマルチスレッド技術は、まだ十分に実用的では無さそうです。コード自体は問題なく動作しましたが、実行環境に大きな制約が存在します。
+> 今後、ブラウザの仕様が改定されるなどして状況が改善されるかもしれませんが、プロダクションレベルでの使用は十分検討してください。
 
-- ユーザーが直接開くトップレベル HTML: `Cross-Origin-Opener-Policy: same-origin`
-- その HTML と、そこから読み込まれるすべての Worker エントリ（`dist/wasm/offloads-simd-mt.js` や `*.wasm`、独自の Worker バンドルなど）: `Cross-Origin-Embedder-Policy: require-corp`（もしくは `credentialless` を選択する場合はそちら）
-- 別オリジンのアセットは COEP でブロックされるため、CORS もしくは `Cross-Origin-Resource-Policy` の適切な応答で明示的に許可する
-
-これらの条件が満たされない場合は、`simd-mt`モジュールのロードに失敗するため、`simd`にフォールバックします。
+1. マルチスレッドのバリアントは [`SharedArrayBuffer`](https://developer.mozilla.org/ja/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer) を利用するため、ブラウザ側でクロスオリジン隔離 (cross-origin isolated) が満たされていないと有効化されません。
+   ウェブサーバーが、以下のレスポンスヘッダを付与する必要があります:
+   - ユーザーが直接開くトップレベル HTML: `Cross-Origin-Opener-Policy: same-origin`
+   - その HTML と、そこから読み込まれるすべての Worker エントリ（`dist/wasm/offloads-simd-mt.js` や `*.wasm`、独自の Worker バンドルなど）: `Cross-Origin-Embedder-Policy: require-corp`（もしくは `credentialless` を選択する場合はそちら）
+   - 別オリジンのアセットは COEP でブロックされるため、CORS もしくは `Cross-Origin-Resource-Policy` の適切な応答で明示的に許可する
+   これらの条件が満たされない場合は、`simd-mt`モジュールのロードに失敗するため、`simd`にフォールバックします。
+2. 使用メモリ量と使用スレッド数は、WASMモジュールのビルド時に静的に決定する必要があり、配布パッケージに含まれるWASMモジュールは、512MB/4スレッドになっています。
+   - 使用メモリ量512MBは、デモページにおいて、10000スプライトをセカンダリイメージとともに表示する場合に必要とする量です。
+   - 使用メモリ量が超えると、WASMモジュールのワーカー内でOOMが発生し、全ての機能が停止してしまいます。
+     したがって、あなたの使用条件で想定が異なる場合は、独自のWASMモジュールをビルドして配置する必要があります。
 
 補足: [デモページ](https://kekyo.github.io/maplibre-gl-layers/) はgithub.ioにデプロイしていますが、github.ioはこの要件を満たしていないため、残念ながらデモページで`simd-mt`を選択することは出来ません。
 手っ取り早く試してみたい場合は、リポジトリをクローンして、`npm install && npm run dev` でデモページをローカルで実行すると良いでしょう。
+メンテナーは、Firefox on Ubuntu 24.04/22.04 (Build 144.0.2)で動作確認しました。
 
-Viteのような開発サーバーで`simd-mt`を使用する場合も、COOP, COEPヘッダが必要です。例えば、vite.config.tsで以下のように指定します:
+Viteのような開発サーバーで`simd-mt`を使用する場合も、`COOP`, `COEP`ヘッダが必要です。例えば、vite.config.tsで以下のように指定します:
 
 ```typescript
 // COOP, COEPヘッダ
@@ -893,6 +899,15 @@ console.log(`実際に使用されたバリアント: ${effectiveVariant}`);
 ```
 
 ---
+
+## 動機
+
+移動体や地物を大量に表示させたい場合に、MapLibre標準の`Facilities`では機能的な制約が大きかったのと、もっと簡単かつ直接的に動的な操作出来るAPIが欲しかったため設計しました。
+
+MapLibreのFacilitiesは、いわゆるイミュータビリティ（不変）を実現するAPIです。
+それ自体は良いことなのですが、多量の座標点（スプライト）を動的に扱うには邪魔で、パフォーマンスが著しく低下します。
+
+`maplibre-gl-layers`ではイミュータビリティを捨てて、命令的なAPIで統一しています。イミュータビリティを導入したい場合でも、このAPIをラップして容易に実現できるでしょう。
 
 ## ライセンス
 

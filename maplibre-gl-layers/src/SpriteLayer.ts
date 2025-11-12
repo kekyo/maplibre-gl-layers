@@ -59,7 +59,6 @@ import type {
   Canvas2DSource,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
-  SurfaceShaderInputs,
   ProjectionHost,
   PreparedDrawSpriteImageParams,
   RenderCalculationHost,
@@ -109,23 +108,11 @@ import {
   type Rect as LooseQuadTreeRect,
 } from './looseQuadTree';
 import {
-  POSITION_COMPONENT_COUNT,
-  UV_COMPONENT_COUNT,
-  VERTEX_STRIDE,
-  UV_OFFSET,
-  QUAD_VERTEX_COUNT,
-  VERTEX_SHADER_SOURCE,
-  FRAGMENT_SHADER_SOURCE,
-  INITIAL_QUAD_VERTICES,
-  DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
-  DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE,
-  DEBUG_OUTLINE_VERTEX_COUNT,
-  DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
-  DEBUG_OUTLINE_VERTEX_STRIDE,
-  DEBUG_OUTLINE_VERTEX_SCRATCH,
-  DEBUG_OUTLINE_COLOR,
   DEBUG_OUTLINE_CORNER_ORDER,
-  createShaderProgram,
+  createSpriteDrawProgram,
+  createDebugOutlineRenderer,
+  type SpriteDrawProgram,
+  type DebugOutlineRenderer,
 } from './shader';
 import { createCalculationHost } from './calculationHost';
 import {
@@ -1156,61 +1143,14 @@ export const createSpriteLayer = <T = any>(
   let gl: WebGLRenderingContext | null = null;
   /** MapLibre map instance provided to the custom layer. */
   let map: MapLibreMap | null = null;
-  /** Compiled WebGL program. */
-  let program: WebGLProgram | null = null;
-  /** Vertex buffer used for quad geometry. */
-  let vertexBuffer: WebGLBuffer | null = null;
-  /** Attribute location for vertex positions. */
-  let attribPositionLocation = -1;
-  /** Attribute location for UV coordinates. */
-  let attribUvLocation = -1;
-  /** Uniform location for the texture sampler. */
-  let uniformTextureLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for sprite opacity. */
-  let uniformOpacityLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the screen-to-clip scale vector. */
-  let uniformScreenToClipScaleLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the screen-to-clip offset vector. */
-  let uniformScreenToClipOffsetLocation: WebGLUniformLocation | null = null;
-  /** Uniform location toggling shader-based billboard geometry. */
-  let uniformBillboardModeLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the billboard center in screen space. */
-  let uniformBillboardCenterLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the billboard half-size in pixels. */
-  let uniformBillboardHalfSizeLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the billboard anchor vector. */
-  let uniformBillboardAnchorLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for billboard rotation sine/cosine. */
-  let uniformBillboardSinCosLocation: WebGLUniformLocation | null = null;
-  /** Uniform location toggling shader-based surface geometry. */
-  let uniformSurfaceModeLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for surface depth bias multiplier. */
-  let uniformSurfaceDepthBiasLocation: WebGLUniformLocation | null = null;
-  /** Uniform enabling clip-space surface reconstruction. */
-  let uniformSurfaceClipEnabledLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the surface clip-space center. */
-  let uniformSurfaceClipCenterLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the surface clip-space east basis vector. */
-  let uniformSurfaceClipBasisEastLocation: WebGLUniformLocation | null = null;
-  /** Uniform location for the surface clip-space north basis vector. */
-  let uniformSurfaceClipBasisNorthLocation: WebGLUniformLocation | null = null;
+  /** Sprite drawing helper encapsulating shader state. */
+  let spriteDrawProgram: SpriteDrawProgram<T> | null = null;
   /** Cached anisotropic filtering extension instance (when available). */
   let anisotropyExtension: EXT_texture_filter_anisotropic | null = null;
   /** Maximum anisotropy supported by the current context. */
   let maxSupportedAnisotropy = 1;
-  /** Debug outline shader program for rendering hit-test rectangles. */
-  let debugProgram: WebGLProgram | null = null;
-  /** Vertex buffer storing quad outline vertices during debug rendering. */
-  let debugVertexBuffer: WebGLBuffer | null = null;
-  /** Attribute location for debug outline vertex positions. */
-  let debugAttribPositionLocation = -1;
-  /** Uniform location for debug outline color. */
-  let debugUniformColorLocation: WebGLUniformLocation | null = null;
-  /** Debug uniform location for converting screen to clip space. */
-  let debugUniformScreenToClipScaleLocation: WebGLUniformLocation | null = null;
-  /** Debug uniform location for the screen-to-clip offset vector. */
-  let debugUniformScreenToClipOffsetLocation: WebGLUniformLocation | null =
-    null;
+  /** Helper used to render debug hit-test outlines. */
+  let debugOutlineRenderer: DebugOutlineRenderer | null = null;
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -2987,230 +2927,10 @@ export const createSpriteLayer = <T = any>(
       }
     }
 
-    // Abort immediately if the vertex buffer cannot be created; rendering would be impossible.
-    const buffer = glContext.createBuffer();
-    if (!buffer) {
-      throw new Error('Failed to create vertex buffer.');
-    }
-
-    vertexBuffer = buffer;
-
-    // Initialize the quad vertex buffer reused across draws.
-    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
-    // Upload unit-quad vertices; they will be scaled later.
-    glContext.bufferData(
-      glContext.ARRAY_BUFFER,
-      INITIAL_QUAD_VERTICES,
-      glContext.DYNAMIC_DRAW
-    );
-
-    // Compile the shader program required for textured billboard rendering.
-    const shaderProgram = createShaderProgram(
-      glContext,
-      VERTEX_SHADER_SOURCE,
-      FRAGMENT_SHADER_SOURCE
-    );
-    program = shaderProgram;
-
-    // Bind the program so attribute configuration can follow.
-    glContext.useProgram(shaderProgram);
-
-    // Resolve attribute locations for positions and UVs; both are required.
-    attribPositionLocation = glContext.getAttribLocation(
-      shaderProgram,
-      'a_position'
-    );
-    attribUvLocation = glContext.getAttribLocation(shaderProgram, 'a_uv');
-    if (attribPositionLocation === -1 || attribUvLocation === -1) {
-      throw new Error('Failed to acquire attribute locations.');
-    }
-
-    // Fetch uniform locations for the texture sampler and opacity.
-    uniformTextureLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_texture'
-    );
-    uniformOpacityLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_opacity'
-    );
-    uniformScreenToClipScaleLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_screenToClipScale'
-    );
-    uniformScreenToClipOffsetLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_screenToClipOffset'
-    );
-    uniformBillboardModeLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardMode'
-    );
-    uniformBillboardCenterLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardCenter'
-    );
-    uniformBillboardHalfSizeLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardHalfSize'
-    );
-    uniformBillboardAnchorLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardAnchor'
-    );
-    uniformBillboardSinCosLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_billboardSinCos'
-    );
-    uniformSurfaceModeLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceMode'
-    );
-    uniformSurfaceDepthBiasLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceDepthBias'
-    );
-    uniformSurfaceClipEnabledLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceClipEnabled'
-    );
-    uniformSurfaceClipCenterLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceClipCenter'
-    );
-    uniformSurfaceClipBasisEastLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceClipBasisEast'
-    );
-    uniformSurfaceClipBasisNorthLocation = glContext.getUniformLocation(
-      shaderProgram,
-      'u_surfaceClipBasisNorth'
-    );
-    if (
-      !uniformTextureLocation ||
-      !uniformOpacityLocation ||
-      !uniformScreenToClipScaleLocation ||
-      !uniformScreenToClipOffsetLocation ||
-      !uniformBillboardModeLocation ||
-      !uniformBillboardCenterLocation ||
-      !uniformBillboardHalfSizeLocation ||
-      !uniformBillboardAnchorLocation ||
-      !uniformBillboardSinCosLocation ||
-      !uniformSurfaceModeLocation ||
-      !uniformSurfaceDepthBiasLocation ||
-      !uniformSurfaceClipEnabledLocation ||
-      !uniformSurfaceClipCenterLocation ||
-      !uniformSurfaceClipBasisEastLocation ||
-      !uniformSurfaceClipBasisNorthLocation
-    ) {
-      throw new Error('Failed to acquire uniform locations.');
-    }
-
-    // Enable vertex position attributes and configure their layer.
-    glContext.enableVertexAttribArray(attribPositionLocation);
-    glContext.vertexAttribPointer(
-      attribPositionLocation,
-      POSITION_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      0
-    );
-    // Enable UV attributes and configure their layer.
-    glContext.enableVertexAttribArray(attribUvLocation);
-    glContext.vertexAttribPointer(
-      attribUvLocation,
-      UV_COMPONENT_COUNT,
-      glContext.FLOAT,
-      false,
-      VERTEX_STRIDE,
-      UV_OFFSET
-    );
-
-    // Use texture unit 0 and set the default opacity to 1.0.
-    glContext.uniform1i(uniformTextureLocation, 0);
-    glContext.uniform1f(uniformOpacityLocation, 1.0);
-    // Default to an identity transform; render() will update these each frame.
-    glContext.uniform2f(uniformScreenToClipScaleLocation, 1.0, 1.0);
-    glContext.uniform2f(uniformScreenToClipOffsetLocation, 0.0, 0.0);
-    glContext.uniform1f(uniformSurfaceClipEnabledLocation, 0.0);
-    glContext.uniform4f(uniformSurfaceClipCenterLocation, 0.0, 0.0, 0.0, 1.0);
-    glContext.uniform4f(
-      uniformSurfaceClipBasisEastLocation,
-      0.0,
-      0.0,
-      0.0,
-      0.0
-    );
-    glContext.uniform4f(
-      uniformSurfaceClipBasisNorthLocation,
-      0.0,
-      0.0,
-      0.0,
-      0.0
-    );
-    glContext.uniform1f(uniformBillboardModeLocation, 0);
-    glContext.uniform2f(uniformBillboardCenterLocation, 0.0, 0.0);
-    glContext.uniform2f(uniformBillboardHalfSizeLocation, 0.0, 0.0);
-    glContext.uniform2f(uniformBillboardAnchorLocation, 0.0, 0.0);
-    glContext.uniform2f(uniformBillboardSinCosLocation, 0.0, 1.0);
-    glContext.uniform1f(uniformSurfaceModeLocation, 0);
-    glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
-
-    // Unbind the ARRAY_BUFFER once initialization is complete.
-    glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+    spriteDrawProgram = createSpriteDrawProgram<T>(glContext);
 
     if (showDebugBounds) {
-      const debugShaderProgram = createShaderProgram(
-        glContext,
-        DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
-        DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE
-      );
-      debugProgram = debugShaderProgram;
-      debugAttribPositionLocation = glContext.getAttribLocation(
-        debugShaderProgram,
-        'a_position'
-      );
-      if (debugAttribPositionLocation === -1) {
-        throw new Error('Failed to acquire debug attribute location.');
-      }
-      const colorLocation = glContext.getUniformLocation(
-        debugShaderProgram,
-        'u_color'
-      );
-      if (!colorLocation) {
-        throw new Error('Failed to acquire debug color uniform.');
-      }
-      debugUniformColorLocation = colorLocation;
-      debugUniformScreenToClipScaleLocation = glContext.getUniformLocation(
-        debugShaderProgram,
-        'u_screenToClipScale'
-      );
-      debugUniformScreenToClipOffsetLocation = glContext.getUniformLocation(
-        debugShaderProgram,
-        'u_screenToClipOffset'
-      );
-      if (
-        !debugUniformScreenToClipScaleLocation ||
-        !debugUniformScreenToClipOffsetLocation
-      ) {
-        throw new Error('Failed to acquire debug screen-to-clip uniforms.');
-      }
-      glContext.uniform2f(debugUniformScreenToClipScaleLocation, 1.0, 1.0);
-      glContext.uniform2f(debugUniformScreenToClipOffsetLocation, 0.0, 0.0);
-
-      const outlineBuffer = glContext.createBuffer();
-      if (!outlineBuffer) {
-        throw new Error('Failed to create debug vertex buffer.');
-      }
-      debugVertexBuffer = outlineBuffer;
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, outlineBuffer);
-      glContext.bufferData(
-        glContext.ARRAY_BUFFER,
-        DEBUG_OUTLINE_VERTEX_SCRATCH,
-        glContext.DYNAMIC_DRAW
-      );
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+      debugOutlineRenderer = createDebugOutlineRenderer(glContext);
     }
 
     // Request a render pass.
@@ -3242,17 +2962,13 @@ export const createSpriteLayer = <T = any>(
         image.texture = undefined;
       });
       atlasNeedsUpload = true;
-      if (vertexBuffer) {
-        glContext.deleteBuffer(vertexBuffer);
+      if (spriteDrawProgram) {
+        spriteDrawProgram.release();
+        spriteDrawProgram = null;
       }
-      if (debugVertexBuffer) {
-        glContext.deleteBuffer(debugVertexBuffer);
-      }
-      if (program) {
-        glContext.deleteProgram(program);
-      }
-      if (debugProgram) {
-        glContext.deleteProgram(debugProgram);
+      if (debugOutlineRenderer) {
+        debugOutlineRenderer.release();
+        debugOutlineRenderer = null;
       }
     }
 
@@ -3261,27 +2977,7 @@ export const createSpriteLayer = <T = any>(
 
     gl = null;
     map = null;
-    program = null;
-    vertexBuffer = null;
-    debugProgram = null;
-    debugVertexBuffer = null;
-    attribPositionLocation = -1;
-    attribUvLocation = -1;
-    debugAttribPositionLocation = -1;
-    uniformTextureLocation = null;
-    uniformOpacityLocation = null;
-    uniformScreenToClipScaleLocation = null;
-    uniformScreenToClipOffsetLocation = null;
-    uniformBillboardModeLocation = null;
-    uniformBillboardCenterLocation = null;
-    uniformBillboardHalfSizeLocation = null;
-    uniformBillboardAnchorLocation = null;
-    uniformBillboardSinCosLocation = null;
-    uniformSurfaceModeLocation = null;
-    uniformSurfaceDepthBiasLocation = null;
-    debugUniformColorLocation = null;
-    debugUniformScreenToClipScaleLocation = null;
-    debugUniformScreenToClipOffsetLocation = null;
+    debugOutlineRenderer = null;
     anisotropyExtension = null;
     maxSupportedAnisotropy = 1;
   };
@@ -3301,19 +2997,9 @@ export const createSpriteLayer = <T = any>(
     hitTestEntries.length = 0;
     hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
 
-    // Abort early if any critical resource (map, program, vertex buffer) is missing.
+    // Abort early if any critical resource (map or shader program) is missing.
     const mapInstance = map;
-    if (!mapInstance || !program || !vertexBuffer) {
-      return;
-    }
-
-    // Uniform locations must be resolved before drawing; skip the frame otherwise.
-    if (
-      !uniformOpacityLocation ||
-      !uniformTextureLocation ||
-      !uniformScreenToClipScaleLocation ||
-      !uniformScreenToClipOffsetLocation
-    ) {
+    if (!mapInstance || !spriteDrawProgram) {
       return;
     }
 
@@ -3417,200 +3103,20 @@ export const createSpriteLayer = <T = any>(
       glContext.disable(glContext.DEPTH_TEST);
       glContext.depthMask(false);
 
-      glContext.useProgram(program);
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
-      glContext.enableVertexAttribArray(attribPositionLocation);
-      glContext.vertexAttribPointer(
-        attribPositionLocation,
-        POSITION_COMPONENT_COUNT,
-        glContext.FLOAT,
-        false,
-        VERTEX_STRIDE,
-        0
-      );
-      glContext.enableVertexAttribArray(attribUvLocation);
-      glContext.vertexAttribPointer(
-        attribUvLocation,
-        UV_COMPONENT_COUNT,
-        glContext.FLOAT,
-        false,
-        VERTEX_STRIDE,
-        UV_OFFSET
-      );
-      glContext.uniform1i(uniformTextureLocation, 0);
-      const screenToClipScaleLocation = uniformScreenToClipScaleLocation!;
-      const screenToClipOffsetLocation = uniformScreenToClipOffsetLocation!;
-
-      let currentScaleX = Number.NaN;
-      let currentScaleY = Number.NaN;
-      let currentOffsetX = Number.NaN;
-      let currentOffsetY = Number.NaN;
-      const applyScreenToClipUniforms = (
-        scaleX: number,
-        scaleY: number,
-        offsetX: number,
-        offsetY: number
-      ): void => {
-        if (
-          scaleX !== currentScaleX ||
-          scaleY !== currentScaleY ||
-          offsetX !== currentOffsetX ||
-          offsetY !== currentOffsetY
-        ) {
-          glContext.uniform2f(screenToClipScaleLocation, scaleX, scaleY);
-          glContext.uniform2f(screenToClipOffsetLocation, offsetX, offsetY);
-          currentScaleX = scaleX;
-          currentScaleY = scaleY;
-          currentOffsetX = offsetX;
-          currentOffsetY = offsetY;
-        }
-      };
-
-      let currentSurfaceMode = Number.NaN;
-      const applySurfaceMode = (enabled: boolean): void => {
-        if (!uniformSurfaceModeLocation) {
-          return;
-        }
-        const value = enabled ? 1 : 0;
-        if (value !== currentSurfaceMode) {
-          glContext.uniform1f(uniformSurfaceModeLocation, value);
-          currentSurfaceMode = value;
-        }
-      };
-
-      let currentSurfaceClipEnabled = Number.NaN;
-      const applySurfaceClipUniforms = (
-        enabled: boolean,
-        inputs: SurfaceShaderInputs | null
-      ): void => {
-        if (
-          !uniformSurfaceClipEnabledLocation ||
-          !uniformSurfaceClipCenterLocation ||
-          !uniformSurfaceClipBasisEastLocation ||
-          !uniformSurfaceClipBasisNorthLocation
-        ) {
-          return;
-        }
-        const value = enabled ? 1 : 0;
-        if (value !== currentSurfaceClipEnabled) {
-          glContext.uniform1f(uniformSurfaceClipEnabledLocation, value);
-          currentSurfaceClipEnabled = value;
-        }
-        const clipCenter =
-          enabled && inputs ? inputs.clipCenter : { x: 0, y: 0, z: 0, w: 1 };
-        glContext.uniform4f(
-          uniformSurfaceClipCenterLocation,
-          clipCenter.x,
-          clipCenter.y,
-          clipCenter.z,
-          clipCenter.w
-        );
-        const clipBasisEast =
-          enabled && inputs ? inputs.clipBasisEast : { x: 0, y: 0, z: 0, w: 0 };
-        glContext.uniform4f(
-          uniformSurfaceClipBasisEastLocation,
-          clipBasisEast.x,
-          clipBasisEast.y,
-          clipBasisEast.z,
-          clipBasisEast.w
-        );
-        const clipBasisNorth =
-          enabled && inputs
-            ? inputs.clipBasisNorth
-            : { x: 0, y: 0, z: 0, w: 0 };
-        glContext.uniform4f(
-          uniformSurfaceClipBasisNorthLocation,
-          clipBasisNorth.x,
-          clipBasisNorth.y,
-          clipBasisNorth.z,
-          clipBasisNorth.w
-        );
-      };
+      const drawProgram = spriteDrawProgram;
+      drawProgram.beginFrame();
 
       let drawOrderCounter = 0;
-
-      const issueSpriteDraw = (
+      const drawPreparedSprite = (
         prepared: PreparedDrawSpriteImageParams<T>
       ): void => {
-        const { screenToClip } = prepared;
-        applyScreenToClipUniforms(
-          screenToClip.scaleX,
-          screenToClip.scaleY,
-          screenToClip.offsetX,
-          screenToClip.offsetY
-        );
-
-        applySurfaceMode(prepared.useShaderSurface);
-
-        const surfaceInputs = prepared.surfaceShaderInputs;
-        if (prepared.useShaderSurface && surfaceInputs) {
-          if (uniformSurfaceDepthBiasLocation) {
-            glContext.uniform1f(
-              uniformSurfaceDepthBiasLocation,
-              surfaceInputs.depthBiasNdc
-            );
-          }
-          applySurfaceClipUniforms(
-            prepared.surfaceClipEnabled,
-            prepared.surfaceClipEnabled ? surfaceInputs : null
-          );
-        } else {
-          if (uniformSurfaceDepthBiasLocation) {
-            glContext.uniform1f(uniformSurfaceDepthBiasLocation, 0);
-          }
-          applySurfaceClipUniforms(false, null);
-        }
-
-        if (uniformBillboardModeLocation) {
-          glContext.uniform1f(
-            uniformBillboardModeLocation,
-            prepared.useShaderBillboard ? 1 : 0
-          );
-        }
-        if (prepared.useShaderBillboard && prepared.billboardUniforms) {
-          const uniforms = prepared.billboardUniforms;
-          if (uniformBillboardCenterLocation) {
-            glContext.uniform2f(
-              uniformBillboardCenterLocation,
-              uniforms.center.x,
-              uniforms.center.y
-            );
-          }
-          if (uniformBillboardHalfSizeLocation) {
-            glContext.uniform2f(
-              uniformBillboardHalfSizeLocation,
-              uniforms.halfWidth,
-              uniforms.halfHeight
-            );
-          }
-          if (uniformBillboardAnchorLocation) {
-            glContext.uniform2f(
-              uniformBillboardAnchorLocation,
-              uniforms.anchor.x,
-              uniforms.anchor.y
-            );
-          }
-          if (uniformBillboardSinCosLocation) {
-            glContext.uniform2f(
-              uniformBillboardSinCosLocation,
-              uniforms.sin,
-              uniforms.cos
-            );
-          }
-        }
-
-        const texture = prepared.imageResource.texture;
-        if (!texture) {
+        const didDraw = drawProgram.draw(prepared);
+        if (!didDraw) {
           return;
         }
 
-        glContext.bufferSubData(glContext.ARRAY_BUFFER, 0, prepared.vertexData);
-        glContext.uniform1f(uniformOpacityLocation, prepared.opacity);
-        glContext.activeTexture(glContext.TEXTURE0);
-        glContext.bindTexture(glContext.TEXTURE_2D, texture);
-        glContext.drawArrays(glContext.TRIANGLES, 0, QUAD_VERTEX_COUNT);
-
-        prepared.imageEntry.surfaceShaderInputs = surfaceInputs ?? undefined;
+        prepared.imageEntry.surfaceShaderInputs =
+          prepared.surfaceShaderInputs ?? undefined;
 
         if (prepared.hitTestCorners && prepared.hitTestCorners.length === 4) {
           registerHitTestEntry(
@@ -3668,6 +3174,8 @@ export const createSpriteLayer = <T = any>(
             screenToClipOffsetY,
           });
 
+          drawProgram.uploadVertexBatch(preparedItems);
+
           const preparedBySubLayer = new Map<
             number,
             PreparedDrawSpriteImageParams<T>[]
@@ -3696,7 +3204,7 @@ export const createSpriteLayer = <T = any>(
                 continue;
               }
               bucketImages.delete(prepared.imageEntry);
-              issueSpriteDraw(prepared);
+              drawPreparedSprite(prepared);
             }
           }
         } finally {
@@ -3704,74 +3212,17 @@ export const createSpriteLayer = <T = any>(
         }
       }
 
-      if (
-        showDebugBounds &&
-        debugProgram &&
-        debugVertexBuffer &&
-        debugUniformColorLocation &&
-        debugAttribPositionLocation !== -1
-      ) {
-        glContext.useProgram(debugProgram);
-        glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
-        glContext.enableVertexAttribArray(debugAttribPositionLocation);
-        glContext.vertexAttribPointer(
-          debugAttribPositionLocation,
-          DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
-          glContext.FLOAT,
-          false,
-          DEBUG_OUTLINE_VERTEX_STRIDE,
-          0
+      if (showDebugBounds && debugOutlineRenderer) {
+        debugOutlineRenderer.begin(
+          screenToClipScaleX,
+          screenToClipScaleY,
+          screenToClipOffsetX,
+          screenToClipOffsetY
         );
-        glContext.disable(glContext.DEPTH_TEST);
-        glContext.depthMask(false);
-        glContext.uniform4f(
-          debugUniformColorLocation,
-          DEBUG_OUTLINE_COLOR[0],
-          DEBUG_OUTLINE_COLOR[1],
-          DEBUG_OUTLINE_COLOR[2],
-          DEBUG_OUTLINE_COLOR[3]
-        );
-        if (
-          debugUniformScreenToClipScaleLocation &&
-          debugUniformScreenToClipOffsetLocation
-        ) {
-          glContext.uniform2f(
-            debugUniformScreenToClipScaleLocation,
-            screenToClipScaleX,
-            screenToClipScaleY
-          );
-          glContext.uniform2f(
-            debugUniformScreenToClipOffsetLocation,
-            screenToClipOffsetX,
-            screenToClipOffsetY
-          );
-        }
-
         for (const entry of hitTestEntries) {
-          let writeOffset = 0;
-          for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
-            const corner = entry.corners[cornerIndex]!;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
-          }
-          glContext.bufferSubData(
-            glContext.ARRAY_BUFFER,
-            0,
-            DEBUG_OUTLINE_VERTEX_SCRATCH
-          );
-          glContext.drawArrays(
-            glContext.LINE_LOOP,
-            0,
-            DEBUG_OUTLINE_VERTEX_COUNT
-          );
+          debugOutlineRenderer.drawOutline(entry.corners);
         }
-
-        glContext.depthMask(true);
-        glContext.enable(glContext.DEPTH_TEST);
-        glContext.disableVertexAttribArray(debugAttribPositionLocation);
-        glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+        debugOutlineRenderer.end();
       }
     } finally {
       projectionHost.release();
