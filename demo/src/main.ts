@@ -584,7 +584,7 @@ const createHud = () => {
       <p>Pan, tilt, or zoom the map to inspect how the sprites respond.</p>
       <div class="control-group" data-testid="group-wasm-mode">
         <div class="status-row">
-          <span class="status-label">Runtime</span>
+          <span class="status-label">Calculation method</span>
           <span
             class="status-value"
             data-status="wasm-mode-status"
@@ -636,11 +636,11 @@ const createHud = () => {
           }"
           data-control="wasm-mode"
           data-option="disabled"
-          data-label="Disabled"
+          data-label="JavaScript"
           aria-pressed="${requestedCalculationVariant === 'disabled'}"
           data-testid="toggle-wasm-disabled"
         >
-          Disabled
+          JavaScript
         </button>
       </div>
       <div class="control-group" data-testid="group-scaling-mode">
