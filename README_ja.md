@@ -142,35 +142,6 @@ map.on('load', async () => {
 初期化作業はこれだけです！
 この後、描画させたい画像やテキストを準備して、スプライトの表示を行います。
 
-### WASMによる座標計算のオフロード
-
-SpriteLayer は既定では JavaScript 実装で座標計算を実行します。
-WASMランタイムモジュールの初期化を行うと、座標計算をWASMモジュールにオフロードします。
-
-`initializeRuntimeHost()` を一度呼び出すことで WASM ホストのロードを試行でき、引数には `{ variant?, wasmBaseUrl? }` 形式のオプションを指定できます。
-呼び出さない場合や初期化に失敗した場合は、自動的に JavaScript 計算にフォールバックします。
-
-```typescript
-// 初期化を実行して、選択された計算種別を得る
-const selectedVariant = await initializeRuntimeHost({
-  variant: 'simd',
-  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
-});
-```
-
-`variant`には、WASMモジュールの種別を指定できます。`simd`はSIMD演算を使用、`nosimd`はSIMD演算を使用しません。デフォルトは`simd`です。
-現在のブラウザはほぼSIMD演算をサポートしているので、デフォルトのままで問題ないでしょう。
-
-`wasmBaseUrl` を指定すると、npm パッケージに含まれる `dist/wasm` ディレクトリを任意の場所（CDN など）へコピーして運用できます。
-省略した場合は、配布された `dist` ディレクトリ直下にある `*.wasm` をそのまま読み込むので、Vite/Rollup/webpack 等で特別な設定は不要です。
-但し、サーバーは `Content-Type: application/wasm` ヘッダを付与する必要があります。
-これはブラウザの実装によりますが、正しいMIME typeが適用されていないと、WASMモジュールとしてロードできない可能性があるため注意してください。
-
-戻り値には、選択された計算種別が返されます。例えばSIMD計算モジュールのロードに失敗した場合は、異なる種別が返されます。
-
-SPAページの終了などで WASM を解放したい場合は、`releaseRuntimeHost()` を呼び出してください。
-解放後は再度 `initializeRuntimeHost()` を呼び出すまで JavaScript 計算で動作します。
-
 ---
 
 ## 画像とテキストの登録
@@ -752,6 +723,8 @@ console.log(`透明度を調整したスプライト数: ${dimmed}`);
 
 `updateForEach` の第2引数で受け取るアップデータは再利用されます。コールバックの外に保持せず、その場で必要な変更を記述してください。現在の画像構成を調べたい場合は、`updater.getImageIndexMap()` でサブレイヤーとオーダーの組み合わせを取得できます。
 
+---
+
 ## 初期化オプション
 
 `createSpriteLayer(options?: SpriteLayerOptions)` では、スプライトレイヤーの識別子とスケーリング挙動を調整するためのオプションを指定できます。
@@ -817,9 +790,83 @@ const spriteLayer = createSpriteLayer({
 });
 ```
 
-[デモページ](https://kekyo.github.io/maplibre-gl-layers/) では、 `STANDARD_SPRITE_SCALING_OPTIONS` を使用しているので、ズームイン・ズームアウトで何が起きるのかを確かめてみると良いでしょう。
+[デモページ](https://kekyo.github.io/maplibre-gl-layers/) では、`Standard`と`Unlimited`を切り替えるボタンがあります。ズームイン・ズームアウトで何が起きるのかを確かめてみると良いでしょう。
 
 注意: デフォルトのスケーリングオプションが「無制限」であるのは、制限を導入すると、正確なサイズ描画が失われるからです。特に画像やテキストの配置を試行錯誤する場合は、スケーリングオプションを無効化することを強くおすすめします。
+
+---
+
+## WASMによる座標計算のオフロード
+
+SpriteLayer は既定では JavaScript 実装で座標計算を実行します。
+WASMランタイムモジュールの初期化を行うと、座標計算をWASMモジュールにオフロードします。
+
+`initializeRuntimeHost()` を一度呼び出すことで WASM ホストのロードを試行でき、引数には `{ variant?, wasmBaseUrl? }` 形式のオプションを指定できます。
+呼び出さない場合や初期化に失敗した場合は、自動的に JavaScript 計算にフォールバックします。
+
+```typescript
+// 初期化を実行して、選択された計算種別を得る
+const selectedVariant = await initializeRuntimeHost({
+  variant: 'simd',
+  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
+});
+```
+
+`variant`には、WASMモジュールの種別を指定できます。
+
+- `simd`はSIMD演算を使用します。
+- `nosimd`はSIMD演算を使用しません。
+- `simd-mt`はマルチスレッドかつSIMD演算を使用します（制約があります。後述）
+
+デフォルトは`simd`です。現在のブラウザはほぼSIMD演算をサポートしているので、デフォルトのままで問題ないでしょう。
+
+`wasmBaseUrl` を指定すると、npm パッケージに含まれる `dist/wasm` ディレクトリを任意の場所（CDN など）へコピーして運用できます。
+省略した場合は、配布された `dist` ディレクトリ直下にある `*.wasm` をそのまま読み込むので、Vite/Rollup/webpack 等で特別な設定は不要です。
+但し、サーバーは `Content-Type: application/wasm` ヘッダを付与する必要があります。
+これはブラウザの実装によりますが、正しいMIME typeが適用されていないと、WASMモジュールとしてロードできない可能性があるため注意してください。
+
+戻り値には、選択された計算種別が返されます。例えばSIMD計算モジュールのロードに失敗した場合は、異なる種別が返されます。
+
+SPAページの終了などで WASM を解放したい場合は、`releaseRuntimeHost()` を呼び出してください。
+解放後は再度 `initializeRuntimeHost()` を呼び出すまで JavaScript 計算で動作します。
+
+#### WASMマルチスレッド時のクロスオリジン隔離要件
+
+`variant`に`simd-mt`を指定することで、WASM演算をマルチスレッドで並列処理させる、マルチスレッドモジュールをロード出来ます。
+但し、`simd-mt`は指定するだけでは機能しません。
+
+マルチスレッドのバリアントは `SharedArrayBuffer` を利用するため、ブラウザ側でクロスオリジン隔離 (cross-origin isolated) が満たされていないと有効化されません。
+ウェブサーバーが、以下のレスポンスヘッダを付与する必要があります:
+
+- ユーザーが直接開くトップレベル HTML: `Cross-Origin-Opener-Policy: same-origin`
+- その HTML と、そこから読み込まれるすべての Worker エントリ（`dist/wasm/offloads-simd-mt.js` や `*.wasm`、独自の Worker バンドルなど）: `Cross-Origin-Embedder-Policy: require-corp`（もしくは `credentialless` を選択する場合はそちら）
+- 別オリジンのアセットは COEP でブロックされるため、CORS もしくは `Cross-Origin-Resource-Policy` の適切な応答で明示的に許可する
+
+これらの条件が満たされない場合は、`simd-mt`モジュールのロードに失敗するため、`simd`にフォールバックします。
+
+補足: [デモページ](https://kekyo.github.io/maplibre-gl-layers/) はgithub.ioにデプロイしていますが、github.ioはこの要件を満たしていないため、残念ながらデモページで`simd-mt`を選択することは出来ません。
+手っ取り早く試してみたい場合は、リポジトリをクローンして、`npm install && npm run dev` でデモページをローカルで実行すると良いでしょう。
+
+Viteのような開発サーバーで`simd-mt`を使用する場合も、COOP, COEPヘッダが必要です。例えば、vite.config.tsで以下のように指定します:
+
+```typescript
+// COOP, COEPヘッダ
+const COOP_COEP_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
+export default defineConfig({
+  // 開発サーバー(vite dev)で実行するとき、全ての要求にヘッダを付与
+  server: {
+    headers: COOP_COEP_HEADERS,
+  },
+  // プレビューで実行するとき、全ての要求にヘッダを付与
+  preview: {
+    headers: COOP_COEP_HEADERS,
+  },
+});
+```
 
 ---
 

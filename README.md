@@ -138,38 +138,6 @@ map.on('load', async () => {
 
 That is all you need for the initial setup. After this, prepare the images and text you want to render and start displaying sprites.
 
-### Enabling WASM acceleration
-
-By default, SpriteLayer performs coordinate calculations using its JavaScript implementation.
-Initializing the WASM runtime module offloads coordinate calculations to the WASM module.
-
-You can attempt to load the WASM host by calling `initializeRuntimeHost()` once, specifying options in the form of `{ variant?, wasmBaseUrl? }` as arguments.
-If you do not call it or if initialization fails, it will automatically fall back to JavaScript calculations.
-
-```typescript
-// Execute initialization to obtain the selected calculation type
-const selectedVariant = await initializeRuntimeHost({
-  variant: 'simd',
-  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
-});
-```
-
-The `variant` parameter specifies the type of WASM module.
-`simd` uses SIMD operations, while `nosimd` does not. The default is `simd`.
-Since most modern browsers support SIMD operations, leaving the default setting should be fine.
-
-By specifying `wasmBaseUrl`, you can copy the `dist/wasm` directory included in the npm package to any location (such as a CDN) for operation.
-If omitted, `*.wasm` files located directly under the distributed `dist` directory will be loaded as-is,
-requiring no special configuration in Vite/Rollup/webpack, etc.
-However, the server must include the `Content-Type: application/wasm` header.
-Note that depending on the browser implementation, if the correct MIME type is not applied, the module may not load as a WASM module.
-
-The return value indicates the selected calculation type.
-For example, if loading a SIMD calculation module fails, a different type is returned.
-
-To release WASM when the SPA page terminates, call `releaseRuntimeHost()`.
-After release, it will operate using JavaScript computation until `initializeRuntimeHost()` is called again.
-
 ## Registering Images and Text
 
 Images must be registered with the SpriteLayer before they can be drawn. You can register or unregister them at any time; when you have many different images, register each one only when it is needed.
@@ -734,6 +702,8 @@ console.log(`Sprites with adjusted opacity: ${dimmed}`);
 
 The updater passed to `updateForEach` is reusable. Avoid storing it outside the callback; apply changes immediately. To inspect the current image layout, call `updater.getImageIndexMap()` and iterate through the available sub-layer and order pairs.
 
+---
+
 ## Initialize Options
 
 `createSpriteLayer(options?: SpriteLayerOptions)` accepts a small set of configuration values that govern how sprites are identified and scaled on the map.
@@ -801,9 +771,86 @@ const spriteLayer = createSpriteLayer({
 });
 ```
 
-The [demo page](https://kekyo.github.io/maplibre-gl-layers/) uses `STANDARD_SPRITE_SCALING_OPTIONS`, so it's a good idea to check what happens when you zoom in and out.
+The [demo page](https://kekyo.github.io/maplibre-gl-layers/) features a button to switch between `Standard` and `Unlimited`. You may want to check what happens when you zoom in and out.
 
 Note: The default scaling option is set to “Unlimited” because introducing restrictions causes loss of precise size rendering. We strongly recommend disabling the scaling option, especially when experimenting with image and text placement.
+
+---
+
+## Enabling WASM acceleration
+
+By default, SpriteLayer performs coordinate calculations using its JavaScript implementation.
+Initializing the WASM runtime module offloads coordinate calculations to the WASM module.
+
+You can attempt to load the WASM host by calling `initializeRuntimeHost()` once, specifying options in the form of `{ variant?, wasmBaseUrl? }` as arguments.
+If you do not call it or if initialization fails, it will automatically fall back to JavaScript calculations.
+
+```typescript
+// Execute initialization to obtain the selected calculation type
+const selectedVariant = await initializeRuntimeHost({
+  variant: 'simd',
+  wasmBaseUrl: '/custom-assets/maplibre-wasm/',
+});
+```
+
+The `variant` parameter specifies the type of WASM module.
+
+* `simd` uses SIMD operations.
+* `nosimd` does not use SIMD operations.
+* `simd-mt` uses multithreading and SIMD operations (with limitations; see below).
+
+The default is `simd`. Since most modern browsers support SIMD operations, the default setting should be fine.
+
+By specifying `wasmBaseUrl`, you can copy the `dist/wasm` directory included in the npm package to any location (such as a CDN) for operation.
+If omitted, `*.wasm` files located directly under the distributed `dist` directory will be loaded as-is,
+requiring no special configuration in Vite/Rollup/webpack, etc.
+However, the server must include the `Content-Type: application/wasm` header.
+Note that depending on the browser implementation, if the correct MIME type is not applied, the module may not load as a WASM module.
+
+The return value indicates the selected calculation type.
+For example, if loading a SIMD calculation module fails, a different type is returned.
+
+To release WASM when the SPA page terminates, call `releaseRuntimeHost()`.
+After release, it will operate using JavaScript computation until `initializeRuntimeHost()` is called again.
+
+#### Cross-origin isolation requirements (WASM multi-threading)
+
+By specifying `simd-mt` for the `variant`, you can load a multithreaded module that enables parallel processing of WASM operations using multiple threads.
+However, `simd-mt` does not function simply by being specified.
+
+The multithreading variant utilizes `SharedArrayBuffer`, so it will not be enabled unless cross-origin isolation is satisfied on the browser side.
+The web server must include the following response headers:
+
+- Top-level HTML opened directly by the user: `Cross-Origin-Opener-Policy: same-origin`
+- That HTML and all Worker entries loaded from it (`dist/wasm/offloads-simd-mt.js`, `*.wasm` files, custom Worker bundles, etc.): `Cross-Origin-Embedder-Policy: require-corp` (or `credentialless` if you choose that)
+- Assets from other origins are blocked by COEP, so explicitly allow them with CORS or an appropriate `Cross-Origin-Resource-Policy` response
+
+If these conditions are not met, the `simd-mt` module will fail to load and fall back to `simd`.
+
+Note: The [demo page](https://kekyo.github.io/maplibre-gl-layers/) is deployed on github.io, but unfortunately, github.io does not meet these requirements, so you cannot select `simd-mt` on the demo page.
+If you want to try it out quickly, clone the repository and run the demo page locally with `npm install && npm run dev`.
+
+When using `simd-mt` with a development server like Vite, COOP and COEP headers are also required.
+For example, specify them in `vite.config.ts` as follows:
+
+```typescript
+// COOP, COEP headers
+const COOP_COEP_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
+export default defineConfig({
+  // When running the development server (vite dev)
+  server: {
+    headers: COOP_COEP_HEADERS,
+  },
+  // When running in preview
+  preview: {
+    headers: COOP_COEP_HEADERS,
+  },
+});
+```
 
 ---
 
