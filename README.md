@@ -296,6 +296,8 @@ spriteLayer.addSprite('vehicle-label', {
 
 The following example sets an anchor at the tip of an upward-pointing arrow image, rotates the image 180 degrees, and makes it a downward-pointing arrow with the arrow tip as the anchor:
 
+![Anchor-rotate](./images/anchor-rotate.png)
+
 ```typescript
 // Keep the arrow anchored at its tip while rotating it downward
 spriteLayer.addSprite('vehicle-rotated', {
@@ -414,7 +416,11 @@ spriteLayer.updateSprite(SPRITE_ID, {
 How the old and new coordinates are used for interpolation calculations depends on the interpolation method:
 
 - **Feedback**: Moves from the old coordinates to the new coordinates over the specified interpolation time.
+
+  ![Feedback](./images/feedback.png)
 - **Feedforward**: Assumes movement from the old coordinates to the new coordinates over the specified interpolation time. Extends this vector by the interpolation time to obtain the predicted movement coordinates. Then moves from the new coordinates to the predicted movement coordinates over the specified interpolation time.
+
+  ![Feedforward](./images/feedforward.png)
 
 With feedback, even if a new coordinate is set, the animation won't reach that coordinate until it finishes, so there will always be a display delay. On the other hand, using feedforward allows reaching near the predicted movement coordinate, so the supplied coordinate and the displayed coordinate can be expected to match quite closely.
 
@@ -748,6 +754,9 @@ const spriteLayer = createSpriteLayer({
 - `textureFiltering.generateMipmaps` - Forces mipmap generation even when the chosen filter does not require it, improving quality for aggressively downscaled sprites on WebGL2 or power-of-two images. When the context cannot build mipmaps (for example WebGL1 with non power-of-two textures) the layer falls back to linear filtering automatically.
 - `textureFiltering.maxAnisotropy` - Requests anisotropic filtering (>= 1) when the runtime exposes `EXT_texture_filter_anisotropic`, helping surface-aligned sprites remain sharp at shallow viewing angles. The requested value is clamped to the GPU limit and only applied when mipmaps are available.
 - `showDebugBounds` - When `true`, the layer overlays red outlines representing sprite hit-test regions.
+
+  ![debug-bounds](./images/debug-bounds.png)
+
   This is intended for debugging pointer interaction event handler and should remain `false` in production for best performance.
 
 All scaling values and texture filtering values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
