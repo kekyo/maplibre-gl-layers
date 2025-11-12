@@ -108,17 +108,11 @@ import {
   type Rect as LooseQuadTreeRect,
 } from './looseQuadTree';
 import {
-  DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
-  DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE,
-  DEBUG_OUTLINE_VERTEX_COUNT,
-  DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
-  DEBUG_OUTLINE_VERTEX_STRIDE,
-  DEBUG_OUTLINE_VERTEX_SCRATCH,
-  DEBUG_OUTLINE_COLOR,
   DEBUG_OUTLINE_CORNER_ORDER,
-  createShaderProgram,
   createSpriteDrawProgram,
+  createDebugOutlineRenderer,
   type SpriteDrawProgram,
+  type DebugOutlineRenderer,
 } from './shader';
 import { createCalculationHost } from './calculationHost';
 import {
@@ -1155,19 +1149,8 @@ export const createSpriteLayer = <T = any>(
   let anisotropyExtension: EXT_texture_filter_anisotropic | null = null;
   /** Maximum anisotropy supported by the current context. */
   let maxSupportedAnisotropy = 1;
-  /** Debug outline shader program for rendering hit-test rectangles. */
-  let debugProgram: WebGLProgram | null = null;
-  /** Vertex buffer storing quad outline vertices during debug rendering. */
-  let debugVertexBuffer: WebGLBuffer | null = null;
-  /** Attribute location for debug outline vertex positions. */
-  let debugAttribPositionLocation = -1;
-  /** Uniform location for debug outline color. */
-  let debugUniformColorLocation: WebGLUniformLocation | null = null;
-  /** Debug uniform location for converting screen to clip space. */
-  let debugUniformScreenToClipScaleLocation: WebGLUniformLocation | null = null;
-  /** Debug uniform location for the screen-to-clip offset vector. */
-  let debugUniformScreenToClipOffsetLocation: WebGLUniformLocation | null =
-    null;
+  /** Helper used to render debug hit-test outlines. */
+  let debugOutlineRenderer: DebugOutlineRenderer | null = null;
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -2947,56 +2930,7 @@ export const createSpriteLayer = <T = any>(
     spriteDrawProgram = createSpriteDrawProgram<T>(glContext);
 
     if (showDebugBounds) {
-      const debugShaderProgram = createShaderProgram(
-        glContext,
-        DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
-        DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE
-      );
-      debugProgram = debugShaderProgram;
-      debugAttribPositionLocation = glContext.getAttribLocation(
-        debugShaderProgram,
-        'a_position'
-      );
-      if (debugAttribPositionLocation === -1) {
-        throw new Error('Failed to acquire debug attribute location.');
-      }
-      const colorLocation = glContext.getUniformLocation(
-        debugShaderProgram,
-        'u_color'
-      );
-      if (!colorLocation) {
-        throw new Error('Failed to acquire debug color uniform.');
-      }
-      debugUniformColorLocation = colorLocation;
-      debugUniformScreenToClipScaleLocation = glContext.getUniformLocation(
-        debugShaderProgram,
-        'u_screenToClipScale'
-      );
-      debugUniformScreenToClipOffsetLocation = glContext.getUniformLocation(
-        debugShaderProgram,
-        'u_screenToClipOffset'
-      );
-      if (
-        !debugUniformScreenToClipScaleLocation ||
-        !debugUniformScreenToClipOffsetLocation
-      ) {
-        throw new Error('Failed to acquire debug screen-to-clip uniforms.');
-      }
-      glContext.uniform2f(debugUniformScreenToClipScaleLocation, 1.0, 1.0);
-      glContext.uniform2f(debugUniformScreenToClipOffsetLocation, 0.0, 0.0);
-
-      const outlineBuffer = glContext.createBuffer();
-      if (!outlineBuffer) {
-        throw new Error('Failed to create debug vertex buffer.');
-      }
-      debugVertexBuffer = outlineBuffer;
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, outlineBuffer);
-      glContext.bufferData(
-        glContext.ARRAY_BUFFER,
-        DEBUG_OUTLINE_VERTEX_SCRATCH,
-        glContext.DYNAMIC_DRAW
-      );
-      glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+      debugOutlineRenderer = createDebugOutlineRenderer(glContext);
     }
 
     // Request a render pass.
@@ -3032,11 +2966,9 @@ export const createSpriteLayer = <T = any>(
         spriteDrawProgram.release();
         spriteDrawProgram = null;
       }
-      if (debugVertexBuffer) {
-        glContext.deleteBuffer(debugVertexBuffer);
-      }
-      if (debugProgram) {
-        glContext.deleteProgram(debugProgram);
+      if (debugOutlineRenderer) {
+        debugOutlineRenderer.release();
+        debugOutlineRenderer = null;
       }
     }
 
@@ -3045,12 +2977,7 @@ export const createSpriteLayer = <T = any>(
 
     gl = null;
     map = null;
-    debugProgram = null;
-    debugVertexBuffer = null;
-    debugAttribPositionLocation = -1;
-    debugUniformColorLocation = null;
-    debugUniformScreenToClipScaleLocation = null;
-    debugUniformScreenToClipOffsetLocation = null;
+    debugOutlineRenderer = null;
     anisotropyExtension = null;
     maxSupportedAnisotropy = 1;
   };
@@ -3285,74 +3212,17 @@ export const createSpriteLayer = <T = any>(
         }
       }
 
-      if (
-        showDebugBounds &&
-        debugProgram &&
-        debugVertexBuffer &&
-        debugUniformColorLocation &&
-        debugAttribPositionLocation !== -1
-      ) {
-        glContext.useProgram(debugProgram);
-        glContext.bindBuffer(glContext.ARRAY_BUFFER, debugVertexBuffer);
-        glContext.enableVertexAttribArray(debugAttribPositionLocation);
-        glContext.vertexAttribPointer(
-          debugAttribPositionLocation,
-          DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
-          glContext.FLOAT,
-          false,
-          DEBUG_OUTLINE_VERTEX_STRIDE,
-          0
+      if (showDebugBounds && debugOutlineRenderer) {
+        debugOutlineRenderer.begin(
+          screenToClipScaleX,
+          screenToClipScaleY,
+          screenToClipOffsetX,
+          screenToClipOffsetY
         );
-        glContext.disable(glContext.DEPTH_TEST);
-        glContext.depthMask(false);
-        glContext.uniform4f(
-          debugUniformColorLocation,
-          DEBUG_OUTLINE_COLOR[0],
-          DEBUG_OUTLINE_COLOR[1],
-          DEBUG_OUTLINE_COLOR[2],
-          DEBUG_OUTLINE_COLOR[3]
-        );
-        if (
-          debugUniformScreenToClipScaleLocation &&
-          debugUniformScreenToClipOffsetLocation
-        ) {
-          glContext.uniform2f(
-            debugUniformScreenToClipScaleLocation,
-            screenToClipScaleX,
-            screenToClipScaleY
-          );
-          glContext.uniform2f(
-            debugUniformScreenToClipOffsetLocation,
-            screenToClipOffsetX,
-            screenToClipOffsetY
-          );
-        }
-
         for (const entry of hitTestEntries) {
-          let writeOffset = 0;
-          for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
-            const corner = entry.corners[cornerIndex]!;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
-            DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
-          }
-          glContext.bufferSubData(
-            glContext.ARRAY_BUFFER,
-            0,
-            DEBUG_OUTLINE_VERTEX_SCRATCH
-          );
-          glContext.drawArrays(
-            glContext.LINE_LOOP,
-            0,
-            DEBUG_OUTLINE_VERTEX_COUNT
-          );
+          debugOutlineRenderer.drawOutline(entry.corners);
         }
-
-        glContext.depthMask(true);
-        glContext.enable(glContext.DEPTH_TEST);
-        glContext.disableVertexAttribArray(debugAttribPositionLocation);
-        glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+        debugOutlineRenderer.end();
       }
     } finally {
       projectionHost.release();

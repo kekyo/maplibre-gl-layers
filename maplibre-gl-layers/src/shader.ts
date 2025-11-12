@@ -756,3 +756,163 @@ export const createSpriteDrawProgram = <TTag>(
     release,
   };
 };
+
+export interface DebugOutlineRenderer extends Releaseable {
+  begin(
+    screenToClipScaleX: number,
+    screenToClipScaleY: number,
+    screenToClipOffsetX: number,
+    screenToClipOffsetY: number
+  ): void;
+  drawOutline(
+    corners: readonly [
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+    ]
+  ): void;
+  end(): void;
+}
+
+export const createDebugOutlineRenderer = (
+  glContext: WebGLRenderingContext
+): DebugOutlineRenderer => {
+  const program = createShaderProgram(
+    glContext,
+    DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
+    DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE
+  );
+
+  const attribPositionLocation = glContext.getAttribLocation(
+    program,
+    'a_position'
+  );
+  if (attribPositionLocation === -1) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire debug attribute location.');
+  }
+
+  const uniformColorLocation = glContext.getUniformLocation(program, 'u_color');
+  const uniformScreenToClipScaleLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipScale'
+  );
+  const uniformScreenToClipOffsetLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipOffset'
+  );
+  if (
+    !uniformColorLocation ||
+    !uniformScreenToClipScaleLocation ||
+    !uniformScreenToClipOffsetLocation
+  ) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire debug uniforms.');
+  }
+
+  const vertexBuffer = glContext.createBuffer();
+  if (!vertexBuffer) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to create debug vertex buffer.');
+  }
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+  glContext.bufferData(
+    glContext.ARRAY_BUFFER,
+    DEBUG_OUTLINE_VERTEX_SCRATCH,
+    glContext.DYNAMIC_DRAW
+  );
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+
+  let active = false;
+
+  const begin = (
+    screenToClipScaleX: number,
+    screenToClipScaleY: number,
+    screenToClipOffsetX: number,
+    screenToClipOffsetY: number
+  ): void => {
+    glContext.useProgram(program);
+    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+    glContext.enableVertexAttribArray(attribPositionLocation);
+    glContext.vertexAttribPointer(
+      attribPositionLocation,
+      DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
+      glContext.FLOAT,
+      false,
+      DEBUG_OUTLINE_VERTEX_STRIDE,
+      0
+    );
+    glContext.disable(glContext.DEPTH_TEST);
+    glContext.depthMask(false);
+    glContext.uniform4f(
+      uniformColorLocation,
+      DEBUG_OUTLINE_COLOR[0],
+      DEBUG_OUTLINE_COLOR[1],
+      DEBUG_OUTLINE_COLOR[2],
+      DEBUG_OUTLINE_COLOR[3]
+    );
+    glContext.uniform2f(
+      uniformScreenToClipScaleLocation,
+      screenToClipScaleX,
+      screenToClipScaleY
+    );
+    glContext.uniform2f(
+      uniformScreenToClipOffsetLocation,
+      screenToClipOffsetX,
+      screenToClipOffsetY
+    );
+    active = true;
+  };
+
+  const drawOutline = (
+    corners: readonly [
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+      SpriteScreenPoint,
+    ]
+  ): void => {
+    if (!active) {
+      return;
+    }
+    let writeOffset = 0;
+    for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
+      const corner = corners[cornerIndex]!;
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+    }
+    glContext.bufferSubData(
+      glContext.ARRAY_BUFFER,
+      0,
+      DEBUG_OUTLINE_VERTEX_SCRATCH
+    );
+    glContext.drawArrays(glContext.LINE_LOOP, 0, DEBUG_OUTLINE_VERTEX_COUNT);
+  };
+
+  const end = (): void => {
+    if (!active) {
+      return;
+    }
+    glContext.depthMask(true);
+    glContext.enable(glContext.DEPTH_TEST);
+    glContext.disableVertexAttribArray(attribPositionLocation);
+    glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+    active = false;
+  };
+
+  const release = (): void => {
+    end();
+    glContext.deleteBuffer(vertexBuffer);
+    glContext.deleteProgram(program);
+  };
+
+  return {
+    begin,
+    drawOutline,
+    end,
+    release,
+  };
+};
