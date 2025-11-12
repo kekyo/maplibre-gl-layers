@@ -577,7 +577,7 @@ const createHud = () => {
   return `
     <div id="map" data-testid="map-canvas"></div>
     <aside id="panel" data-testid="panel-info">
-      <h1 data-testid="panel-title">MapLibre <a href="${repository_url}" target="_blank">SpriteLayer ${version}</a> Demo</h1>
+      <h1 data-testid="panel-title"><a href="${repository_url}" target="_blank">maplibre-gl-layer ${version} demo</a></h1>
       <p>
         Each sprite stays clamped to the ground and randomly chooses between screen-aligned and map-aligned orientations. Increase the count to as many as ${MAX_NUMBER_OF_SPRITES} sprites when needed.
       </p>
