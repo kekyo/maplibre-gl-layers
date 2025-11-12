@@ -868,6 +868,30 @@ export default defineConfig({
 });
 ```
 
+また、`detectMultiThreadedModuleAvailability()`を使用すれば、マルチスレッドモジュールの使用可否を動的に判断できます。全体的な初期化の流れを示します:
+
+```typescript
+import {
+  initializeRuntimeHost,
+  detectMultiThreadedModuleAvailability,
+} from 'maplibre-gl-layers';
+
+// マルチスレッドモジュールを使用できるかどうか
+const { available, reason } = detectMultiThreadedModuleAvailability();
+if (!available) {
+  console.warn(
+    `SIMD + Threads は利用できません: ${reason ?? '理由不明の制約です'}`
+  );
+}
+
+// マルチスレッドモジュールを使用するか通常のSIMDモジュールを使用するかを選択
+const desiredVariant = available ? 'simd-mt' : 'simd';
+const effectiveVariant = await initializeRuntimeHost({
+  variant: desiredVariant,
+});
+console.log(`実際に使用されたバリアント: ${effectiveVariant}`);
+```
+
 ---
 
 ## ライセンス

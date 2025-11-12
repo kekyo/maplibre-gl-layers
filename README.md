@@ -852,6 +852,31 @@ export default defineConfig({
 });
 ```
 
+Additionally, you can dynamically determine whether multi-threaded modules are available using `detectMultiThreadedModuleAvailability()`.
+Here is the overall initialization flow:
+
+```typescript
+import {
+  initializeRuntimeHost,
+  detectMultiThreadedModuleAvailability,
+} from ‘maplibre-gl-layers’;
+
+// Determine if multi-threaded modules are available
+const { available, reason } = detectMultiThreadedModuleAvailability();
+if (!available) {
+  console.warn(
+    `SIMD + Threads unavailable: ${reason ?? 'Unknown constraint'}`
+  );
+}
+
+// Choose between using the multithreaded module or the regular SIMD module
+const desiredVariant = available ? 'simd-mt' : 'simd';
+const effectiveVariant = await initializeRuntimeHost({
+  variant: desiredVariant,
+});
+console.log(`Actual variant used: ${effectiveVariant}`);
+```
+
 ---
 
 ## TODO

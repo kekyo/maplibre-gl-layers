@@ -10,6 +10,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Map, type MapOptions, type SourceSpecification } from 'maplibre-gl';
 import {
   createSpriteLayer,
+  detectMultiThreadedModuleAvailability,
   initializeRuntimeHost,
   releaseRuntimeHost,
   STANDARD_SPRITE_SCALING_OPTIONS,
@@ -248,6 +249,22 @@ const resolveSpriteScalingOptions = () =>
   spriteScalingMode === 'standard'
     ? STANDARD_SPRITE_SCALING_OPTIONS
     : UNLIMITED_SPRITE_SCALING_OPTIONS;
+
+const {
+  available: isSimdThreadVariantSupported,
+  reason: simdThreadUnavailableReason,
+} = detectMultiThreadedModuleAvailability();
+
+const simdThreadUnavailableMessage = isSimdThreadVariantSupported
+  ? undefined
+  : (simdThreadUnavailableReason ??
+    'Enable cross-origin isolation (COOP/COEP) to use the SIMD + Threads mode.');
+
+if (!isSimdThreadVariantSupported && simdThreadUnavailableMessage) {
+  console.info(
+    `[SpriteLayer Demo] Disabling SIMD + Threads button: ${simdThreadUnavailableMessage}`
+  );
+}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -540,6 +557,17 @@ const createHud = () => {
     orbitOffsetDegInterpolationMode === 'feedforward';
   const orbitMetersFeedforwardEnabled =
     orbitOffsetMetersInterpolationMode === 'feedforward';
+  const simdMtButtonActive =
+    isSimdThreadVariantSupported && requestedCalculationVariant === 'simd-mt';
+  const simdMtButtonExtraAttributes = (() => {
+    if (isSimdThreadVariantSupported) {
+      return '';
+    }
+    const titleAttr = simdThreadUnavailableMessage
+      ? ` title="${simdThreadUnavailableMessage}"`
+      : '';
+    return ` disabled data-disabled="true"${titleAttr}`;
+  })();
   return `
     <div id="map" data-testid="map-canvas"></div>
     <aside id="panel" data-testid="panel-info">
@@ -559,14 +587,13 @@ const createHud = () => {
         </div>
         <button
           type="button"
-          class="toggle-button${
-            requestedCalculationVariant === 'simd-mt' ? ' active' : ''
-          }"
+          class="toggle-button${simdMtButtonActive ? ' active' : ''}"
           data-control="wasm-mode"
           data-option="simd-mt"
           data-label="Wasm SIMD + Threads"
-          aria-pressed="${requestedCalculationVariant === 'simd-mt'}"
+          aria-pressed="${simdMtButtonActive}"
           data-testid="toggle-wasm-simd-mt"
+          ${simdMtButtonExtraAttributes}
         >
           Wasm SIMD + Threads
         </button>
@@ -2856,8 +2883,17 @@ const main = async () => {
             if (!option) {
               return;
             }
-            setToggleButtonState(button, displayedVariant === option, 'select');
-            button.disabled = wasmModePending;
+            const isUnsupportedSimdMt =
+              option === 'simd-mt' && !isSimdThreadVariantSupported;
+            setToggleButtonState(
+              button,
+              !isUnsupportedSimdMt && displayedVariant === option,
+              'select'
+            );
+            button.disabled = wasmModePending || isUnsupportedSimdMt;
+            if (isUnsupportedSimdMt && simdThreadUnavailableMessage) {
+              button.title = simdThreadUnavailableMessage;
+            }
           });
           if (wasmModeStatusEl) {
             if (wasmModePending) {
@@ -2877,7 +2913,11 @@ const main = async () => {
             return;
           }
           button.addEventListener('click', async () => {
-            if (wasmModePending || requestedCalculationVariant === option) {
+            if (
+              (option === 'simd-mt' && !isSimdThreadVariantSupported) ||
+              wasmModePending ||
+              requestedCalculationVariant === option
+            ) {
               return;
             }
             wasmModePending = true;

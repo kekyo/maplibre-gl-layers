@@ -7,5 +7,10 @@
 export * from './types';
 export * from './default';
 export * from './image';
-export { initializeRuntimeHost, releaseRuntimeHost } from './runtime';
+export {
+  initializeRuntimeHost,
+  releaseRuntimeHost,
+  detectMultiThreadedModuleAvailability,
+  type MultiThreadedModuleAvailability,
+} from './runtime';
 export * from './SpriteLayer';
