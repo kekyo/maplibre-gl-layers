@@ -61,3 +61,62 @@ export const releaseRuntimeHost = (): void => {
   spriteLayerHostVariant = 'disabled';
   releaseWasmHost();
 };
+
+/**
+ * SIMD and multi-threading module availability.
+ */
+export interface MultiThreadedModuleAvailability {
+  /** Is available? */
+  readonly available: boolean;
+  /** Not available, reason text */
+  readonly reason?: string;
+}
+
+/**
+ * Detects SIMD and multi-threading module availability.
+ * @returns MultiThreadedModuleAvailability.
+ */
+export const detectMultiThreadedModuleAvailability =
+  (): MultiThreadedModuleAvailability => {
+    const scope =
+      typeof globalThis === 'object'
+        ? (globalThis as typeof globalThis & {
+            SharedArrayBuffer?: typeof SharedArrayBuffer;
+            Atomics?: typeof Atomics;
+            Worker?: typeof Worker;
+            crossOriginIsolated?: boolean;
+          })
+        : undefined;
+    if (!scope) {
+      return {
+        available: false,
+        reason: 'Global scope is unavailable.',
+      };
+    }
+    if (typeof scope.SharedArrayBuffer !== 'function') {
+      return {
+        available: false,
+        reason: 'SharedArrayBuffer is not available in this environment.',
+      };
+    }
+    if (typeof scope.Atomics !== 'object') {
+      return {
+        available: false,
+        reason: 'Atomics API is not available in this environment.',
+      };
+    }
+    if (typeof scope.Worker !== 'function') {
+      return {
+        available: false,
+        reason: 'Web Worker API is unavailable in this environment.',
+      };
+    }
+    if (scope.crossOriginIsolated !== true) {
+      return {
+        available: false,
+        reason:
+          'Enable cross-origin isolation (COOP/COEP) so SharedArrayBuffer can be used.',
+      };
+    }
+    return { available: true };
+  };

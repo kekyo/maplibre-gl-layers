@@ -10,6 +10,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Map, type MapOptions, type SourceSpecification } from 'maplibre-gl';
 import {
   createSpriteLayer,
+  detectMultiThreadedModuleAvailability,
   initializeRuntimeHost,
   releaseRuntimeHost,
   STANDARD_SPRITE_SCALING_OPTIONS,
@@ -218,18 +219,20 @@ type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
 /** Formats the movement speed multiplier for HUD display. */
 const formatMovementSpeedScale = (scale: number): string => {
   if (scale <= 0) {
-    return '0×';
+    return '0x';
   }
   if (scale >= 1) {
-    return `${scale.toFixed(1)}×`;
+    return `${scale.toFixed(1)}x`;
   }
-  return `${scale.toFixed(2)}×`;
+  return `${scale.toFixed(2)}x`;
 };
 
 const formatWasmVariantLabel = (
   variant: SpriteLayerCalculationVariant
 ): string => {
   switch (variant) {
+    case 'simd-mt':
+      return 'SIMD + Threads';
     case 'simd':
       return 'SIMD';
     case 'nosimd':
@@ -246,6 +249,22 @@ const resolveSpriteScalingOptions = () =>
   spriteScalingMode === 'standard'
     ? STANDARD_SPRITE_SCALING_OPTIONS
     : UNLIMITED_SPRITE_SCALING_OPTIONS;
+
+const {
+  available: isSimdThreadVariantSupported,
+  reason: simdThreadUnavailableReason,
+} = detectMultiThreadedModuleAvailability();
+
+const simdThreadUnavailableMessage = isSimdThreadVariantSupported
+  ? undefined
+  : (simdThreadUnavailableReason ??
+    'Enable cross-origin isolation (COOP/COEP) to use the SIMD + Threads mode.');
+
+if (!isSimdThreadVariantSupported && simdThreadUnavailableMessage) {
+  console.info(
+    `[SpriteLayer Demo] Disabling SIMD + Threads button: ${simdThreadUnavailableMessage}`
+  );
+}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -538,6 +557,17 @@ const createHud = () => {
     orbitOffsetDegInterpolationMode === 'feedforward';
   const orbitMetersFeedforwardEnabled =
     orbitOffsetMetersInterpolationMode === 'feedforward';
+  const simdMtButtonActive =
+    isSimdThreadVariantSupported && requestedCalculationVariant === 'simd-mt';
+  const simdMtButtonExtraAttributes = (() => {
+    if (isSimdThreadVariantSupported) {
+      return '';
+    }
+    const titleAttr = simdThreadUnavailableMessage
+      ? ` title="${simdThreadUnavailableMessage}"`
+      : '';
+    return ` disabled data-disabled="true"${titleAttr}`;
+  })();
   return `
     <div id="map" data-testid="map-canvas"></div>
     <aside id="panel" data-testid="panel-info">
@@ -548,13 +578,25 @@ const createHud = () => {
       <p>Pan, tilt, or zoom the map to inspect how the sprites respond.</p>
       <div class="control-group" data-testid="group-wasm-mode">
         <div class="status-row">
-          <span class="status-label">Active</span>
+          <span class="status-label">Runtime</span>
           <span
             class="status-value"
             data-status="wasm-mode-status"
             data-testid="status-wasm-mode"
           >${formatWasmVariantLabel(requestedCalculationVariant)}</span>
         </div>
+        <button
+          type="button"
+          class="toggle-button${simdMtButtonActive ? ' active' : ''}"
+          data-control="wasm-mode"
+          data-option="simd-mt"
+          data-label="Wasm SIMD + Threads"
+          aria-pressed="${simdMtButtonActive}"
+          data-testid="toggle-wasm-simd-mt"
+          ${simdMtButtonExtraAttributes}
+        >
+          Wasm SIMD + Threads
+        </button>
         <button
           type="button"
           class="toggle-button${
@@ -2841,8 +2883,17 @@ const main = async () => {
             if (!option) {
               return;
             }
-            setToggleButtonState(button, displayedVariant === option, 'select');
-            button.disabled = wasmModePending;
+            const isUnsupportedSimdMt =
+              option === 'simd-mt' && !isSimdThreadVariantSupported;
+            setToggleButtonState(
+              button,
+              !isUnsupportedSimdMt && displayedVariant === option,
+              'select'
+            );
+            button.disabled = wasmModePending || isUnsupportedSimdMt;
+            if (isUnsupportedSimdMt && simdThreadUnavailableMessage) {
+              button.title = simdThreadUnavailableMessage;
+            }
           });
           if (wasmModeStatusEl) {
             if (wasmModePending) {
@@ -2862,7 +2913,11 @@ const main = async () => {
             return;
           }
           button.addEventListener('click', async () => {
-            if (wasmModePending || requestedCalculationVariant === option) {
+            if (
+              (option === 'simd-mt' && !isSimdThreadVariantSupported) ||
+              wasmModePending ||
+              requestedCalculationVariant === option
+            ) {
               return;
             }
             wasmModePending = true;

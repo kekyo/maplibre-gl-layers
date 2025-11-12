@@ -6,12 +6,17 @@
 
 import type { Releaseable } from './internalTypes';
 import type { SpriteLayerCalculationVariant } from './types';
+import wasmConfig from './wasm/config.json' assert { type: 'json' };
 
 //////////////////////////////////////////////////////////////////////////////////////
 
 const BUFFER_POOL_ENTRY_TTL_MS = 5_000;
 const BUFFER_POOL_SWEEP_INTERVAL_MS = 3_000;
 const BUFFER_POOL_MAX_REUSE_RATIO = 2;
+const CONFIGURED_PTHREAD_POOL_SIZE =
+  typeof wasmConfig?.pthreadPoolSize === 'number'
+    ? Math.max(0, Math.trunc(wasmConfig.pthreadPoolSize))
+    : 0;
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -193,19 +198,32 @@ export type WasmVariant = SpriteLayerCalculationVariant;
 
 type WasmBinaryVariant = Exclude<WasmVariant, 'disabled'>;
 
-const DEFAULT_WASM_URLS: Record<WasmBinaryVariant, URL> = {
-  simd: new URL('./wasm/offloads-simd.wasm', import.meta.url),
-  nosimd: new URL('./wasm/offloads-nosimd.wasm', import.meta.url),
+type WasmAssetKind = 'wasm' | 'js' | 'worker';
+
+const WASM_ASSET_FILES: Record<
+  WasmBinaryVariant,
+  Partial<Record<WasmAssetKind, string>>
+> = {
+  'simd-mt': {
+    wasm: 'offloads-simd-mt.wasm',
+    js: 'offloads-simd-mt.js',
+    worker: 'offloads-simd-mt.worker.js',
+  },
+  simd: {
+    wasm: 'offloads-simd.wasm',
+  },
+  nosimd: {
+    wasm: 'offloads-nosimd.wasm',
+  },
 };
 
-const WASM_BINARY_FILE_NAMES: Record<WasmBinaryVariant, string> = {
-  simd: DEFAULT_WASM_URLS.simd.pathname.substring(
-    DEFAULT_WASM_URLS.simd.pathname.lastIndexOf('/') + 1
-  ),
-  nosimd: DEFAULT_WASM_URLS.nosimd.pathname.substring(
-    DEFAULT_WASM_URLS.nosimd.pathname.lastIndexOf('/') + 1
-  ),
+const VARIANT_FALLBACKS: Record<WasmBinaryVariant, WasmBinaryVariant[]> = {
+  'simd-mt': ['simd-mt', 'simd', 'nosimd'],
+  simd: ['simd', 'nosimd'],
+  nosimd: ['nosimd'],
 };
+
+let threadedVariantWarningPrinted = false;
 
 const ensureTrailingSlash = (value: string): string =>
   value.endsWith('/') ? value : `${value}/`;
@@ -218,6 +236,27 @@ const resolveRuntimeBase = (): string => {
   return import.meta.url;
 };
 
+const buildAssetUrlFromFile = (fileName: string): URL => {
+  if (wasmBaseUrlOverride !== undefined) {
+    const normalizedBase = ensureTrailingSlash(wasmBaseUrlOverride);
+    const baseUrl = resolveBaseUrl(normalizedBase);
+    return new URL(fileName, baseUrl);
+  }
+  return new URL(`./wasm/${fileName}`, import.meta.url);
+};
+
+const resolveVariantAssetUrl = (
+  variant: WasmBinaryVariant,
+  kind: WasmAssetKind
+): URL => {
+  const files = WASM_ASSET_FILES[variant];
+  const fileName = files?.[kind];
+  if (!fileName) {
+    throw new Error(`Asset ${kind} is not defined for variant "${variant}".`);
+  }
+  return buildAssetUrlFromFile(fileName);
+};
+
 const resolveBaseUrl = (base: string): URL => {
   try {
     return new URL(base);
@@ -227,15 +266,6 @@ const resolveBaseUrl = (base: string): URL => {
 };
 
 let wasmBaseUrlOverride: string | undefined;
-
-const buildWasmUrl = (variant: WasmBinaryVariant): URL => {
-  if (wasmBaseUrlOverride !== undefined) {
-    const normalizedBase = ensureTrailingSlash(wasmBaseUrlOverride);
-    const baseUrl = resolveBaseUrl(normalizedBase);
-    return new URL(WASM_BINARY_FILE_NAMES[variant], baseUrl);
-  }
-  return DEFAULT_WASM_URLS[variant];
-};
 
 type NodeFsPromisesModule = typeof import('fs/promises');
 type NodeUrlModule = typeof import('url');
@@ -249,20 +279,36 @@ const isNodeEnvironment = (() => {
   return !!globalProcess?.versions?.node;
 })();
 
+const canUseThreadedWasm = (): boolean => {
+  if (isNodeEnvironment) {
+    return true;
+  }
+  if (typeof SharedArrayBuffer === 'undefined') {
+    return false;
+  }
+  const globalFlags = globalThis as { crossOriginIsolated?: boolean };
+  if ('crossOriginIsolated' in globalFlags) {
+    return !!globalFlags.crossOriginIsolated;
+  }
+  return false;
+};
+
 const importNodeModule = async <T>(specifier: string): Promise<T> =>
   (await import(/* @vite-ignore */ specifier)) as T;
 
-const createImportFunctionStub = (): Record<
-  string,
-  (...args: unknown[]) => number
-> => {
-  const noop = () => 0;
-  return new Proxy(
-    {},
-    {
-      get: () => noop,
-    }
-  ) as Record<string, (...args: unknown[]) => number>;
+const createImportNamespace = (
+  additional?: Record<string, unknown>
+): Record<string, unknown> => {
+  const functionStub = () => 0;
+  const target: Record<string, unknown> = additional ? { ...additional } : {};
+  return new Proxy(target, {
+    get(currentTarget, prop: string) {
+      if (prop in currentTarget) {
+        return currentTarget[prop];
+      }
+      return functionStub;
+    },
+  });
 };
 
 /**
@@ -272,7 +318,7 @@ const createImportFunctionStub = (): Record<
 const loadWasmBinary = async (
   variant: WasmBinaryVariant
 ): Promise<ArrayBuffer> => {
-  const wasmUrl = buildWasmUrl(variant);
+  const wasmUrl = resolveVariantAssetUrl(variant, 'wasm');
 
   if (typeof fetch === 'function') {
     try {
@@ -337,6 +383,7 @@ interface RawProjectionWasmExports {
   readonly calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
   readonly _prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
   readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
+  readonly _setThreadPoolSize?: (count: number) => void;
 }
 
 /**
@@ -364,6 +411,46 @@ interface InternalBufferHolder<TArray extends TypedArrayBufferView<TArray>>
   release: () => void;
 }
 
+const instantiateThreadedProjectionWasm =
+  async (): Promise<RawProjectionWasmExports> => {
+    const scriptUrl = resolveVariantAssetUrl('simd-mt', 'js');
+    const wasmUrl = resolveVariantAssetUrl('simd-mt', 'wasm');
+    const workerUrl = resolveVariantAssetUrl('simd-mt', 'worker');
+
+    const moduleFactory = await import(/* @vite-ignore */ scriptUrl.href);
+    const createModule = (moduleFactory?.default ??
+      moduleFactory?.Module ??
+      moduleFactory) as
+      | ((moduleArgs?: Record<string, unknown>) => Promise<unknown>)
+      | undefined;
+
+    if (typeof createModule !== 'function') {
+      throw new Error('maplibre-gl-layers: simd-mt module is unavailable.');
+    }
+
+    const moduleInstance = (await createModule({
+      locateFile: (path: string) => {
+        if (path.endsWith('.wasm')) {
+          return wasmUrl.href;
+        }
+        if (path.endsWith('.worker.js')) {
+          return workerUrl.href;
+        }
+        return path;
+      },
+    })) as RawProjectionWasmExports;
+
+    const threadLimit = resolveThreadPoolLimit();
+    if (
+      threadLimit > 0 &&
+      typeof moduleInstance._setThreadPoolSize === 'function'
+    ) {
+      moduleInstance._setThreadPoolSize(threadLimit);
+    }
+
+    return moduleInstance;
+  };
+
 /**
  * Load wasm binary, instantiate and refer entry points.
  * @returns WasmHost
@@ -371,25 +458,34 @@ interface InternalBufferHolder<TArray extends TypedArrayBufferView<TArray>>
 const instantiateProjectionWasm = async (
   variant: WasmBinaryVariant
 ): Promise<WasmHost & Releaseable> => {
-  // Load wasm binary and instantiate.
+  if (variant === 'simd-mt') {
+    const threadedExports = await instantiateThreadedProjectionWasm();
+    return createWasmHostFromExports(threadedExports);
+  }
+
   const binary = await loadWasmBinary(variant);
   const imports: WebAssembly.Imports = {};
-  const functionStub = createImportFunctionStub();
   const importTargets = imports as Record<string, unknown>;
-  importTargets.wasi_snapshot_preview1 = functionStub;
-  importTargets.env = functionStub;
+  importTargets.wasi_snapshot_preview1 = createImportNamespace();
+  importTargets.env = createImportNamespace();
   const { instance } = await WebAssembly.instantiate(binary, imports);
   const exports = instance.exports as RawProjectionWasmExports;
+  return createWasmHostFromExports(exports);
+};
 
-  //====================================================================
-
-  // Call wasm side constructors.
+const createWasmHostFromExports = (
+  exports: RawProjectionWasmExports
+): WasmHost & Releaseable => {
   if (typeof exports.__wasm_call_ctors === 'function') {
     exports.__wasm_call_ctors();
   }
 
-  // Resolve exposed wasm entry points.
-  const memory = exports.memory;
+  const memory =
+    exports.memory ??
+    (exports as unknown as { wasmMemory?: WebAssembly.Memory }).wasmMemory;
+  if (!memory) {
+    throw new Error('maplibre-gl-layers: wasm memory is unavailable.');
+  }
   const malloc =
     (exports._malloc as ((size: number) => number) | undefined) ??
     (exports.malloc as ((size: number) => number) | undefined);
@@ -749,10 +845,20 @@ const initializeWasmHostInternal = async (
     return ['disabled', undefined];
   }
 
-  const variantsToTry: WasmBinaryVariant[] =
-    preferredVariant === 'simd' ? ['simd', 'nosimd'] : ['nosimd'];
+  const variantsToTry: WasmBinaryVariant[] = VARIANT_FALLBACKS[
+    preferredVariant as WasmBinaryVariant
+  ] ?? ['nosimd'];
 
   for (const variant of variantsToTry) {
+    if (variant === 'simd-mt' && !canUseThreadedWasm()) {
+      if (!threadedVariantWarningPrinted) {
+        console.warn(
+          'maplibre-gl-layers: SharedArrayBuffer is unavailable, skipping simd-mt wasm variant.'
+        );
+        threadedVariantWarningPrinted = true;
+      }
+      continue;
+    }
     try {
       const wasmHost = await instantiateProjectionWasm(variant);
       console.log(
@@ -842,4 +948,18 @@ export const prepareWasmHost = (): WasmHost => {
     throw new Error('Could not use WasmHost, needs before initialization.');
   }
   return currentWasmHost;
+};
+const resolveThreadPoolLimit = (): number => {
+  const hardware =
+    typeof navigator !== 'undefined' &&
+    typeof navigator.hardwareConcurrency === 'number'
+      ? navigator.hardwareConcurrency
+      : 0;
+  if (CONFIGURED_PTHREAD_POOL_SIZE > 0 && hardware > 0) {
+    return Math.min(CONFIGURED_PTHREAD_POOL_SIZE, hardware);
+  }
+  if (CONFIGURED_PTHREAD_POOL_SIZE > 0) {
+    return CONFIGURED_PTHREAD_POOL_SIZE;
+  }
+  return hardware;
 };

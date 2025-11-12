@@ -50,3 +50,4 @@ temp/
 # Generated files
 *.generated.*
 generated/
+src/wasm/*.js

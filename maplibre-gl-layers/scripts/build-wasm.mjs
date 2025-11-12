@@ -6,7 +6,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -18,20 +18,58 @@ const projectRoot = resolve(__dirname, '..');
 const repositoryRoot = resolve(projectRoot, '..');
 const wasmSourceDir = resolve(projectRoot, 'wasm');
 const wasmOutputDir = resolve(projectRoot, 'src/wasm');
+const wasmConfigFile = resolve(wasmOutputDir, 'config.json');
 const sourceFiles = [
   resolve(wasmSourceDir, 'projection_host.cpp'),
   resolve(wasmSourceDir, 'calculation_host.cpp'),
 ];
+const parsePositiveInteger = (value, fallback) => {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+};
+
+const pthreadPoolSize = Math.max(
+  1,
+  parsePositiveInteger(process.env.WASM_PTHREAD_POOL_SIZE, 4)
+);
+
+const pthreadMemoryMegabytes = Math.max(
+  16,
+  parsePositiveInteger(process.env.WASM_PTHREAD_MEMORY_MB, 256)
+);
+const pthreadMemoryBytes = pthreadMemoryMegabytes * 1024 * 1024;
+
 const wasmVariants = [
+  {
+    name: 'simd-mt',
+    outputFile: resolve(wasmOutputDir, 'offloads-simd-mt.js'),
+    wasmFile: resolve(wasmOutputDir, 'offloads-simd-mt.wasm'),
+    workerFile: resolve(wasmOutputDir, 'offloads-simd-mt.worker.js'),
+    enableSimd: true,
+    enableThreads: true,
+    emitJsWrapper: true,
+  },
   {
     name: 'simd',
     outputFile: resolve(wasmOutputDir, 'offloads-simd.wasm'),
+    wasmFile: resolve(wasmOutputDir, 'offloads-simd.wasm'),
     enableSimd: true,
+    enableThreads: false,
+    emitJsWrapper: false,
   },
   {
     name: 'nosimd',
     outputFile: resolve(wasmOutputDir, 'offloads-nosimd.wasm'),
+    wasmFile: resolve(wasmOutputDir, 'offloads-nosimd.wasm'),
     enableSimd: false,
+    enableThreads: false,
+    emitJsWrapper: false,
   },
 ];
 
@@ -172,9 +210,7 @@ const createEmccArgs = (variant) => {
     '-s',
     'ENVIRONMENT=web,webview,worker,node',
     '-s',
-    'EXPORTED_FUNCTIONS=["_malloc","_free", "_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_projectLngLatToClipSpace","_calculateBillboardDepthKey","_calculateSurfaceDepthKey","_prepareDrawSpriteImages"]',
-    '-s',
-    'ALLOW_MEMORY_GROWTH=1',
+    'EXPORTED_FUNCTIONS=["_malloc","_free","_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_projectLngLatToClipSpace","_calculateBillboardDepthKey","_calculateSurfaceDepthKey","_prepareDrawSpriteImages","_setThreadPoolSize"]',
     '-s',
     'ERROR_ON_UNDEFINED_SYMBOLS=0',
     '-mbulk-memory',
@@ -182,20 +218,52 @@ const createEmccArgs = (variant) => {
   if (variant.enableSimd) {
     args.push('-msimd128', '-DSIMD_ENABLED=1');
   }
+  if (variant.enableThreads) {
+    args.push(
+      '-pthread',
+      '-s',
+      'USE_PTHREADS=1',
+      '-s',
+      `PTHREAD_POOL_SIZE=${pthreadPoolSize}`,
+      '-s',
+      `INITIAL_MEMORY=${pthreadMemoryBytes}`
+    );
+    args.push('-s', 'ALLOW_MEMORY_GROWTH=0');
+  } else {
+    args.push('-s', 'ALLOW_MEMORY_GROWTH=1');
+  }
+  if (variant.emitJsWrapper) {
+    args.push('-s', 'MODULARIZE=1', '-s', 'EXPORT_ES6=1');
+  }
+  args.push('-s', 'EXPORTED_RUNTIME_METHODS=["wasmMemory"]');
   return args;
 };
 
 const createWasmOptArgs = (variant) => {
+  if (!variant.wasmFile) {
+    return null;
+  }
   const args = ['--enable-nontrapping-float-to-int', '--enable-bulk-memory'];
   if (variant.enableSimd) {
     args.push('--enable-simd');
   }
-  args.push(variant.outputFile, '-Oz', '-o', variant.outputFile);
+  if (variant.enableThreads) {
+    args.push('--enable-threads');
+  }
+  args.push(variant.wasmFile, '-Oz', '-o', variant.wasmFile);
   return args;
 };
 
 for (const variant of wasmVariants) {
   console.log(`Building ${variant.name} wasm...`);
   runEmcc(createEmccArgs(variant));
-  runWasmOpt(createWasmOptArgs(variant));
+  const wasmOptArgs = createWasmOptArgs(variant);
+  if (wasmOptArgs) {
+    runWasmOpt(wasmOptArgs);
+  }
 }
+
+const configData = {
+  pthreadPoolSize,
+};
+writeFileSync(wasmConfigFile, `${JSON.stringify(configData, null, 2)}\n`);
