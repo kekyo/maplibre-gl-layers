@@ -7,22 +7,9 @@
 import type { SpriteInterpolationOptions } from './types';
 import type { DegreeInterpolationState } from './internalTypes';
 import { createDegreeInterpolationState } from './degreeInterpolation';
+import { normalizeAngleDeg } from './math';
 
-//////////////////////////////////////////////////////////////////////////////////////////
-
-/**
- * Normalizes an absolute angle in degrees to the range [0, 360).
- * @param {number} angle - Angle provided by the caller which may fall outside a single revolution.
- * @returns {number} Angle wrapped to [0, 360) with negative zero converted to zero.
- */
-export const normalizeAngleDeg = (angle: number): number => {
-  if (!Number.isFinite(angle)) {
-    return 0;
-  }
-  const wrapped = angle % 360;
-  const normalized = wrapped < 0 ? wrapped + 360 : wrapped;
-  return Object.is(normalized, -0) ? 0 : normalized;
-};
+export { normalizeAngleDeg } from './math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

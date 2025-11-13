@@ -4,9 +4,14 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { EasingFunction, SpriteInterpolationOptions } from './types';
+import type { SpriteInterpolationOptions } from './types';
 import { resolveEasing } from './easing';
-import type { DegreeInterpolationState } from './internalTypes';
+import type {
+  DegreeInterpolationState,
+  DegreeInterpolationEvaluationResult,
+  InternalSpriteImageState,
+} from './internalTypes';
+import { normalizeAngleDeg } from './math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -54,12 +59,15 @@ const normalizeOptions = (
   options: SpriteInterpolationOptions
 ): {
   durationMs: number;
-  easing: EasingFunction;
+  easing: ReturnType<typeof resolveEasing>['easing'];
+  easingPreset: ReturnType<typeof resolveEasing>['preset'];
   mode: 'feedback' | 'feedforward';
 } => {
+  const resolved = resolveEasing(options.easing);
   return {
     durationMs: normalizeDuration(options.durationMs),
-    easing: resolveEasing(options.easing),
+    easing: resolved.easing,
+    easingPreset: resolved.preset,
     mode: options.mode ?? 'feedback',
   };
 };
@@ -122,6 +130,7 @@ export const createDegreeInterpolationState = (
   const state: DegreeInterpolationState = {
     durationMs: options.durationMs,
     easing: options.easing,
+    easingPreset: options.easingPreset,
     from: currentValue,
     to: pathTarget,
     finalValue: effectiveTarget,
@@ -217,4 +226,118 @@ export const evaluateDegreeInterpolation = (
     completed,
     effectiveStartTimestamp: effectiveStart,
   };
+};
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+type DegreeInterpolationStateKey =
+  | 'rotationInterpolationState'
+  | 'offsetDegInterpolationState';
+
+interface DegreeInterpolationChannelDescriptor {
+  readonly stateKey: DegreeInterpolationStateKey;
+  readonly normalize?: (value: number) => number;
+  readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
+  readonly applyFinalValue?: (
+    image: InternalSpriteImageState,
+    value: number
+  ) => void;
+}
+
+const DEGREE_INTERPOLATION_CHANNELS: Record<
+  'rotation' | 'offsetDeg',
+  DegreeInterpolationChannelDescriptor
+> = {
+  rotation: {
+    stateKey: 'rotationInterpolationState',
+    normalize: normalizeAngleDeg,
+    applyValue: (image, value) => {
+      image.displayedRotateDeg = value;
+    },
+  },
+  offsetDeg: {
+    stateKey: 'offsetDegInterpolationState',
+    applyValue: (image, value) => {
+      image.offset.offsetDeg = value;
+    },
+  },
+};
+
+const updateDegreeInterpolationState = (
+  image: InternalSpriteImageState,
+  descriptor: DegreeInterpolationChannelDescriptor,
+  nextState: DegreeInterpolationState | null
+): void => {
+  if (descriptor.stateKey === 'rotationInterpolationState') {
+    image.rotationInterpolationState = nextState;
+  } else {
+    image.offsetDegInterpolationState = nextState;
+  }
+};
+
+export interface DegreeInterpolationWorkItem {
+  readonly descriptor: DegreeInterpolationChannelDescriptor;
+  readonly image: InternalSpriteImageState;
+  readonly state: DegreeInterpolationState;
+}
+
+export const collectDegreeInterpolationWorkItems = (
+  image: InternalSpriteImageState,
+  workItems: DegreeInterpolationWorkItem[]
+): void => {
+  const rotationState = image.rotationInterpolationState;
+  if (rotationState) {
+    workItems.push({
+      descriptor: DEGREE_INTERPOLATION_CHANNELS.rotation,
+      image,
+      state: rotationState,
+    });
+  }
+
+  const offsetState = image.offsetDegInterpolationState;
+  if (offsetState) {
+    workItems.push({
+      descriptor: DEGREE_INTERPOLATION_CHANNELS.offsetDeg,
+      image,
+      state: offsetState,
+    });
+  }
+};
+
+export const applyDegreeInterpolationEvaluations = (
+  workItems: readonly DegreeInterpolationWorkItem[],
+  evaluations: readonly DegreeInterpolationEvaluationResult[],
+  timestamp: number
+): boolean => {
+  let active = false;
+  for (let index = 0; index < workItems.length; index += 1) {
+    const item = workItems[index]!;
+    const evaluation =
+      evaluations[index] ??
+      evaluateDegreeInterpolation({
+        state: item.state,
+        timestamp,
+      });
+
+    if (item.state.startTimestamp < 0) {
+      item.state.startTimestamp = evaluation.effectiveStartTimestamp;
+    }
+
+    const normalize = item.descriptor.normalize ?? ((value: number) => value);
+    const applyFinalValue =
+      item.descriptor.applyFinalValue ?? item.descriptor.applyValue;
+
+    const interpolatedValue = normalize(evaluation.value);
+    item.descriptor.applyValue(item.image, interpolatedValue);
+
+    if (evaluation.completed) {
+      const finalValue = normalize(item.state.finalValue);
+      applyFinalValue(item.image, finalValue);
+      updateDegreeInterpolationState(item.image, item.descriptor, null);
+    } else {
+      updateDegreeInterpolationState(item.image, item.descriptor, item.state);
+      active = true;
+    }
+  }
+  return active;
 };

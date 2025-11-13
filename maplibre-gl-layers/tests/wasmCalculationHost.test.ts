@@ -24,6 +24,12 @@ import type {
   PrepareDrawSpriteImageParams,
   RegisteredImage,
   RenderTargetEntryLike,
+  DistanceInterpolationState,
+  DegreeInterpolationState,
+  SpriteInterpolationState,
+  DistanceInterpolationEvaluationResult,
+  DegreeInterpolationEvaluationResult,
+  SpriteInterpolationEvaluationResult,
 } from '../src/internalTypes';
 import { ORDER_BUCKET } from '../src/const';
 import {
@@ -49,10 +55,33 @@ const RESULT_ITEM_STRIDE =
   RESULT_VERTEX_COMPONENT_LENGTH +
   RESULT_HIT_TEST_COMPONENT_LENGTH +
   RESULT_SURFACE_BLOCK_LENGTH;
+const DISTANCE_INTERPOLATION_ITEM_LENGTH = 7;
+const DISTANCE_INTERPOLATION_RESULT_LENGTH = 3;
+const DEGREE_INTERPOLATION_ITEM_LENGTH = 7;
+const DEGREE_INTERPOLATION_RESULT_LENGTH = 3;
+const SPRITE_INTERPOLATION_ITEM_LENGTH = 11;
+const SPRITE_INTERPOLATION_RESULT_LENGTH = 6;
+const PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
+
+interface WasmProcessInterpolationResults {
+  distance: DistanceInterpolationEvaluationResult[];
+  degree: DegreeInterpolationEvaluationResult[];
+  sprite: SpriteInterpolationEvaluationResult[];
+}
 
 class MockWasmHost implements WasmHost {
   readonly memory = new WebAssembly.Memory({ initial: 4 });
   private offset = 8;
+  nextProcessResponse: WasmProcessInterpolationResults = {
+    distance: [],
+    degree: [],
+    sprite: [],
+  };
+  lastProcessRequestCounts: {
+    distance: number;
+    degree: number;
+    sprite: number;
+  } | null = null;
 
   release(): void {}
 
@@ -131,6 +160,71 @@ class MockWasmHost implements WasmHost {
   }
 
   prepareDrawSpriteImages(): boolean {
+    return true;
+  }
+
+  setNextProcessResponse(response: WasmProcessInterpolationResults): void {
+    this.nextProcessResponse = response;
+  }
+
+  processInterpolations(paramsPtr: number, resultPtr: number): boolean {
+    const view = new Float64Array(this.memory.buffer);
+    const start = paramsPtr / Float64Array.BYTES_PER_ELEMENT;
+    const distanceCount = Number(view[start] ?? 0);
+    const degreeCount = Number(view[start + 1] ?? 0);
+    const spriteCount = Number(view[start + 2] ?? 0);
+    this.lastProcessRequestCounts = {
+      distance: distanceCount,
+      degree: degreeCount,
+      sprite: spriteCount,
+    };
+
+    let readCursor = start + PROCESS_INTERPOLATIONS_HEADER_LENGTH;
+    readCursor += distanceCount * DISTANCE_INTERPOLATION_ITEM_LENGTH;
+    readCursor += degreeCount * DEGREE_INTERPOLATION_ITEM_LENGTH;
+    readCursor += spriteCount * SPRITE_INTERPOLATION_ITEM_LENGTH;
+
+    const response = this.nextProcessResponse;
+    if (
+      response.distance.length !== distanceCount ||
+      response.degree.length !== degreeCount ||
+      response.sprite.length !== spriteCount
+    ) {
+      throw new Error(
+        'Unexpected process interpolation response configuration'
+      );
+    }
+
+    let writeCursor = resultPtr / Float64Array.BYTES_PER_ELEMENT;
+    view[writeCursor++] = distanceCount;
+    view[writeCursor++] = degreeCount;
+    view[writeCursor++] = spriteCount;
+
+    for (const entry of response.distance) {
+      view[writeCursor++] = entry.value;
+      view[writeCursor++] = entry.completed ? 1 : 0;
+      view[writeCursor++] = entry.effectiveStartTimestamp;
+    }
+    for (const entry of response.degree) {
+      view[writeCursor++] = entry.value;
+      view[writeCursor++] = entry.completed ? 1 : 0;
+      view[writeCursor++] = entry.effectiveStartTimestamp;
+    }
+    for (const entry of response.sprite) {
+      view[writeCursor++] = entry.location.lng;
+      view[writeCursor++] = entry.location.lat;
+      view[writeCursor++] = entry.location.z ?? 0;
+      view[writeCursor++] = entry.location.z !== undefined ? 1 : 0;
+      view[writeCursor++] = entry.completed ? 1 : 0;
+      view[writeCursor++] = entry.effectiveStartTimestamp;
+    }
+
+    this.nextProcessResponse = {
+      distance: [],
+      degree: [],
+      sprite: [],
+    };
+
     return true;
   }
 }
@@ -489,5 +583,72 @@ describe('converToDrawImageParams', () => {
     } finally {
       parameterHolder.release();
     }
+  });
+});
+
+describe('processInterpolationsViaWasm', () => {
+  it('encodes requests and decodes wasm responses', () => {
+    const wasm = new MockWasmHost();
+    const linear = (value: number): number => value;
+    const distanceState: DistanceInterpolationState = {
+      durationMs: 1000,
+      easing: linear,
+      easingPreset: 'linear',
+      from: 0,
+      to: 10,
+      finalValue: 10,
+      startTimestamp: -1,
+    };
+    const degreeState: DegreeInterpolationState = {
+      durationMs: 1000,
+      easing: linear,
+      easingPreset: 'linear',
+      from: 0,
+      to: 90,
+      finalValue: 90,
+      startTimestamp: -1,
+    };
+    const spriteState: SpriteInterpolationState = {
+      mode: 'feedback',
+      durationMs: 1000,
+      easing: linear,
+      easingPreset: 'linear',
+      startTimestamp: -1,
+      from: { lng: 0, lat: 0 },
+      to: { lng: 5, lat: 0 },
+    };
+
+    const requests = {
+      distance: [{ state: distanceState, timestamp: 50 }],
+      degree: [{ state: degreeState, timestamp: 50 }],
+      sprite: [{ state: spriteState, timestamp: 50 }],
+    };
+
+    wasm.setNextProcessResponse({
+      distance: [{ value: 3, completed: false, effectiveStartTimestamp: 10 }],
+      degree: [{ value: 30, completed: true, effectiveStartTimestamp: 20 }],
+      sprite: [
+        {
+          location: { lng: 1, lat: 2 },
+          completed: false,
+          effectiveStartTimestamp: 30,
+        },
+      ],
+    });
+
+    const result = __wasmCalculationTestInternals.processInterpolationsViaWasm(
+      wasm,
+      requests
+    );
+
+    expect(result.distance).toHaveLength(1);
+    expect(result.distance[0]?.value).toBe(3);
+    expect(result.degree[0]?.completed).toBe(true);
+    expect(result.sprite[0]?.location.lng).toBeCloseTo(1);
+    expect(wasm.lastProcessRequestCounts).toEqual({
+      distance: 1,
+      degree: 1,
+      sprite: 1,
+    });
   });
 });

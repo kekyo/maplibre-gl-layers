@@ -7,7 +7,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyOpacityUpdate,
-  clampOpacity,
   stepSpriteImageInterpolations,
 } from '../src/interpolationChannels';
 import type { InternalSpriteImageState } from '../src/internalTypes';
@@ -40,14 +39,6 @@ const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   lastCommandOffsetDeg: 0,
   lastCommandOffsetMeters: 0,
   lastCommandOpacity: opacity,
-});
-
-describe('clampOpacity', () => {
-  it('limits values to the [0, 1] interval', () => {
-    expect(clampOpacity(-1)).toBe(0);
-    expect(clampOpacity(0.25)).toBe(0.25);
-    expect(clampOpacity(2)).toBe(1);
-  });
 });
 
 describe('applyOpacityUpdate', () => {

@@ -62,6 +62,7 @@ import type {
   ProjectionHost,
   PreparedDrawSpriteImageParams,
   RenderCalculationHost,
+  RenderInterpolationParams,
   SpriteOriginReference,
   SpriteOriginReferenceKey,
 } from './internalTypes';
@@ -70,10 +71,7 @@ import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './image';
-import {
-  createInterpolationState,
-  evaluateInterpolation,
-} from './interpolation';
+import { createInterpolationState } from './interpolation';
 import { normalizeAngleDeg } from './rotationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
@@ -92,6 +90,7 @@ import {
   cloneSpriteLocation,
   spriteLocationsEqual,
   resolveSpriteMercator,
+  clampOpacity,
 } from './math';
 import {
   applyOffsetUpdate,
@@ -99,9 +98,8 @@ import {
   clearOffsetDegInterpolation,
   clearOffsetMetersInterpolation,
   clearOpacityInterpolation,
-  clampOpacity,
-  stepSpriteImageInterpolations,
   syncImageRotationChannel,
+  hasActiveImageInterpolations,
 } from './interpolationChannels';
 import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './default';
 import {
@@ -334,6 +332,17 @@ const resolveGlMagFilter = (
   }
 };
 
+const updateImageInterpolationDirtyState = <T>(
+  sprite: InternalSpriteCurrentState<T>,
+  image: InternalSpriteImageState
+): void => {
+  const dirty = hasActiveImageInterpolations(image);
+  image.interpolationDirty = dirty;
+  if (dirty) {
+    sprite.interpolationDirty = true;
+  }
+};
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -398,6 +407,7 @@ export const applyAutoRotation = <T>(
       }
       image.resolvedBaseRotateDeg = resolvedAngle;
       syncImageRotationChannel(image);
+      updateImageInterpolationDirtyState(sprite, image);
     });
   });
 
@@ -1082,6 +1092,7 @@ export const createImageStateFromInit = (
     lastCommandOffsetDeg: initialOffset.offsetDeg,
     lastCommandOffsetMeters: initialOffset.offsetMeters,
     lastCommandOpacity: initialOpacity,
+    interpolationDirty: false,
   };
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
   const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
@@ -3017,42 +3028,39 @@ export const createSpriteLayer = <T = any>(
         : // Fall back to Date.now() in environments without the Performance API.
           Date.now();
 
-    let hasActiveInterpolation = false;
-    sprites.forEach((sprite) => {
-      const state = sprite.interpolationState;
-      // Advance sprite position interpolation when an active state exists.
-      if (state) {
-        const evaluation = evaluateInterpolation({
-          state,
-          timestamp,
-        });
-        // Initialize start timestamp on first evaluation to align progress.
-        if (state.startTimestamp < 0) {
-          state.startTimestamp = evaluation.effectiveStartTimestamp;
-        }
-        sprite.currentLocation = evaluation.location;
-
-        // Once interpolation completes, snap to the destination and clear transient state.
-        if (evaluation.completed) {
-          sprite.currentLocation = cloneSpriteLocation(state.to);
-          sprite.fromLocation = undefined;
-          sprite.toLocation = undefined;
-          sprite.interpolationState = null;
-        } else {
-          hasActiveInterpolation = true;
-        }
+    const spriteStateArray = Array.from(sprites.values());
+    let frameCalculationHost: RenderCalculationHost<T> | null = null;
+    const ensureCalculationHost = (): RenderCalculationHost<T> => {
+      if (!frameCalculationHost) {
+        frameCalculationHost = createCalculationHostForMap(mapInstance);
       }
+      return frameCalculationHost;
+    };
+    const releaseCalculationHost = (): void => {
+      if (!frameCalculationHost) {
+        return;
+      }
+      frameCalculationHost.release();
+      frameCalculationHost = null;
+    };
 
-      sprite.images.forEach((orderMap) => {
-        orderMap.forEach((image) => {
-          if (stepSpriteImageInterpolations(image, timestamp)) {
-            hasActiveInterpolation = true;
-          }
-        });
-      });
-    });
+    let hasActiveInterpolation = false;
+    if (spriteStateArray.length > 0) {
+      const interpolationParams: RenderInterpolationParams<T> = {
+        sprites: spriteStateArray,
+        timestamp,
+        frameContext: {
+          baseMetersPerPixel: resolvedScaling.metersPerPixel,
+          spriteMinPixel: resolvedScaling.spriteMinPixel,
+          spriteMaxPixel: resolvedScaling.spriteMaxPixel,
+        },
+      };
+      const calculationHost = ensureCalculationHost();
+      const hostResult =
+        calculationHost.processInterpolations(interpolationParams);
+      hasActiveInterpolation = hostResult.hasActiveInterpolation;
+    }
 
-    // Schedule another frame when any interpolation remains in-flight to keep animations smooth.
     if (hasActiveInterpolation) {
       scheduleRender();
     }
@@ -3145,76 +3153,72 @@ export const createSpriteLayer = <T = any>(
         buildSortedSubLayerBuckets(renderTargetEntries);
 
       if (renderTargetEntries.length > 0) {
-        const calculationHost = createCalculationHostForMap(mapInstance);
-        try {
-          const imageHandleBuffers = imageHandleBuffersController.ensure();
-          const imageResources =
-            imageHandleBuffersController.getResourcesByHandle();
-          const bucketBuffers = createRenderTargetBucketBuffers(
-            renderTargetEntries,
-            {
-              originReference,
-            }
-          );
-          const preparedItems = calculationHost.prepareDrawSpriteImages({
-            bucket: renderTargetEntries,
-            bucketBuffers,
-            imageResources,
-            imageHandleBuffers,
-            resolvedScaling,
-            clipContext,
-            baseMetersPerPixel,
-            spriteMinPixel,
-            spriteMaxPixel,
-            drawingBufferWidth,
-            drawingBufferHeight,
-            pixelRatio,
-            zoomScaleFactor,
-            identityScaleX,
-            identityScaleY,
-            identityOffsetX,
-            identityOffsetY,
-            screenToClipScaleX,
-            screenToClipScaleY,
-            screenToClipOffsetX,
-            screenToClipOffsetY,
-          });
-
-          drawProgram.uploadVertexBatch(preparedItems);
-
-          const preparedBySubLayer = new Map<
-            number,
-            PreparedDrawSpriteImageParams<T>[]
-          >();
-          for (const prepared of preparedItems) {
-            const subLayer = prepared.imageEntry.subLayer;
-            let list = preparedBySubLayer.get(subLayer);
-            if (!list) {
-              list = [];
-              preparedBySubLayer.set(subLayer, list);
-            }
-            list.push(prepared);
+        const calculationHost = ensureCalculationHost();
+        const imageHandleBuffers = imageHandleBuffersController.ensure();
+        const imageResources =
+          imageHandleBuffersController.getResourcesByHandle();
+        const bucketBuffers = createRenderTargetBucketBuffers(
+          renderTargetEntries,
+          {
+            originReference,
           }
+        );
+        const preparedItems = calculationHost.prepareDrawSpriteImages({
+          bucket: renderTargetEntries,
+          bucketBuffers,
+          imageResources,
+          imageHandleBuffers,
+          resolvedScaling,
+          clipContext,
+          baseMetersPerPixel,
+          spriteMinPixel,
+          spriteMaxPixel,
+          drawingBufferWidth,
+          drawingBufferHeight,
+          pixelRatio,
+          zoomScaleFactor,
+          identityScaleX,
+          identityScaleY,
+          identityOffsetX,
+          identityOffsetY,
+          screenToClipScaleX,
+          screenToClipScaleY,
+          screenToClipOffsetX,
+          screenToClipOffsetY,
+        });
 
-          for (const [subLayer, bucket] of sortedSubLayerBuckets) {
-            const preparedBucket = preparedBySubLayer.get(subLayer);
-            if (!preparedBucket) {
+        drawProgram.uploadVertexBatch(preparedItems);
+
+        const preparedBySubLayer = new Map<
+          number,
+          PreparedDrawSpriteImageParams<T>[]
+        >();
+        for (const prepared of preparedItems) {
+          const subLayer = prepared.imageEntry.subLayer;
+          let list = preparedBySubLayer.get(subLayer);
+          if (!list) {
+            list = [];
+            preparedBySubLayer.set(subLayer, list);
+          }
+          list.push(prepared);
+        }
+
+        for (const [subLayer, bucket] of sortedSubLayerBuckets) {
+          const preparedBucket = preparedBySubLayer.get(subLayer);
+          if (!preparedBucket) {
+            continue;
+          }
+          const bucketImages = new Set<InternalSpriteImageState>();
+          for (const [, image] of bucket) {
+            bucketImages.add(image);
+          }
+          for (const prepared of preparedBucket) {
+            if (!bucketImages.has(prepared.imageEntry)) {
               continue;
             }
-            const bucketImages = new Set<InternalSpriteImageState>();
-            for (const [, image] of bucket) {
-              bucketImages.add(image);
-            }
-            for (const prepared of preparedBucket) {
-              if (!bucketImages.has(prepared.imageEntry)) {
-                continue;
-              }
-              bucketImages.delete(prepared.imageEntry);
-              drawPreparedSprite(prepared);
-            }
+            bucketImages.delete(prepared.imageEntry);
+            drawPreparedSprite(prepared);
           }
-        } finally {
-          calculationHost.release();
         }
       }
 
@@ -3231,6 +3235,7 @@ export const createSpriteLayer = <T = any>(
         debugOutlineRenderer.end();
       }
     } finally {
+      releaseCalculationHost();
       projectionHost.release();
     }
 
@@ -3810,6 +3815,7 @@ export const createSpriteLayer = <T = any>(
       lastCommandLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationAngleDeg: 0,
+      interpolationDirty: false,
       cachedMercator: initialMercator,
       cachedMercatorLng: currentLocation.lng,
       cachedMercatorLat: currentLocation.lat,
@@ -4103,6 +4109,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     syncImageRotationChannel(state);
+    updateImageInterpolationDirtyState(sprite, state);
 
     setImageState(sprite, state);
     registerImageBoundsInHitTestTree(projectionHost, sprite, state);
@@ -4303,6 +4310,8 @@ export const createSpriteLayer = <T = any>(
         hasRotationOverride ? (rotationOverride ?? null) : undefined
       );
     }
+
+    updateImageInterpolationDirtyState(sprite, state);
 
     registerImageBoundsInHitTestTree(projectionHost, sprite, state);
 

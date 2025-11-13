@@ -11,6 +11,9 @@ import { createMapLibreProjectionHost } from '../src/mapLibreProjectionHost';
 import {
   collectDepthSortedItemsInternal,
   prepareDrawSpriteImageInternal,
+  processInterpolationsInternal,
+  type ProcessInterpolationsEvaluationHandlers,
+  type ProcessInterpolationPresetRequests,
 } from '../src/calculationHost';
 import {
   createImageHandleBufferController,
@@ -56,6 +59,8 @@ import {
   TRIANGLE_INDICES,
 } from '../src/const';
 import { BILLBOARD_BASE_CORNERS, SURFACE_BASE_CORNERS } from '../src/shader';
+import { createDistanceInterpolationState } from '../src/distanceInterpolation';
+import { createInterpolationState } from '../src/interpolation';
 
 const SCALE = 256;
 const IDENTITY_MATRIX = new Float64Array([
@@ -1245,5 +1250,108 @@ describe('prepareDrawSpriteImages', () => {
 
     expect(prepared).toBeNull();
     expect(image.surfaceShaderInputs).toBeUndefined();
+  });
+});
+
+describe('processInterpolationsInternal', () => {
+  it('delegates preset easing to evaluation handlers', () => {
+    const timestamp = 500;
+    const image = createImageState({
+      imageHandle: 1,
+      offset: { offsetMeters: 0, offsetDeg: 0 },
+    });
+    const { state: distanceState } = createDistanceInterpolationState({
+      currentValue: 0,
+      targetValue: 10,
+      options: { durationMs: 1000, easing: 'linear' },
+    });
+    image.offsetMetersInterpolationState = distanceState;
+
+    const currentLocation: SpriteLocation = { lng: 0, lat: 0 };
+    const { state: spriteState } = createInterpolationState({
+      currentLocation,
+      lastCommandLocation: currentLocation,
+      nextCommandLocation: { lng: 10, lat: 0 },
+      options: { durationMs: 1000, easing: 'linear' },
+    });
+    const sprite = createSpriteState('sprite-1', [image], {
+      currentLocation,
+      interpolationState: spriteState,
+    });
+
+    const recorded: ProcessInterpolationPresetRequests[] = [];
+    const handlers: ProcessInterpolationsEvaluationHandlers = {
+      prepare: (requests) => recorded.push(requests),
+      evaluateDistance: vi.fn((requests) =>
+        requests.map(() => ({
+          value: 4,
+          completed: false,
+          effectiveStartTimestamp: timestamp - 100,
+        }))
+      ),
+      evaluateDegree: vi.fn(() => []),
+      evaluateSprite: vi.fn((requests) =>
+        requests.map(() => ({
+          location: { lng: 3, lat: 1 },
+          completed: false,
+          effectiveStartTimestamp: timestamp - 100,
+        }))
+      ),
+    };
+
+    const result = processInterpolationsInternal(
+      {
+        sprites: [sprite],
+        timestamp,
+      },
+      handlers
+    );
+
+    expect(result.hasActiveInterpolation).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.distance).toHaveLength(1);
+    expect(handlers.evaluateDistance).toHaveBeenCalledTimes(1);
+    expect(handlers.evaluateSprite).toHaveBeenCalledTimes(1);
+    expect(image.offset.offsetMeters).toBeCloseTo(4);
+    expect(sprite.currentLocation.lng).toBeCloseTo(3);
+    expect(sprite.interpolationState).not.toBeNull();
+  });
+
+  it('falls back to local evaluation when no preset easing is available', () => {
+    const image = createImageState({
+      imageHandle: 1,
+      offset: { offsetMeters: 2, offsetDeg: 0 },
+    });
+    const customEasing = (value: number): number => value;
+    const { state: distanceState } = createDistanceInterpolationState({
+      currentValue: 2,
+      targetValue: 6,
+      options: { durationMs: 0, easing: customEasing },
+    });
+    expect(distanceState.easingPreset).toBeNull();
+    image.offsetMetersInterpolationState = distanceState;
+
+    const sprite = createSpriteState('sprite-2', [image]);
+
+    const handlers: ProcessInterpolationsEvaluationHandlers = {
+      prepare: vi.fn(),
+      evaluateDistance: vi.fn(() => []),
+      evaluateDegree: vi.fn(() => []),
+      evaluateSprite: vi.fn(() => []),
+    };
+
+    const result = processInterpolationsInternal(
+      {
+        sprites: [sprite],
+        timestamp: 0,
+      },
+      handlers
+    );
+
+    expect(result.hasActiveInterpolation).toBe(false);
+    expect(handlers.prepare).not.toHaveBeenCalled();
+    expect(handlers.evaluateDistance).not.toHaveBeenCalled();
+    expect(image.offset.offsetMeters).toBe(6);
+    expect(image.offsetMetersInterpolationState).toBeNull();
   });
 });

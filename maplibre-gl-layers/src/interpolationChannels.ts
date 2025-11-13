@@ -28,6 +28,7 @@ import {
   normalizeAngleDeg,
   resolveRotationTarget,
 } from './rotationInterpolation';
+import { clampOpacity } from './math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -78,19 +79,6 @@ const stepDegreeInterpolationState = (
   }
 
   return { state: interpolationState, active: true };
-};
-
-export const clampOpacity = (value: number): number => {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  if (value <= 0) {
-    return 0;
-  }
-  if (value >= 1) {
-    return 1;
-  }
-  return value;
 };
 
 const updateImageDisplayedRotation = (
@@ -376,30 +364,62 @@ type ImageInterpolationStepper = (
   timestamp: number
 ) => boolean;
 
-const IMAGE_INTERPOLATION_STEPPERS: readonly ImageInterpolationStepper[] = [
-  stepRotationInterpolation,
-  stepOffsetDegInterpolation,
-  stepOffsetMetersInterpolation,
-  stepOpacityInterpolation,
-];
+export type ImageInterpolationStepperId =
+  | 'rotation'
+  | 'offsetDeg'
+  | 'offsetMeters'
+  | 'opacity';
+
+interface ImageInterpolationStepperEntry {
+  readonly id: ImageInterpolationStepperId;
+  readonly step: ImageInterpolationStepper;
+}
+
+const IMAGE_INTERPOLATION_STEPPERS: readonly ImageInterpolationStepperEntry[] =
+  [
+    { id: 'rotation', step: stepRotationInterpolation },
+    { id: 'offsetDeg', step: stepOffsetDegInterpolation },
+    { id: 'offsetMeters', step: stepOffsetMetersInterpolation },
+    { id: 'opacity', step: stepOpacityInterpolation },
+  ];
 
 /**
  * Executes all interpolation steppers for an image and reports whether any remain active.
  */
+export interface StepSpriteImageInterpolationOptions {
+  readonly skipChannels?: Partial<Record<ImageInterpolationStepperId, boolean>>;
+}
+
 export const stepSpriteImageInterpolations = (
   image: InternalSpriteImageState,
-  timestamp: number
+  timestamp: number,
+  options?: StepSpriteImageInterpolationOptions
 ): boolean => {
   let active = false;
-  for (const stepper of IMAGE_INTERPOLATION_STEPPERS) {
-    if (stepper(image, timestamp)) {
+  const skipChannels = options?.skipChannels ?? null;
+  for (const { id, step } of IMAGE_INTERPOLATION_STEPPERS) {
+    if (skipChannels && skipChannels[id]) {
+      continue;
+    }
+    if (step(image, timestamp)) {
       active = true;
     }
   }
   return active;
 };
 
-interface ApplyOffsetUpdateOptions {
+export const hasActiveImageInterpolations = (
+  image: InternalSpriteImageState
+): boolean => {
+  return (
+    image.rotationInterpolationState !== null ||
+    image.offsetDegInterpolationState !== null ||
+    image.offsetMetersInterpolationState !== null ||
+    image.opacityInterpolationState !== null
+  );
+};
+
+export interface ApplyOffsetUpdateOptions {
   readonly deg?: SpriteInterpolationOptions | null;
   readonly meters?: SpriteInterpolationOptions | null;
 }

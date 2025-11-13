@@ -5,6 +5,10 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type {
+  DistanceInterpolationEvaluationParams,
+  DistanceInterpolationEvaluationResult,
+  DegreeInterpolationEvaluationParams,
+  DegreeInterpolationEvaluationResult,
   ImageHandleBufferController,
   IdHandler,
   InternalSpriteCurrentState,
@@ -15,19 +19,48 @@ import type {
   Releaseable,
   RegisteredImage,
   RenderCalculationHost,
+  RenderInterpolationParams,
+  RenderInterpolationResult,
   SurfaceShaderCornerState,
   SurfaceShaderInputs,
   SpriteOriginReference,
+  SpriteInterpolationEvaluationParams,
+  SpriteInterpolationEvaluationResult,
+  SpriteInterpolationState,
 } from './internalTypes';
-import { SURFACE_CORNER_DISPLACEMENT_COUNT, type SurfaceCorner } from './math';
+import {
+  SURFACE_CORNER_DISPLACEMENT_COUNT,
+  cloneSpriteLocation,
+  type SurfaceCorner,
+} from './math';
 import type {
   SpriteAnchor,
   SpriteLocation,
   SpritePoint,
   SpriteMode,
+  SpriteEasingPresetName,
 } from './types';
 import { prepareWasmHost, type BufferHolder, type WasmHost } from './wasmHost';
-import { createCalculationHost } from './calculationHost';
+import {
+  collectDistanceInterpolationWorkItems,
+  applyDistanceInterpolationEvaluations,
+  type DistanceInterpolationWorkItem,
+} from './distanceInterpolation';
+import {
+  collectDegreeInterpolationWorkItems,
+  applyDegreeInterpolationEvaluations,
+  type DegreeInterpolationWorkItem,
+} from './degreeInterpolation';
+import { evaluateInterpolation } from './interpolation';
+import {
+  stepSpriteImageInterpolations,
+  type ImageInterpolationStepperId,
+  hasActiveImageInterpolations,
+} from './interpolationChannels';
+import {
+  createCalculationHost,
+  type ProcessInterpolationPresetRequests,
+} from './calculationHost';
 import {
   prepareProjectionState,
   type PreparedProjectionState,
@@ -56,6 +89,551 @@ const WASM_CalculateSurfaceDepthKey_MATRIX_ELEMENT_COUNT = 16;
 const WASM_CalculateSurfaceDepthKey_DISPLACEMENT_ELEMENT_COUNT =
   SURFACE_CORNER_DISPLACEMENT_COUNT * 2;
 const WASM_CalculateSurfaceDepthKey_RESULT_ELEMENT_COUNT = 1;
+
+// Must match constants defined in wasm/param_layouts.h.
+const WASM_DISTANCE_INTERPOLATION_ITEM_LENGTH = 7;
+const WASM_DISTANCE_INTERPOLATION_RESULT_LENGTH = 3;
+const WASM_DEGREE_INTERPOLATION_ITEM_LENGTH = 7;
+const WASM_DEGREE_INTERPOLATION_RESULT_LENGTH = 3;
+const WASM_SPRITE_INTERPOLATION_ITEM_LENGTH = 11;
+const WASM_SPRITE_INTERPOLATION_RESULT_LENGTH = 6;
+const WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
+
+const EASING_PRESET_IDS: Record<SpriteEasingPresetName, number> = {
+  linear: 0,
+};
+
+const encodeEasingPresetId = (
+  preset: SpriteEasingPresetName | null
+): number => {
+  if (!preset) {
+    return -1;
+  }
+  return EASING_PRESET_IDS[preset] ?? -1;
+};
+
+const encodeDistanceInterpolationRequest = (
+  buffer: Float64Array,
+  cursor: number,
+  request: DistanceInterpolationEvaluationParams
+): number => {
+  const { state, timestamp } = request;
+  const presetId = encodeEasingPresetId(state.easingPreset);
+  if (presetId < 0) {
+    throw new Error(
+      'Distance interpolation request missing preset easing function.'
+    );
+  }
+  buffer[cursor++] = state.durationMs;
+  buffer[cursor++] = state.from;
+  buffer[cursor++] = state.to;
+  buffer[cursor++] = state.finalValue;
+  buffer[cursor++] = state.startTimestamp;
+  buffer[cursor++] = timestamp;
+  buffer[cursor++] = presetId;
+  return cursor;
+};
+
+const encodeDegreeInterpolationRequest = (
+  buffer: Float64Array,
+  cursor: number,
+  request: DegreeInterpolationEvaluationParams
+): number => {
+  const { state, timestamp } = request;
+  const presetId = encodeEasingPresetId(state.easingPreset);
+  if (presetId < 0) {
+    throw new Error(
+      'Degree interpolation request missing preset easing function.'
+    );
+  }
+  buffer[cursor++] = state.durationMs;
+  buffer[cursor++] = state.from;
+  buffer[cursor++] = state.to;
+  buffer[cursor++] = state.finalValue;
+  buffer[cursor++] = state.startTimestamp;
+  buffer[cursor++] = timestamp;
+  buffer[cursor++] = presetId;
+  return cursor;
+};
+
+const encodeSpriteInterpolationRequest = (
+  buffer: Float64Array,
+  cursor: number,
+  request: SpriteInterpolationEvaluationParams
+): number => {
+  const { state, timestamp } = request;
+  const presetId = encodeEasingPresetId(state.easingPreset);
+  if (presetId < 0) {
+    throw new Error(
+      'Sprite interpolation request missing preset easing function.'
+    );
+  }
+  const hasZ = state.from.z !== undefined || state.to.z !== undefined ? 1 : 0;
+  buffer[cursor++] = state.durationMs;
+  buffer[cursor++] = state.from.lng;
+  buffer[cursor++] = state.from.lat;
+  buffer[cursor++] = state.from.z ?? 0;
+  buffer[cursor++] = state.to.lng;
+  buffer[cursor++] = state.to.lat;
+  buffer[cursor++] = state.to.z ?? 0;
+  buffer[cursor++] = hasZ;
+  buffer[cursor++] = state.startTimestamp;
+  buffer[cursor++] = timestamp;
+  buffer[cursor++] = presetId;
+  return cursor;
+};
+
+const decodeSpriteInterpolationResult = (
+  buffer: Float64Array,
+  cursor: number
+): {
+  readonly nextCursor: number;
+  readonly result: SpriteInterpolationEvaluationResult;
+} => {
+  const lng = buffer[cursor++]!;
+  const lat = buffer[cursor++]!;
+  const z = buffer[cursor++]!;
+  const hasZ = buffer[cursor++]! !== 0;
+  const completed = buffer[cursor++]! !== 0;
+  const effectiveStartTimestamp = buffer[cursor++]!;
+  const location: SpriteLocation = hasZ ? { lng, lat, z } : { lng, lat };
+  return {
+    nextCursor: cursor,
+    result: {
+      location,
+      completed,
+      effectiveStartTimestamp,
+    },
+  };
+};
+
+interface WasmProcessInterpolationResults {
+  readonly distance: DistanceInterpolationEvaluationResult[];
+  readonly degree: DegreeInterpolationEvaluationResult[];
+  readonly sprite: SpriteInterpolationEvaluationResult[];
+}
+
+const processInterpolationsViaWasm = (
+  wasm: WasmHost,
+  requests: ProcessInterpolationPresetRequests
+): WasmProcessInterpolationResults => {
+  const distanceCount = requests.distance.length;
+  const degreeCount = requests.degree.length;
+  const spriteCount = requests.sprite.length;
+
+  if (distanceCount === 0 && degreeCount === 0 && spriteCount === 0) {
+    return {
+      distance: [],
+      degree: [],
+      sprite: [],
+    };
+  }
+
+  const inputLength =
+    WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH +
+    distanceCount * WASM_DISTANCE_INTERPOLATION_ITEM_LENGTH +
+    degreeCount * WASM_DEGREE_INTERPOLATION_ITEM_LENGTH +
+    spriteCount * WASM_SPRITE_INTERPOLATION_ITEM_LENGTH;
+  const resultLengthTotal =
+    WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH +
+    distanceCount * WASM_DISTANCE_INTERPOLATION_RESULT_LENGTH +
+    degreeCount * WASM_DEGREE_INTERPOLATION_RESULT_LENGTH +
+    spriteCount * WASM_SPRITE_INTERPOLATION_RESULT_LENGTH;
+
+  const paramsHolder = wasm.allocateTypedBuffer(Float64Array, inputLength);
+  const resultHolder = wasm.allocateTypedBuffer(
+    Float64Array,
+    resultLengthTotal
+  );
+
+  try {
+    const paramsPrepared = paramsHolder.prepare();
+    const paramsBuffer = paramsPrepared.buffer;
+    paramsBuffer[0] = distanceCount;
+    paramsBuffer[1] = degreeCount;
+    paramsBuffer[2] = spriteCount;
+    let cursor = WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH;
+    for (const request of requests.distance) {
+      cursor = encodeDistanceInterpolationRequest(
+        paramsBuffer,
+        cursor,
+        request
+      );
+    }
+    for (const request of requests.degree) {
+      cursor = encodeDegreeInterpolationRequest(paramsBuffer, cursor, request);
+    }
+    for (const request of requests.sprite) {
+      cursor = encodeSpriteInterpolationRequest(paramsBuffer, cursor, request);
+    }
+
+    const resultPrepared = resultHolder.prepare();
+    const success = wasm.processInterpolations(
+      paramsPrepared.ptr,
+      resultPrepared.ptr
+    );
+    if (!success) {
+      throw new Error('Wasm processing of interpolations failed.');
+    }
+
+    const resultBuffer = resultPrepared.buffer;
+    let read = WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH;
+
+    const distanceResults: DistanceInterpolationEvaluationResult[] = new Array(
+      distanceCount
+    );
+    for (let i = 0; i < distanceCount; i += 1) {
+      const value = resultBuffer[read++]!;
+      const completed = resultBuffer[read++]! !== 0;
+      const effectiveStartTimestamp = resultBuffer[read++]!;
+      distanceResults[i] = {
+        value,
+        completed,
+        effectiveStartTimestamp,
+      };
+    }
+
+    const degreeResults: DegreeInterpolationEvaluationResult[] = new Array(
+      degreeCount
+    );
+    for (let i = 0; i < degreeCount; i += 1) {
+      const value = resultBuffer[read++]!;
+      const completed = resultBuffer[read++]! !== 0;
+      const effectiveStartTimestamp = resultBuffer[read++]!;
+      degreeResults[i] = {
+        value,
+        completed,
+        effectiveStartTimestamp,
+      };
+    }
+
+    const spriteResults: SpriteInterpolationEvaluationResult[] = new Array(
+      spriteCount
+    );
+    for (let i = 0; i < spriteCount; i += 1) {
+      const decoded = decodeSpriteInterpolationResult(resultBuffer, read);
+      spriteResults[i] = decoded.result;
+      read = decoded.nextCursor;
+    }
+
+    return {
+      distance: distanceResults,
+      degree: degreeResults,
+      sprite: spriteResults,
+    };
+  } finally {
+    resultHolder.release();
+    paramsHolder.release();
+  }
+};
+
+interface SpriteInterpolationWorkItem<TTag> {
+  readonly sprite: InternalSpriteCurrentState<TTag>;
+  readonly state: SpriteInterpolationState;
+}
+
+const applySpriteInterpolationEvaluations = <TTag>(
+  workItems: readonly SpriteInterpolationWorkItem<TTag>[],
+  evaluations: readonly SpriteInterpolationEvaluationResult[],
+  timestamp: number
+): boolean => {
+  let active = false;
+  for (let index = 0; index < workItems.length; index += 1) {
+    const item = workItems[index]!;
+    const { sprite, state } = item;
+    const evaluation =
+      evaluations[index] ??
+      evaluateInterpolation({
+        state,
+        timestamp,
+      });
+
+    if (state.startTimestamp < 0) {
+      state.startTimestamp = evaluation.effectiveStartTimestamp;
+    }
+
+    sprite.currentLocation = evaluation.location;
+
+    if (evaluation.completed) {
+      sprite.currentLocation = cloneSpriteLocation(state.to);
+      sprite.fromLocation = undefined;
+      sprite.toLocation = undefined;
+      sprite.interpolationState = null;
+    } else {
+      active = true;
+    }
+  }
+  return active;
+};
+
+const processInterpolationsWithWasm = <TTag>(
+  wasm: WasmHost,
+  params: RenderInterpolationParams<TTag>
+): RenderInterpolationResult => {
+  const { sprites, timestamp } = params;
+  if (!sprites.length) {
+    return {
+      handled: true,
+      hasActiveInterpolation: false,
+    };
+  }
+
+  const distanceInterpolationWorkItems: DistanceInterpolationWorkItem[] = [];
+  const degreeInterpolationWorkItems: DegreeInterpolationWorkItem[] = [];
+  const spriteInterpolationWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+  const processedSprites: Array<{
+    sprite: InternalSpriteCurrentState<TTag>;
+    touchedImages: InternalSpriteImageState[];
+  }> = [];
+  let hasActiveInterpolation = false;
+
+  for (const sprite of sprites) {
+    const state = sprite.interpolationState;
+    const hasSpriteInterpolation = state !== null;
+    if (!hasSpriteInterpolation && !sprite.interpolationDirty) {
+      continue;
+    }
+
+    if (state) {
+      if (state.easingPreset) {
+        spriteInterpolationWorkItems.push({ sprite, state });
+      } else {
+        const evaluation = evaluateInterpolation({
+          state,
+          timestamp,
+        });
+        if (state.startTimestamp < 0) {
+          state.startTimestamp = evaluation.effectiveStartTimestamp;
+        }
+        sprite.currentLocation = evaluation.location;
+        if (evaluation.completed) {
+          sprite.currentLocation = cloneSpriteLocation(state.to);
+          sprite.fromLocation = undefined;
+          sprite.toLocation = undefined;
+          sprite.interpolationState = null;
+        } else {
+          hasActiveInterpolation = true;
+        }
+      }
+    }
+
+    const touchedImages: InternalSpriteImageState[] = [];
+
+    sprite.images.forEach((orderMap) => {
+      orderMap.forEach((image) => {
+        const imageHasInterpolations = hasActiveImageInterpolations(image);
+        if (!imageHasInterpolations && !image.interpolationDirty) {
+          return;
+        }
+
+        touchedImages.push(image);
+
+        if (!imageHasInterpolations) {
+          return;
+        }
+
+        const hasDistanceInterpolation =
+          image.offsetMetersInterpolationState !== null ||
+          image.opacityInterpolationState !== null;
+        if (hasDistanceInterpolation) {
+          collectDistanceInterpolationWorkItems(
+            image,
+            distanceInterpolationWorkItems
+          );
+        }
+
+        const hasDegreeInterpolation =
+          image.rotationInterpolationState !== null ||
+          image.offsetDegInterpolationState !== null;
+        if (hasDegreeInterpolation) {
+          collectDegreeInterpolationWorkItems(
+            image,
+            degreeInterpolationWorkItems
+          );
+        }
+
+        const skipChannels: Partial<
+          Record<ImageInterpolationStepperId, boolean>
+        > = {};
+        let shouldSkipChannels = false;
+        if (hasDistanceInterpolation) {
+          skipChannels.offsetMeters = true;
+          skipChannels.opacity = true;
+          shouldSkipChannels = true;
+        }
+        if (hasDegreeInterpolation) {
+          skipChannels.rotation = true;
+          skipChannels.offsetDeg = true;
+          shouldSkipChannels = true;
+        }
+
+        if (
+          stepSpriteImageInterpolations(
+            image,
+            timestamp,
+            shouldSkipChannels ? { skipChannels } : undefined
+          )
+        ) {
+          hasActiveInterpolation = true;
+        }
+      });
+    });
+
+    if (!hasSpriteInterpolation && touchedImages.length === 0) {
+      sprite.interpolationDirty = false;
+      continue;
+    }
+
+    processedSprites.push({ sprite, touchedImages });
+  }
+
+  const presetDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
+  const fallbackDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
+  for (const item of distanceInterpolationWorkItems) {
+    if (item.state.easingPreset) {
+      presetDistanceWorkItems.push(item);
+    } else {
+      fallbackDistanceWorkItems.push(item);
+    }
+  }
+
+  const presetDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
+  const fallbackDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
+  for (const item of degreeInterpolationWorkItems) {
+    if (item.state.easingPreset) {
+      presetDegreeWorkItems.push(item);
+    } else {
+      fallbackDegreeWorkItems.push(item);
+    }
+  }
+
+  const presetSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+  const fallbackSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+  for (const item of spriteInterpolationWorkItems) {
+    if (item.state.easingPreset) {
+      presetSpriteWorkItems.push(item);
+    } else {
+      fallbackSpriteWorkItems.push(item);
+    }
+  }
+
+  const distanceRequests =
+    presetDistanceWorkItems.length > 0
+      ? presetDistanceWorkItems.map(({ state }) => ({
+          state,
+          timestamp,
+        }))
+      : [];
+  const degreeRequests =
+    presetDegreeWorkItems.length > 0
+      ? presetDegreeWorkItems.map(({ state }) => ({
+          state,
+          timestamp,
+        }))
+      : [];
+  const spriteRequests =
+    presetSpriteWorkItems.length > 0
+      ? presetSpriteWorkItems.map(({ state }) => ({
+          state,
+          timestamp,
+        }))
+      : [];
+
+  const hasPresetRequests =
+    distanceRequests.length > 0 ||
+    degreeRequests.length > 0 ||
+    spriteRequests.length > 0;
+
+  const wasmResults: WasmProcessInterpolationResults = hasPresetRequests
+    ? processInterpolationsViaWasm(wasm, {
+        distance: distanceRequests,
+        degree: degreeRequests,
+        sprite: spriteRequests,
+      })
+    : {
+        distance: [],
+        degree: [],
+        sprite: [],
+      };
+
+  if (presetDistanceWorkItems.length > 0) {
+    if (
+      applyDistanceInterpolationEvaluations(
+        presetDistanceWorkItems,
+        wasmResults.distance,
+        timestamp
+      )
+    ) {
+      hasActiveInterpolation = true;
+    }
+  }
+
+  if (
+    fallbackDistanceWorkItems.length > 0 &&
+    applyDistanceInterpolationEvaluations(
+      fallbackDistanceWorkItems,
+      [],
+      timestamp
+    )
+  ) {
+    hasActiveInterpolation = true;
+  }
+
+  if (presetDegreeWorkItems.length > 0) {
+    if (
+      applyDegreeInterpolationEvaluations(
+        presetDegreeWorkItems,
+        wasmResults.degree,
+        timestamp
+      )
+    ) {
+      hasActiveInterpolation = true;
+    }
+  }
+
+  if (
+    fallbackDegreeWorkItems.length > 0 &&
+    applyDegreeInterpolationEvaluations(fallbackDegreeWorkItems, [], timestamp)
+  ) {
+    hasActiveInterpolation = true;
+  }
+
+  if (presetSpriteWorkItems.length > 0) {
+    if (
+      applySpriteInterpolationEvaluations(
+        presetSpriteWorkItems,
+        wasmResults.sprite,
+        timestamp
+      )
+    ) {
+      hasActiveInterpolation = true;
+    }
+  }
+
+  if (
+    fallbackSpriteWorkItems.length > 0 &&
+    applySpriteInterpolationEvaluations(fallbackSpriteWorkItems, [], timestamp)
+  ) {
+    hasActiveInterpolation = true;
+  }
+
+  for (const { sprite, touchedImages } of processedSprites) {
+    let spriteHasDirtyImages = false;
+    for (const image of touchedImages) {
+      const dirty = hasActiveImageInterpolations(image);
+      image.interpolationDirty = dirty;
+      if (dirty) {
+        spriteHasDirtyImages = true;
+      }
+    }
+    sprite.interpolationDirty = spriteHasDirtyImages;
+  }
+
+  return {
+    handled: true,
+    hasActiveInterpolation,
+  };
+};
 
 type CalculateSurfaceDepthKeyOptions = {
   readonly indices?: readonly number[];
@@ -991,16 +1569,16 @@ export const createWasmCalculationHost = <TTag>(
   };
 
   return {
-    prepareDrawSpriteImages: (callParams) =>
+    prepareDrawSpriteImages: (params) =>
       runWithFallback(
         () =>
-          prepareDrawSpriteImagesInternal<TTag>(
-            wasm,
-            wasmState,
-            deps,
-            callParams
-          ),
-        () => ensureFallbackHost().prepareDrawSpriteImages(callParams)
+          prepareDrawSpriteImagesInternal<TTag>(wasm, wasmState, deps, params),
+        () => ensureFallbackHost().prepareDrawSpriteImages(params)
+      ),
+    processInterpolations: (params) =>
+      runWithFallback(
+        () => processInterpolationsWithWasm(wasm, params),
+        () => ensureFallbackHost().processInterpolations(params)
       ),
     release: () => {
       releaseFallbackHost();
@@ -1013,4 +1591,6 @@ export const __wasmCalculationTestInternals = {
   convertToWasmProjectionState,
   converToPreparedDrawImageParams,
   prepareDrawSpriteImagesInternal,
+  processInterpolationsViaWasm,
+  processInterpolationsWithWasm,
 };

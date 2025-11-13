@@ -85,14 +85,18 @@ export type SpriteInterpolationMode = 'feedback' | 'feedforward';
 /** Easing function signature used to map interpolation progress. */
 export type EasingFunction = (progress: number) => number;
 
+export type SpriteEasingPresetName = 'linear';
+
+export type SpriteInterpolationEasing = EasingFunction | SpriteEasingPresetName;
+
 /** Options for interpolating values. */
 export interface SpriteInterpolationOptions {
   /** Interpolation mode; defaults to feedback. */
   mode?: SpriteInterpolationMode;
   /** Duration in milliseconds. */
   durationMs: number;
-  /** Easing function mapping interpolation progress. Defaults to linear. */
-  easing?: EasingFunction;
+  /** Easing mapping applied to progress values. Accepts preset names or custom functions. Defaults to linear. */
+  easing?: SpriteInterpolationEasing;
 }
 
 /** Interpolation configuration for rotateDeg and offsetDeg. */

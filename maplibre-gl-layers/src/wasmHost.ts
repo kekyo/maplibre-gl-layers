@@ -103,6 +103,11 @@ export type WasmPrepareDrawSpriteImages = (
   resultPtr: number
 ) => boolean;
 
+export type WasmProcessInterpolations = (
+  paramsPtr: number,
+  resultPtr: number
+) => boolean;
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -190,6 +195,7 @@ export interface WasmHost {
   readonly calculateBillboardDepthKey: WasmCalculateBillboardDepthKey;
   readonly calculateSurfaceDepthKey: WasmCalculateSurfaceDepthKey;
   readonly prepareDrawSpriteImages: WasmPrepareDrawSpriteImages;
+  readonly processInterpolations: WasmProcessInterpolations;
 }
 
 export type WasmVariant = SpriteLayerCalculationVariant;
@@ -383,6 +389,8 @@ interface RawProjectionWasmExports {
   readonly calculateSurfaceDepthKey?: WasmCalculateSurfaceDepthKey;
   readonly _prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
   readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
+  readonly _processInterpolations?: WasmProcessInterpolations;
+  readonly processInterpolations?: WasmProcessInterpolations;
   readonly _setThreadPoolSize?: (count: number) => void;
 }
 
@@ -537,6 +545,9 @@ const createWasmHostFromExports = (
     (exports.prepareDrawSpriteImages as
       | WasmPrepareDrawSpriteImages
       | undefined);
+  const processInterpolations =
+    (exports._processInterpolations as WasmProcessInterpolations | undefined) ??
+    (exports.processInterpolations as WasmProcessInterpolations | undefined);
 
   if (
     !memory ||
@@ -549,7 +560,8 @@ const createWasmHostFromExports = (
     !projectLngLatToClipSpace ||
     !calculateBillboardDepthKey ||
     !calculateSurfaceDepthKey ||
-    !prepareDrawSpriteImages
+    !prepareDrawSpriteImages ||
+    !processInterpolations
   ) {
     throw new Error('Projection host WASM exports are incomplete.');
   }
@@ -831,6 +843,7 @@ const createWasmHostFromExports = (
     calculateBillboardDepthKey,
     calculateSurfaceDepthKey,
     prepareDrawSpriteImages,
+    processInterpolations,
     release,
   };
 };

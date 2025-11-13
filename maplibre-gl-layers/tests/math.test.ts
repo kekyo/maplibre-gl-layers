@@ -28,6 +28,7 @@ import {
   calculateSurfaceCornerDisplacements,
   computeSurfaceCornerShaderModel,
   type SurfaceDepthBiasFn,
+  clampOpacity,
 } from '../src/math';
 import type { SpriteAnchor, SpriteScreenPoint } from '../src/types';
 import { EARTH_RADIUS_METERS, UV_CORNERS } from '../src/const';
@@ -1022,5 +1023,13 @@ describe('screenToClip', () => {
     const [x, y] = screenToClip({ x: 256, y: 256 }, 512, 512, 1);
     expect(x).toBe(0);
     expect(y).toBe(0);
+  });
+});
+
+describe('clampOpacity', () => {
+  it('limits values to the [0, 1] interval', () => {
+    expect(clampOpacity(-1)).toBe(0);
+    expect(clampOpacity(0.25)).toBe(0.25);
+    expect(clampOpacity(2)).toBe(1);
   });
 });

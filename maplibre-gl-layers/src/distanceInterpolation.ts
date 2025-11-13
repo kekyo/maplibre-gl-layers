@@ -4,9 +4,19 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { EasingFunction, SpriteInterpolationOptions } from './types';
+import type {
+  EasingFunction,
+  SpriteEasingPresetName,
+  SpriteInterpolationOptions,
+} from './types';
 import { resolveEasing } from './easing';
-import type { DistanceInterpolationState } from './internalTypes';
+import type {
+  DistanceInterpolationEvaluationParams,
+  DistanceInterpolationEvaluationResult,
+  DistanceInterpolationState,
+  InternalSpriteImageState,
+} from './internalTypes';
+import { clampOpacity } from './math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -20,12 +30,17 @@ const normalizeOptions = (
 ): {
   durationMs: number;
   easing: EasingFunction;
+  easingPreset: SpriteEasingPresetName | null;
   mode: 'feedback' | 'feedforward';
-} => ({
-  durationMs: normalizeDuration(options.durationMs),
-  easing: resolveEasing(options.easing),
-  mode: options.mode ?? 'feedback',
-});
+} => {
+  const resolved = resolveEasing(options.easing);
+  return {
+    durationMs: normalizeDuration(options.durationMs),
+    easing: resolved.easing,
+    easingPreset: resolved.preset,
+    mode: options.mode ?? 'feedback',
+  };
+};
 
 export interface CreateDistanceInterpolationStateParams {
   currentValue: number;
@@ -64,6 +79,7 @@ export const createDistanceInterpolationState = (
   const state: DistanceInterpolationState = {
     durationMs: options.durationMs,
     easing: options.easing,
+    easingPreset: options.easingPreset,
     from: currentValue,
     to: currentValue + delta,
     finalValue: effectiveTarget,
@@ -75,19 +91,6 @@ export const createDistanceInterpolationState = (
     requiresInterpolation,
   };
 };
-
-//////////////////////////////////////////////////////////////////////////////////////////
-
-export interface EvaluateDistanceInterpolationParams {
-  state: DistanceInterpolationState;
-  timestamp: number;
-}
-
-export interface EvaluateDistanceInterpolationResult {
-  readonly value: number;
-  readonly completed: boolean;
-  readonly effectiveStartTimestamp: number;
-}
 
 const clamp01 = (value: number): number => {
   if (!Number.isFinite(value)) {
@@ -103,8 +106,8 @@ const clamp01 = (value: number): number => {
 };
 
 export const evaluateDistanceInterpolation = (
-  params: EvaluateDistanceInterpolationParams
-): EvaluateDistanceInterpolationResult => {
+  params: DistanceInterpolationEvaluationParams
+): DistanceInterpolationEvaluationResult => {
   const { state } = params;
   const timestamp = Number.isFinite(params.timestamp)
     ? params.timestamp
@@ -133,4 +136,124 @@ export const evaluateDistanceInterpolation = (
     completed,
     effectiveStartTimestamp: effectiveStart,
   };
+};
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+type DistanceInterpolationStateKey =
+  | 'offsetMetersInterpolationState'
+  | 'opacityInterpolationState';
+
+interface DistanceInterpolationChannelDescriptor {
+  readonly stateKey: DistanceInterpolationStateKey;
+  readonly normalize?: (value: number) => number;
+  readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
+  readonly applyFinalValue?: (
+    image: InternalSpriteImageState,
+    value: number
+  ) => void;
+}
+
+const DISTANCE_INTERPOLATION_CHANNELS: Record<
+  'offsetMeters' | 'opacity',
+  DistanceInterpolationChannelDescriptor
+> = {
+  offsetMeters: {
+    stateKey: 'offsetMetersInterpolationState',
+    applyValue: (image: InternalSpriteImageState, value: number) => {
+      image.offset.offsetMeters = value;
+    },
+  },
+  opacity: {
+    stateKey: 'opacityInterpolationState',
+    normalize: clampOpacity,
+    applyValue: (image: InternalSpriteImageState, value: number) => {
+      image.opacity = value;
+    },
+  },
+};
+
+export type DistanceInterpolationChannelDescriptorMap =
+  typeof DISTANCE_INTERPOLATION_CHANNELS;
+
+export type DistanceInterpolationChannelName =
+  keyof DistanceInterpolationChannelDescriptorMap;
+
+export interface DistanceInterpolationWorkItem {
+  readonly descriptor: DistanceInterpolationChannelDescriptorMap[DistanceInterpolationChannelName];
+  readonly image: InternalSpriteImageState;
+  readonly state: DistanceInterpolationState;
+}
+
+export const collectDistanceInterpolationWorkItems = (
+  image: InternalSpriteImageState,
+  workItems: DistanceInterpolationWorkItem[]
+): void => {
+  const offsetMetersState = image.offsetMetersInterpolationState;
+  if (offsetMetersState) {
+    workItems.push({
+      descriptor: DISTANCE_INTERPOLATION_CHANNELS.offsetMeters,
+      image,
+      state: offsetMetersState,
+    });
+  }
+
+  const opacityState = image.opacityInterpolationState;
+  if (opacityState) {
+    workItems.push({
+      descriptor: DISTANCE_INTERPOLATION_CHANNELS.opacity,
+      image,
+      state: opacityState,
+    });
+  }
+};
+
+const updateDistanceInterpolationState = (
+  image: InternalSpriteImageState,
+  descriptor: DistanceInterpolationChannelDescriptor,
+  nextState: DistanceInterpolationState | null
+): void => {
+  if (descriptor.stateKey === 'offsetMetersInterpolationState') {
+    image.offsetMetersInterpolationState = nextState;
+  } else {
+    image.opacityInterpolationState = nextState;
+  }
+};
+
+export const applyDistanceInterpolationEvaluations = (
+  workItems: readonly DistanceInterpolationWorkItem[],
+  evaluations: readonly DistanceInterpolationEvaluationResult[],
+  timestamp: number
+): boolean => {
+  let active = false;
+  for (let index = 0; index < workItems.length; index += 1) {
+    const item = workItems[index]!;
+    const evaluation =
+      evaluations[index] ??
+      evaluateDistanceInterpolation({
+        state: item.state,
+        timestamp,
+      });
+
+    if (item.state.startTimestamp < 0) {
+      item.state.startTimestamp = evaluation.effectiveStartTimestamp;
+    }
+
+    const normalize = item.descriptor.normalize ?? ((value: number) => value);
+    const applyFinalValue =
+      item.descriptor.applyFinalValue ?? item.descriptor.applyValue;
+
+    const interpolatedValue = normalize(evaluation.value);
+    item.descriptor.applyValue(item.image, interpolatedValue);
+
+    if (evaluation.completed) {
+      const finalValue = normalize(item.state.finalValue);
+      applyFinalValue(item.image, finalValue);
+      updateDistanceInterpolationState(item.image, item.descriptor, null);
+    } else {
+      updateDistanceInterpolationState(item.image, item.descriptor, item.state);
+      active = true;
+    }
+  }
+  return active;
 };

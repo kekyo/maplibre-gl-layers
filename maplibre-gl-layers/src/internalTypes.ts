@@ -22,6 +22,7 @@ import type {
   EasingFunction,
   SpriteScreenPoint,
   SpritePoint,
+  SpriteEasingPresetName,
 } from './types';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './math';
 
@@ -335,6 +336,32 @@ export interface PreparedDrawSpriteImageParams<T> {
 }
 
 /**
+ * Common frame parameters shared with interpolation processing.
+ */
+export interface RenderInterpolationFrameContext {
+  readonly baseMetersPerPixel: number;
+  readonly spriteMinPixel: number;
+  readonly spriteMaxPixel: number;
+}
+
+/**
+ * Parameters passed into RenderCalculationHost.processInterpolations.
+ */
+export interface RenderInterpolationParams<TTag> {
+  readonly sprites: readonly InternalSpriteCurrentState<TTag>[];
+  readonly timestamp: number;
+  readonly frameContext?: RenderInterpolationFrameContext;
+}
+
+/**
+ * Result returned from RenderCalculationHost.processInterpolations.
+ */
+export interface RenderInterpolationResult {
+  readonly handled: boolean;
+  readonly hasActiveInterpolation: boolean;
+}
+
+/**
  * The render calculation host.
  * Abstraction that render calculations.
  * @param TTag Tag type.
@@ -343,6 +370,9 @@ export interface RenderCalculationHost<TTag> extends Releaseable {
   readonly prepareDrawSpriteImages: (
     params: PrepareDrawSpriteImageParams<TTag>
   ) => PreparedDrawSpriteImageParams<TTag>[];
+  readonly processInterpolations: (
+    params: RenderInterpolationParams<TTag>
+  ) => RenderInterpolationResult;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -418,6 +448,7 @@ export interface SpriteInterpolationState {
   readonly mode: SpriteInterpolationMode;
   readonly durationMs: number;
   readonly easing: EasingFunction;
+  readonly easingPreset: SpriteEasingPresetName | null;
   startTimestamp: number;
   readonly from: SpriteLocation;
   readonly to: SpriteLocation;
@@ -435,6 +466,7 @@ export interface SpriteInterpolationState {
 export interface DegreeInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
+  readonly easingPreset: SpriteEasingPresetName | null;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;
@@ -444,10 +476,44 @@ export interface DegreeInterpolationState {
 export interface DistanceInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
+  readonly easingPreset: SpriteEasingPresetName | null;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;
   startTimestamp: number;
+}
+
+export interface DistanceInterpolationEvaluationParams {
+  readonly state: DistanceInterpolationState;
+  readonly timestamp: number;
+}
+
+export interface DistanceInterpolationEvaluationResult {
+  readonly value: number;
+  readonly completed: boolean;
+  readonly effectiveStartTimestamp: number;
+}
+
+export interface DegreeInterpolationEvaluationParams {
+  readonly state: DegreeInterpolationState;
+  readonly timestamp: number;
+}
+
+export interface DegreeInterpolationEvaluationResult {
+  readonly value: number;
+  readonly completed: boolean;
+  readonly effectiveStartTimestamp: number;
+}
+
+export interface SpriteInterpolationEvaluationParams {
+  readonly state: SpriteInterpolationState;
+  readonly timestamp: number;
+}
+
+export interface SpriteInterpolationEvaluationResult {
+  readonly location: SpriteLocation;
+  readonly completed: boolean;
+  readonly effectiveStartTimestamp: number;
 }
 
 /**
@@ -593,6 +659,7 @@ export interface InternalSpriteImageState {
   lastCommandOffsetDeg: number;
   lastCommandOffsetMeters: number;
   lastCommandOpacity: number;
+  interpolationDirty: boolean;
   surfaceShaderInputs?: Readonly<SurfaceShaderInputs>;
   hitTestCorners?: [
     MutableSpriteScreenPoint,
@@ -619,6 +686,7 @@ export interface InternalSpriteCurrentState<TTag> {
   lastCommandLocation: Readonly<SpriteLocation>;
   lastAutoRotationLocation: Readonly<SpriteLocation>;
   lastAutoRotationAngleDeg: number;
+  interpolationDirty: boolean;
   cachedMercator: Readonly<SpriteMercatorCoordinate>;
   cachedMercatorLng: number;
   cachedMercatorLat: number;

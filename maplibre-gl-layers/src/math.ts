@@ -79,6 +79,18 @@ export const spriteLocationsEqual = (
   return a.lng === b.lng && a.lat === b.lat && zA === zB;
 };
 
+/**
+ * Normalizes an angle in degrees to the [0, 360) range.
+ */
+export const normalizeAngleDeg = (angle: number): number => {
+  if (!Number.isFinite(angle)) {
+    return 0;
+  }
+  const wrapped = angle % 360;
+  const normalized = wrapped < 0 ? wrapped + 360 : wrapped;
+  return Object.is(normalized, -0) ? 0 : normalized;
+};
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -1537,4 +1549,22 @@ export const resolveSpriteMercator = <T>(
   sprite.cachedMercatorLat = location.lat;
   sprite.cachedMercatorZ = location.z;
   return mercator;
+};
+
+/**
+ * Clamp opacity value.
+ * @param value Value
+ * @returns Clamped value
+ */
+export const clampOpacity = (value: number): number => {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  if (value <= 0) {
+    return 0;
+  }
+  if (value >= 1) {
+    return 1;
+  }
+  return value;
 };

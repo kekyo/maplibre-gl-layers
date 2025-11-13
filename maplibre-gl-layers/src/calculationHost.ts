@@ -29,6 +29,7 @@ import {
   calculateZoomScaleFactor,
   resolveScalingOptions,
   resolveSpriteMercator,
+  cloneSpriteLocation,
 } from './math';
 import {
   BILLBOARD_BASE_CORNERS,
@@ -37,6 +38,10 @@ import {
   computeBillboardCornersShaderModel,
 } from './shader';
 import type {
+  DistanceInterpolationEvaluationParams,
+  DistanceInterpolationEvaluationResult,
+  DegreeInterpolationEvaluationParams,
+  DegreeInterpolationEvaluationResult,
   InternalSpriteCurrentState,
   InternalSpriteImageState,
   ImageResourceTable,
@@ -51,6 +56,11 @@ import type {
   PrepareDrawSpriteImageParamsBefore,
   PrepareDrawSpriteImageParamsAfter,
   RenderTargetEntryLike,
+  RenderInterpolationParams,
+  RenderInterpolationResult,
+  SpriteInterpolationEvaluationParams,
+  SpriteInterpolationEvaluationResult,
+  SpriteInterpolationState,
 } from './internalTypes';
 import { SPRITE_ORIGIN_REFERENCE_INDEX_NONE } from './internalTypes';
 import type {
@@ -83,6 +93,23 @@ import {
   USE_SHADER_SURFACE_GEOMETRY,
 } from './config';
 import { createWasmProjectionHost } from './wasmProjectionHost';
+import {
+  collectDistanceInterpolationWorkItems,
+  applyDistanceInterpolationEvaluations,
+  evaluateDistanceInterpolation,
+  type DistanceInterpolationWorkItem,
+} from './distanceInterpolation';
+import {
+  collectDegreeInterpolationWorkItems,
+  applyDegreeInterpolationEvaluations,
+  evaluateDegreeInterpolation,
+  type DegreeInterpolationWorkItem,
+} from './degreeInterpolation';
+import { evaluateInterpolation } from './interpolation';
+import {
+  stepSpriteImageInterpolations,
+  type ImageInterpolationStepperId,
+} from './interpolationChannels';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -1398,6 +1425,350 @@ const prepareDrawSpriteImages = <TTag>(
 
 //////////////////////////////////////////////////////////////////////////////////////
 
+const evaluateDistanceInterpolationsBatch = (
+  requests: readonly DistanceInterpolationEvaluationParams[]
+): DistanceInterpolationEvaluationResult[] => {
+  if (!requests.length) {
+    return [];
+  }
+  return requests.map((request) => evaluateDistanceInterpolation(request));
+};
+
+const evaluateDegreeInterpolationsBatch = (
+  requests: readonly DegreeInterpolationEvaluationParams[]
+): DegreeInterpolationEvaluationResult[] => {
+  if (!requests.length) {
+    return [];
+  }
+  return requests.map((request) => evaluateDegreeInterpolation(request));
+};
+
+const evaluateSpriteInterpolationsBatch = (
+  requests: readonly SpriteInterpolationEvaluationParams[]
+): SpriteInterpolationEvaluationResult[] => {
+  if (!requests.length) {
+    return [];
+  }
+  return requests.map((request) => evaluateInterpolation(request));
+};
+
+export interface ProcessInterpolationPresetRequests {
+  readonly distance: readonly DistanceInterpolationEvaluationParams[];
+  readonly degree: readonly DegreeInterpolationEvaluationParams[];
+  readonly sprite: readonly SpriteInterpolationEvaluationParams[];
+}
+
+export interface ProcessInterpolationsEvaluationHandlers {
+  readonly prepare?: (requests: ProcessInterpolationPresetRequests) => void;
+  readonly evaluateDistance: (
+    requests: readonly DistanceInterpolationEvaluationParams[]
+  ) => readonly DistanceInterpolationEvaluationResult[];
+  readonly evaluateDegree: (
+    requests: readonly DegreeInterpolationEvaluationParams[]
+  ) => readonly DegreeInterpolationEvaluationResult[];
+  readonly evaluateSprite: (
+    requests: readonly SpriteInterpolationEvaluationParams[]
+  ) => readonly SpriteInterpolationEvaluationResult[];
+}
+
+const defaultInterpolationEvaluationHandlers: ProcessInterpolationsEvaluationHandlers =
+  {
+    evaluateDistance: (requests) =>
+      evaluateDistanceInterpolationsBatch(requests),
+    evaluateDegree: (requests) => evaluateDegreeInterpolationsBatch(requests),
+    evaluateSprite: (requests) => evaluateSpriteInterpolationsBatch(requests),
+  };
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+interface SpriteInterpolationWorkItem<TTag> {
+  readonly sprite: InternalSpriteCurrentState<TTag>;
+  readonly state: SpriteInterpolationState;
+}
+
+const applySpriteInterpolationEvaluations = <TTag>(
+  workItems: readonly SpriteInterpolationWorkItem<TTag>[],
+  evaluations: readonly SpriteInterpolationEvaluationResult[],
+  timestamp: number
+): boolean => {
+  let active = false;
+  for (let index = 0; index < workItems.length; index += 1) {
+    const item = workItems[index]!;
+    const { sprite, state } = item;
+    const evaluation =
+      evaluations[index] ??
+      evaluateInterpolation({
+        state,
+        timestamp,
+      });
+
+    if (state.startTimestamp < 0) {
+      state.startTimestamp = evaluation.effectiveStartTimestamp;
+    }
+
+    sprite.currentLocation = evaluation.location;
+
+    if (evaluation.completed) {
+      sprite.currentLocation = cloneSpriteLocation(state.to);
+      sprite.fromLocation = undefined;
+      sprite.toLocation = undefined;
+      sprite.interpolationState = null;
+    } else {
+      active = true;
+    }
+  }
+  return active;
+};
+
+export const processInterpolationsInternal = <TTag>(
+  params: RenderInterpolationParams<TTag>,
+  handlers: ProcessInterpolationsEvaluationHandlers = defaultInterpolationEvaluationHandlers
+): RenderInterpolationResult => {
+  const evaluationHandlers = handlers ?? defaultInterpolationEvaluationHandlers;
+  const { sprites, timestamp } = params;
+  if (!sprites.length) {
+    return {
+      handled: true,
+      hasActiveInterpolation: false,
+    };
+  }
+
+  const distanceInterpolationWorkItems: DistanceInterpolationWorkItem[] = [];
+  const degreeInterpolationWorkItems: DegreeInterpolationWorkItem[] = [];
+  const spriteInterpolationWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+
+  let hasActiveInterpolation = false;
+
+  for (const sprite of sprites) {
+    const state = sprite.interpolationState;
+    if (state) {
+      if (state.easingPreset) {
+        spriteInterpolationWorkItems.push({ sprite, state });
+      } else {
+        const evaluation = evaluateInterpolation({
+          state,
+          timestamp,
+        });
+        if (state.startTimestamp < 0) {
+          state.startTimestamp = evaluation.effectiveStartTimestamp;
+        }
+        sprite.currentLocation = evaluation.location;
+        if (evaluation.completed) {
+          sprite.currentLocation = cloneSpriteLocation(state.to);
+          sprite.fromLocation = undefined;
+          sprite.toLocation = undefined;
+          sprite.interpolationState = null;
+        } else {
+          hasActiveInterpolation = true;
+        }
+      }
+    }
+
+    sprite.images.forEach((orderMap) => {
+      orderMap.forEach((image) => {
+        const hasDistanceInterpolation =
+          image.offsetMetersInterpolationState !== null ||
+          image.opacityInterpolationState !== null;
+        if (hasDistanceInterpolation) {
+          collectDistanceInterpolationWorkItems(
+            image,
+            distanceInterpolationWorkItems
+          );
+        }
+
+        const hasDegreeInterpolation =
+          image.rotationInterpolationState !== null ||
+          image.offsetDegInterpolationState !== null;
+        if (hasDegreeInterpolation) {
+          collectDegreeInterpolationWorkItems(
+            image,
+            degreeInterpolationWorkItems
+          );
+        }
+
+        const skipChannels: Partial<
+          Record<ImageInterpolationStepperId, boolean>
+        > = {};
+        let shouldSkipChannels = false;
+        if (hasDistanceInterpolation) {
+          skipChannels.offsetMeters = true;
+          skipChannels.opacity = true;
+          shouldSkipChannels = true;
+        }
+        if (hasDegreeInterpolation) {
+          skipChannels.rotation = true;
+          skipChannels.offsetDeg = true;
+          shouldSkipChannels = true;
+        }
+
+        if (
+          stepSpriteImageInterpolations(
+            image,
+            timestamp,
+            shouldSkipChannels ? { skipChannels } : undefined
+          )
+        ) {
+          hasActiveInterpolation = true;
+        }
+      });
+    });
+  }
+
+  const presetDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
+  const fallbackDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
+  if (distanceInterpolationWorkItems.length > 0) {
+    for (const item of distanceInterpolationWorkItems) {
+      if (item.state.easingPreset) {
+        presetDistanceWorkItems.push(item);
+      } else {
+        fallbackDistanceWorkItems.push(item);
+      }
+    }
+  }
+
+  const presetDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
+  const fallbackDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
+  if (degreeInterpolationWorkItems.length > 0) {
+    for (const item of degreeInterpolationWorkItems) {
+      if (item.state.easingPreset) {
+        presetDegreeWorkItems.push(item);
+      } else {
+        fallbackDegreeWorkItems.push(item);
+      }
+    }
+  }
+
+  const presetSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+  const fallbackSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+  if (spriteInterpolationWorkItems.length > 0) {
+    for (const item of spriteInterpolationWorkItems) {
+      if (item.state.easingPreset) {
+        presetSpriteWorkItems.push(item);
+      } else {
+        fallbackSpriteWorkItems.push(item);
+      }
+    }
+  }
+
+  const distanceRequests =
+    presetDistanceWorkItems.length > 0
+      ? presetDistanceWorkItems.map(({ state }) => ({
+          state,
+          timestamp,
+        }))
+      : [];
+  const degreeRequests =
+    presetDegreeWorkItems.length > 0
+      ? presetDegreeWorkItems.map(({ state }) => ({
+          state,
+          timestamp,
+        }))
+      : [];
+  const spriteRequests =
+    presetSpriteWorkItems.length > 0
+      ? presetSpriteWorkItems.map(({ state }) => ({
+          state,
+          timestamp,
+        }))
+      : [];
+
+  const hasPresetRequests =
+    distanceRequests.length > 0 ||
+    degreeRequests.length > 0 ||
+    spriteRequests.length > 0;
+
+  if (hasPresetRequests) {
+    evaluationHandlers.prepare?.({
+      distance: distanceRequests,
+      degree: degreeRequests,
+      sprite: spriteRequests,
+    });
+  }
+
+  if (presetDistanceWorkItems.length > 0) {
+    const evaluations = evaluationHandlers.evaluateDistance(distanceRequests);
+    if (
+      applyDistanceInterpolationEvaluations(
+        presetDistanceWorkItems,
+        evaluations,
+        timestamp
+      )
+    ) {
+      hasActiveInterpolation = true;
+    }
+  }
+
+  if (
+    fallbackDistanceWorkItems.length > 0 &&
+    applyDistanceInterpolationEvaluations(
+      fallbackDistanceWorkItems,
+      [],
+      timestamp
+    )
+  ) {
+    hasActiveInterpolation = true;
+  }
+
+  if (presetDegreeWorkItems.length > 0) {
+    const evaluations = evaluationHandlers.evaluateDegree(degreeRequests);
+    if (
+      applyDegreeInterpolationEvaluations(
+        presetDegreeWorkItems,
+        evaluations,
+        timestamp
+      )
+    ) {
+      hasActiveInterpolation = true;
+    }
+  }
+
+  if (
+    fallbackDegreeWorkItems.length > 0 &&
+    applyDegreeInterpolationEvaluations(fallbackDegreeWorkItems, [], timestamp)
+  ) {
+    hasActiveInterpolation = true;
+  }
+
+  if (presetSpriteWorkItems.length > 0) {
+    const evaluations = evaluationHandlers.evaluateSprite(spriteRequests);
+    if (
+      applySpriteInterpolationEvaluations(
+        presetSpriteWorkItems,
+        evaluations,
+        timestamp
+      )
+    ) {
+      hasActiveInterpolation = true;
+    }
+  }
+
+  if (
+    fallbackSpriteWorkItems.length > 0 &&
+    applySpriteInterpolationEvaluations(fallbackSpriteWorkItems, [], timestamp)
+  ) {
+    hasActiveInterpolation = true;
+  }
+
+  return {
+    handled: true,
+    hasActiveInterpolation,
+  };
+};
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+const createProjectionBoundCalculationHost = <TTag>(
+  projectionHost: ProjectionHost
+): RenderCalculationHost<TTag> => {
+  return {
+    prepareDrawSpriteImages: (params) =>
+      prepareDrawSpriteImages(projectionHost, params),
+    processInterpolations: (interpolationParams) =>
+      processInterpolationsInternal(interpolationParams),
+    release: projectionHost.release,
+  };
+};
+
 /**
  * Create calculation host that binding MapLibre.
  * @param TTag Tag type.
@@ -1408,11 +1779,7 @@ export const createMapLibreCalculationHost = <TTag>(
   map: MapLibreMap
 ): RenderCalculationHost<TTag> => {
   const projectionHost = createMapLibreProjectionHost(map);
-  return {
-    prepareDrawSpriteImages: (params) =>
-      prepareDrawSpriteImages(projectionHost, params),
-    release: projectionHost.release,
-  };
+  return createProjectionBoundCalculationHost<TTag>(projectionHost);
 };
 
 /**
@@ -1425,22 +1792,14 @@ export const createCalculationHost = <TTag>(
   params: ProjectionHostParams
 ): RenderCalculationHost<TTag> => {
   const projectionHost = createProjectionHost(params);
-  return {
-    prepareDrawSpriteImages: (params) =>
-      prepareDrawSpriteImages(projectionHost, params),
-    release: projectionHost.release,
-  };
+  return createProjectionBoundCalculationHost<TTag>(projectionHost);
 };
 
 const __createWasmProjectionCalculationTestHost = <TTag>(
   params: ProjectionHostParams
 ): RenderCalculationHost<TTag> => {
   const projectionHost = createWasmProjectionHost(params);
-  return {
-    prepareDrawSpriteImages: (params) =>
-      prepareDrawSpriteImages(projectionHost, params),
-    release: projectionHost.release,
-  };
+  return createProjectionBoundCalculationHost<TTag>(projectionHost);
 };
 
 // Only testing purpose, DO NOT USE in production code.

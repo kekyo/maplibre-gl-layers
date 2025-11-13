@@ -5,12 +5,15 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type {
-  EasingFunction,
   SpriteInterpolationMode,
   SpriteInterpolationOptions,
   SpriteLocation,
 } from './types';
-import type { SpriteInterpolationState } from './internalTypes';
+import type {
+  SpriteInterpolationState,
+  SpriteInterpolationEvaluationParams,
+  SpriteInterpolationEvaluationResult,
+} from './internalTypes';
 
 import { resolveEasing } from './easing';
 import {
@@ -61,7 +64,7 @@ const computeFeedforwardTarget = (
 interface NormalizedInterpolationOptions {
   durationMs: number;
   mode: SpriteInterpolationMode;
-  easing?: EasingFunction;
+  easing?: SpriteInterpolationOptions['easing'];
 }
 
 /**
@@ -120,7 +123,7 @@ export const createInterpolationState = (
   const { currentLocation, lastCommandLocation, nextCommandLocation } = params;
   const options = normalizeOptions(params.options);
   const from = cloneSpriteLocation(currentLocation);
-  const easing = resolveEasing(options.easing);
+  const resolvedEasing = resolveEasing(options.easing);
 
   let to: SpriteLocation;
   // When feedforward is requested we extrapolate beyond the next command to smooth remote updates.
@@ -137,7 +140,8 @@ export const createInterpolationState = (
   const state: SpriteInterpolationState = {
     mode: options.mode,
     durationMs: options.durationMs,
-    easing,
+    easing: resolvedEasing.easing,
+    easingPreset: resolvedEasing.preset,
     startTimestamp: -1,
     from,
     to,
@@ -149,38 +153,14 @@ export const createInterpolationState = (
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Parameters required to evaluate an interpolation tick at a given moment.
- *
- * @property state - Active interpolation state previously created.
- * @property timestamp - Epoch millisecond at which interpolation should be evaluated.
- */
-export interface EvaluateInterpolationParams {
-  state: SpriteInterpolationState;
-  timestamp: number;
-}
-
-/**
- * Result of evaluating interpolation progress at a specific timestamp.
- *
- * @property location - Interpolated sprite location corresponding to the evaluated time.
- * @property completed - Indicates whether the interpolation has reached or exceeded its duration.
- * @property effectiveStartTimestamp - Timestamp detected or assigned as the interpolation starting point.
- */
-export interface EvaluateInterpolationResult {
-  readonly location: SpriteLocation;
-  readonly completed: boolean;
-  readonly effectiveStartTimestamp: number;
-}
-
-/**
  * Evaluates an interpolation state at a specific point in time and returns the intermediate location.
  *
  * @param params - The interpolation state and the reference timestamp for evaluation.
  * @returns The lerped location, whether the interpolation has finished, and the effective start time.
  */
 export const evaluateInterpolation = (
-  params: EvaluateInterpolationParams
-): EvaluateInterpolationResult => {
+  params: SpriteInterpolationEvaluationParams
+): SpriteInterpolationEvaluationResult => {
   const { state } = params;
   const easingFn = state.easing;
   // Use the provided timestamp when valid; otherwise fall back to real time to keep animation advancing.

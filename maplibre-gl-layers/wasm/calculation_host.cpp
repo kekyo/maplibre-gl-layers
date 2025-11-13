@@ -4,6 +4,7 @@
 // Under MIT
 
 #include <emscripten/emscripten.h>
+#include <emscripten/html5.h>
 #if defined(__EMSCRIPTEN_PTHREADS__)
 #include <emscripten/threading.h>
 #endif
@@ -80,6 +81,70 @@ static inline double normalizeAngleDeg(double angle) {
     normalized = 0.0;
   }
   return normalized;
+}
+
+constexpr double DISTANCE_EPSILON = 1e-6;
+constexpr double DEGREE_EPSILON = 1e-6;
+
+static inline double clamp01(double value) {
+  if (!std::isfinite(value)) {
+    return 1.0;
+  }
+  if (value <= 0.0) {
+    return 0.0;
+  }
+  if (value >= 1.0) {
+    return 1.0;
+  }
+  return value;
+}
+
+static inline double applyEasingPreset(double progress, int32_t presetId) {
+  switch (presetId) {
+    case 0:  // linear
+    default:
+      return clamp01(progress);
+  }
+}
+
+static inline double resolveTimestamp(double timestamp) {
+  if (std::isfinite(timestamp)) {
+    return timestamp;
+  }
+  return emscripten_get_now();
+}
+
+static inline double resolveEffectiveStart(double startTimestamp,
+                                           double timestamp) {
+  return startTimestamp >= 0.0 ? startTimestamp : timestamp;
+}
+
+static inline double lerp(double from, double to, double ratio) {
+  return from + (to - from) * ratio;
+}
+
+static inline void writeNumericInterpolationResult(double* target,
+                                                   double value,
+                                                   bool completed,
+                                                   double effectiveStart) {
+  target[0] = value;
+  target[1] = completed ? 1.0 : 0.0;
+  target[2] = effectiveStart;
+}
+
+static inline void writeSpriteInterpolationResult(double* target,
+                                                  double lng,
+                                                  double lat,
+                                                  double z,
+                                                  bool hasZ,
+                                                  bool completed,
+                                                  double effectiveStart) {
+  target[0] = lng;
+  target[1] = lat;
+  target[2] = hasZ ? z : 0.0;
+  target[3] = hasZ ? 1.0 : 0.0;
+  target[4] = completed ? 1.0 : 0.0;
+  target[5] = effectiveStart;
 }
 
 constexpr std::size_t SURFACE_CLIP_CORNER_COUNT = 4;
@@ -2897,6 +2962,225 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
   resultHeader->flags = (hasHitTest ? RESULT_FLAG_HAS_HIT_TEST : 0) |
                         (hasSurfaceInputs ? RESULT_FLAG_HAS_SURFACE_INPUTS
                                           : 0);
+
+  return true;
+}
+
+static inline bool evaluateDistanceInterpolationsImpl(
+    std::size_t count,
+    const double* cursor,
+    double* write) {
+  const double* readCursor = cursor;
+  double* writeCursor = write;
+  for (std::size_t i = 0; i < count; ++i) {
+    const double duration = readCursor[0];
+    const double from = readCursor[1];
+    const double to = readCursor[2];
+    const double finalValue = readCursor[3];
+    const double startTimestamp = readCursor[4];
+    const double timestampRaw = readCursor[5];
+    const int32_t easingPresetId = static_cast<int32_t>(readCursor[6]);
+    readCursor += DISTANCE_INTERPOLATION_ITEM_LENGTH;
+
+    const double timestamp = resolveTimestamp(timestampRaw);
+    const double effectiveStart =
+        resolveEffectiveStart(startTimestamp, timestamp);
+
+    double resultValue = finalValue;
+    bool completed = true;
+    if (duration > 0.0 && std::fabs(to - from) > DISTANCE_EPSILON) {
+      const double elapsed = timestamp - effectiveStart;
+      const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
+      const double eased = applyEasingPreset(rawProgress, easingPresetId);
+      const double interpolated = lerp(from, to, eased);
+      completed = rawProgress >= 1.0;
+      resultValue = completed ? finalValue : interpolated;
+    }
+
+    writeNumericInterpolationResult(
+        writeCursor, resultValue, completed, effectiveStart);
+    writeCursor += DISTANCE_INTERPOLATION_RESULT_LENGTH;
+  }
+  return true;
+}
+
+EMSCRIPTEN_KEEPALIVE bool evaluateDistanceInterpolations(const double* paramsPtr,
+                                                         double* resultPtr) {
+  if (paramsPtr == nullptr || resultPtr == nullptr) {
+    return false;
+  }
+  std::size_t count = 0;
+  if (!convertToSizeT(paramsPtr[0], count)) {
+    return false;
+  }
+  const double* cursor = paramsPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
+  double* write = resultPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
+  resultPtr[0] = static_cast<double>(count);
+  return evaluateDistanceInterpolationsImpl(count, cursor, write);
+}
+
+static inline bool evaluateDegreeInterpolationsImpl(
+    std::size_t count,
+    const double* cursor,
+    double* write) {
+  const double* readCursor = cursor;
+  double* writeCursor = write;
+  for (std::size_t i = 0; i < count; ++i) {
+    const double duration = readCursor[0];
+    const double from = readCursor[1];
+    const double to = readCursor[2];
+    const double finalValue = readCursor[3];
+    const double startTimestamp = readCursor[4];
+    const double timestampRaw = readCursor[5];
+    const int32_t easingPresetId = static_cast<int32_t>(readCursor[6]);
+    readCursor += DEGREE_INTERPOLATION_ITEM_LENGTH;
+
+    const double timestamp = resolveTimestamp(timestampRaw);
+    const double effectiveStart =
+        resolveEffectiveStart(startTimestamp, timestamp);
+
+    double resultValue = finalValue;
+    bool completed = true;
+    if (duration > 0.0 && std::fabs(to - from) > DEGREE_EPSILON) {
+      const double elapsed = timestamp - effectiveStart;
+      const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
+      const double eased = applyEasingPreset(rawProgress, easingPresetId);
+      const double interpolated = lerp(from, to, eased);
+      completed = rawProgress >= 1.0;
+      resultValue = completed ? finalValue : interpolated;
+    }
+
+    writeNumericInterpolationResult(writeCursor,
+                                    normalizeAngleDeg(resultValue), completed,
+                                    effectiveStart);
+    writeCursor += DEGREE_INTERPOLATION_RESULT_LENGTH;
+  }
+  return true;
+}
+
+EMSCRIPTEN_KEEPALIVE bool evaluateDegreeInterpolations(const double* paramsPtr,
+                                                       double* resultPtr) {
+  if (paramsPtr == nullptr || resultPtr == nullptr) {
+    return false;
+  }
+  std::size_t count = 0;
+  if (!convertToSizeT(paramsPtr[0], count)) {
+    return false;
+  }
+  const double* cursor = paramsPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
+  double* write = resultPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
+  resultPtr[0] = static_cast<double>(count);
+  return evaluateDegreeInterpolationsImpl(count, cursor, write);
+}
+
+static inline bool evaluateSpriteInterpolationsImpl(
+    std::size_t count,
+    const double* cursor,
+    double* write) {
+  const double* readCursor = cursor;
+  double* writeCursor = write;
+  for (std::size_t i = 0; i < count; ++i) {
+    const double duration = readCursor[0];
+    const double fromLng = readCursor[1];
+    const double fromLat = readCursor[2];
+    const double fromZ = readCursor[3];
+    const double toLng = readCursor[4];
+    const double toLat = readCursor[5];
+    const double toZ = readCursor[6];
+    const bool hasZ = readCursor[7] != 0.0;
+    const double startTimestamp = readCursor[8];
+    const double timestampRaw = readCursor[9];
+    const int32_t easingPresetId = static_cast<int32_t>(readCursor[10]);
+    readCursor += SPRITE_INTERPOLATION_ITEM_LENGTH;
+
+    const double timestamp = resolveTimestamp(timestampRaw);
+    const double effectiveStart =
+        resolveEffectiveStart(startTimestamp, timestamp);
+
+    double resultLng = toLng;
+    double resultLat = toLat;
+    double resultZ = toZ;
+    bool completed = true;
+
+    const bool requiresInterpolation =
+        duration > 0.0 &&
+        (std::fabs(toLng - fromLng) > DISTANCE_EPSILON ||
+         std::fabs(toLat - fromLat) > DISTANCE_EPSILON ||
+         (hasZ && std::fabs(toZ - fromZ) > DISTANCE_EPSILON));
+
+    if (requiresInterpolation) {
+      const double elapsed = timestamp - effectiveStart;
+      const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
+      const double eased = applyEasingPreset(rawProgress, easingPresetId);
+      completed = rawProgress >= 1.0;
+      if (!completed) {
+        resultLng = lerp(fromLng, toLng, eased);
+        resultLat = lerp(fromLat, toLat, eased);
+        if (hasZ) {
+          resultZ = lerp(fromZ, toZ, eased);
+        }
+      }
+    }
+
+    writeSpriteInterpolationResult(writeCursor, resultLng, resultLat, resultZ,
+                                   hasZ, completed, effectiveStart);
+    writeCursor += SPRITE_INTERPOLATION_RESULT_LENGTH;
+  }
+  return true;
+}
+
+EMSCRIPTEN_KEEPALIVE bool evaluateSpriteInterpolations(const double* paramsPtr,
+                                                       double* resultPtr) {
+  if (paramsPtr == nullptr || resultPtr == nullptr) {
+    return false;
+  }
+  std::size_t count = 0;
+  if (!convertToSizeT(paramsPtr[0], count)) {
+    return false;
+  }
+  const double* cursor = paramsPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
+  double* write = resultPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
+  resultPtr[0] = static_cast<double>(count);
+  return evaluateSpriteInterpolationsImpl(count, cursor, write);
+}
+
+EMSCRIPTEN_KEEPALIVE bool processInterpolations(const double* paramsPtr,
+                                                double* resultPtr) {
+  if (paramsPtr == nullptr || resultPtr == nullptr) {
+    return false;
+  }
+  const auto* paramHeader = AsProcessInterpolationsHeader(paramsPtr);
+  auto* resultHeader = AsProcessInterpolationsHeader(resultPtr);
+  std::size_t distanceCount = 0;
+  std::size_t degreeCount = 0;
+  std::size_t spriteCount = 0;
+  if (!convertToSizeT(paramHeader->distanceCount, distanceCount) ||
+      !convertToSizeT(paramHeader->degreeCount, degreeCount) ||
+      !convertToSizeT(paramHeader->spriteCount, spriteCount)) {
+    return false;
+  }
+
+  const double* cursor = paramsPtr + PROCESS_INTERPOLATIONS_HEADER_LENGTH;
+  double* write = resultPtr + PROCESS_INTERPOLATIONS_HEADER_LENGTH;
+  resultHeader->distanceCount = static_cast<double>(distanceCount);
+  resultHeader->degreeCount = static_cast<double>(degreeCount);
+  resultHeader->spriteCount = static_cast<double>(spriteCount);
+
+  if (!evaluateDistanceInterpolationsImpl(distanceCount, cursor, write)) {
+    return false;
+  }
+  cursor += distanceCount * DISTANCE_INTERPOLATION_ITEM_LENGTH;
+  write += distanceCount * DISTANCE_INTERPOLATION_RESULT_LENGTH;
+
+  if (!evaluateDegreeInterpolationsImpl(degreeCount, cursor, write)) {
+    return false;
+  }
+  cursor += degreeCount * DEGREE_INTERPOLATION_ITEM_LENGTH;
+  write += degreeCount * DEGREE_INTERPOLATION_RESULT_LENGTH;
+
+  if (!evaluateSpriteInterpolationsImpl(spriteCount, cursor, write)) {
+    return false;
+  }
 
   return true;
 }

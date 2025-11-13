@@ -35,6 +35,7 @@ describe('createInterpolationState', () => {
     expect(state.from).not.toBe(current);
     expect(state.to).not.toBe(next);
     expect(state.easing).toBe(linearEasing);
+    expect(state.easingPreset).toBe('linear');
   });
 
   it('predicts feedforward target based on velocity', () => {
@@ -77,6 +78,7 @@ describe('createInterpolationState', () => {
     });
 
     expect(state.easing).toBe(customEasing);
+    expect(state.easingPreset).toBeNull();
   });
 
   it('marks interpolation as unnecessary when duration is zero', () => {

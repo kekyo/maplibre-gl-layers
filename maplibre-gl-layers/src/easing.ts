@@ -4,7 +4,11 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { EasingFunction } from './types';
+import type {
+  EasingFunction,
+  SpriteEasingPresetName,
+  SpriteInterpolationEasing,
+} from './types';
 
 /**
  * Linear interpolation that clamps the value to the [0, 1] range.
@@ -22,8 +26,31 @@ export const linearEasing: EasingFunction = (progress: number): number => {
   return progress;
 };
 
+const EASING_PRESETS: Record<SpriteEasingPresetName, EasingFunction> = {
+  linear: linearEasing,
+};
+
+export interface ResolvedEasing {
+  readonly easing: EasingFunction;
+  readonly preset: SpriteEasingPresetName | null;
+}
+
 /**
  * Returns the provided easing function or falls back to linear interpolation.
+ * When a preset name is supplied the resolved preset identifier is preserved for downstream consumers.
  */
-export const resolveEasing = (easing?: EasingFunction): EasingFunction =>
-  easing ?? linearEasing;
+export const resolveEasing = (
+  easing?: SpriteInterpolationEasing
+): ResolvedEasing => {
+  if (!easing) {
+    return { easing: linearEasing, preset: 'linear' };
+  }
+  if (typeof easing === 'string') {
+    const presetName = easing as SpriteEasingPresetName;
+    const preset = EASING_PRESETS[presetName];
+    if (preset) {
+      return { easing: preset, preset: presetName };
+    }
+  }
+  return { easing: easing as EasingFunction, preset: null };
+};
