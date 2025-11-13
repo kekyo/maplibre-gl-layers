@@ -189,7 +189,7 @@ export interface WasmHost {
   // CalculationHost related functions.
   readonly calculateBillboardDepthKey: WasmCalculateBillboardDepthKey;
   readonly calculateSurfaceDepthKey: WasmCalculateSurfaceDepthKey;
-  readonly prepareDrawSpriteImages?: WasmPrepareDrawSpriteImages;
+  readonly prepareDrawSpriteImages: WasmPrepareDrawSpriteImages;
 }
 
 export type WasmVariant = SpriteLayerCalculationVariant;

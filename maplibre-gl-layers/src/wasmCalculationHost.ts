@@ -5,7 +5,6 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type {
-  ClipContext,
   ImageHandleBufferController,
   IdHandler,
   InternalSpriteCurrentState,
@@ -25,10 +24,10 @@ import type {
   SpriteAnchor,
   SpriteLocation,
   SpritePoint,
-  SpriteScreenPoint,
   SpriteMode,
 } from './types';
 import { prepareWasmHost, type BufferHolder, type WasmHost } from './wasmHost';
+import { createCalculationHost } from './calculationHost';
 import {
   prepareProjectionState,
   type PreparedProjectionState,
@@ -51,172 +50,7 @@ import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
 } from './internalTypes';
 import { QUAD_VERTEX_COUNT, VERTEX_COMPONENT_COUNT } from './shader';
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-const WASM_ProjectLngLatToClipSpace_MATRIX_ELEMENT_COUNT = 16;
-const WASM_ProjectLngLatToClipSpace_RESULT_ELEMENT_COUNT = 4;
-
-/**
- * Create `projectLngLatToClipSpace` delegator.
- * @param wasm Wasm hosted reference.
- * @returns projectLngLatToClipSpace function object.
- */
-const createProjectLngLatToClipSpace = (wasm: WasmHost) => {
-  // Allocate a matrix buffer.
-  const matrixHolder = wasm.allocateTypedBuffer(
-    Float64Array,
-    WASM_ProjectLngLatToClipSpace_MATRIX_ELEMENT_COUNT
-  );
-
-  // Allocate a result buffer.
-  const resultHolder = wasm.allocateTypedBuffer(
-    Float64Array,
-    WASM_ProjectLngLatToClipSpace_RESULT_ELEMENT_COUNT
-  );
-
-  // `projectLngLatToClipSpace` delegation body
-  const projectLngLatToClipSpace = (
-    clipContext: Readonly<ClipContext> | null,
-    location: Readonly<SpriteLocation>
-  ) => {
-    if (!clipContext) {
-      return null;
-    }
-
-    // Prepare the matrix buffer.
-    const { ptr: matrixPtr, buffer: matrix } = matrixHolder.prepare();
-    // Store matrix data into the buffer.
-    matrix.set(clipContext.mercatorMatrix);
-
-    // Prepare the result buffer.
-    const { ptr: resultPtr, buffer: result } = resultHolder.prepare();
-
-    if (
-      wasm.projectLngLatToClipSpace(
-        location.lng,
-        location.lat,
-        location.z ?? 0,
-        matrixPtr,
-        resultPtr
-      )
-    ) {
-      return [result[0]!, result[1]!, result[2]!, result[3]!];
-    } else {
-      return null;
-    }
-  };
-
-  // Attach releaser
-  projectLngLatToClipSpace.release = () => {
-    matrixHolder.release();
-    resultHolder.release();
-  };
-
-  return projectLngLatToClipSpace;
-};
-
-// TODO: Remove this when wasm implementation is done.
-export const createWasmProjectLngLatToClipSpace = () => {
-  const wasm = prepareWasmHost();
-  return createProjectLngLatToClipSpace(wasm);
-};
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-const WASM_CalculateBillboardDepthKey_MATRIX_ELEMENT_COUNT = 16;
-const WASM_CalculateBillboardDepthKey_RESULT_ELEMENT_COUNT = 1;
-
-/**
- * Create `calculateBillboardDepthKey` delegator.
- * @param wasm Wasm hosted reference.
- * @param preparedState Prepared state.
- * @returns calculateBillboardDepthKey function object.
- */
-const createCalculateBillboardDepthKey = (
-  wasm: WasmHost,
-  preparedState: PreparedProjectionState
-) => {
-  // Short-circuit.
-  if (
-    !preparedState.pixelMatrixInverse ||
-    preparedState.pixelMatrixInverse.length !==
-      WASM_CalculateBillboardDepthKey_MATRIX_ELEMENT_COUNT ||
-    !preparedState.clipContext ||
-    !preparedState.clipContext.mercatorMatrix ||
-    preparedState.clipContext.mercatorMatrix.length !==
-      WASM_CalculateBillboardDepthKey_MATRIX_ELEMENT_COUNT ||
-    !Number.isFinite(preparedState.worldSize) ||
-    preparedState.worldSize <= 0
-  ) {
-    const fallback = (_center: Readonly<SpriteScreenPoint>): number | null => {
-      return null;
-    };
-    fallback.release = () => {};
-    return fallback;
-  }
-
-  // Allocate an inverse matrix buffer.
-  const inverseHolder = wasm.allocateTypedBuffer(
-    Float64Array,
-    preparedState.pixelMatrixInverse
-  );
-
-  // Allocate a mercator matrix buffer.
-  const mercatorHolder = wasm.allocateTypedBuffer(
-    Float64Array,
-    preparedState.clipContext.mercatorMatrix
-  );
-
-  // Allocate a result buffer.
-  const resultHolder = wasm.allocateTypedBuffer(
-    Float64Array,
-    WASM_CalculateBillboardDepthKey_RESULT_ELEMENT_COUNT
-  );
-
-  // `calculateBillboardDepthKey` delegation body
-  const calculateBillboardDepthKey = (
-    center: Readonly<SpriteScreenPoint>
-  ): number | null => {
-    const { ptr: inversePtr } = inverseHolder.prepare();
-    const { ptr: mercatorPtr } = mercatorHolder.prepare();
-    const { ptr: resultPtr, buffer: resultBuffer } = resultHolder.prepare();
-
-    if (
-      wasm.calculateBillboardDepthKey(
-        center.x,
-        center.y,
-        preparedState.worldSize,
-        inversePtr,
-        mercatorPtr,
-        resultPtr
-      )
-    ) {
-      return resultBuffer[0] ?? null;
-    } else {
-      return null;
-    }
-  };
-
-  // Attach releaser
-  calculateBillboardDepthKey.release = () => {
-    inverseHolder.release();
-    mercatorHolder.release();
-    resultHolder.release();
-  };
-
-  return calculateBillboardDepthKey;
-};
-
-// TODO: Remove this when wasm implementation is done.
-export const createWasmCalculateBillboardDepthKey = (
-  preparedState: PreparedProjectionState
-) => {
-  const wasm = prepareWasmHost();
-  return createCalculateBillboardDepthKey(wasm, preparedState);
-};
-
-//////////////////////////////////////////////////////////////////////////////////////
+import { reportWasmRuntimeFailure } from './runtime';
 
 const WASM_CalculateSurfaceDepthKey_MATRIX_ELEMENT_COUNT = 16;
 const WASM_CalculateSurfaceDepthKey_DISPLACEMENT_ELEMENT_COUNT =
@@ -795,13 +629,6 @@ const prepareDrawSpriteImagesInternal = <TTag>(
   deps: WasmCalculationInteropDependencies<TTag>,
   params: PrepareDrawSpriteImageParams<TTag>
 ): PreparedDrawSpriteImageParams<TTag>[] => {
-  // TODO: Removed in the future.
-  if (!wasm.prepareDrawSpriteImages) {
-    throw new Error(
-      'prepareDrawSpriteImages entry point is not available in the current wasm host.'
-    );
-  }
-
   // Construct wasm input parameters
   const inputBuffer = wasmState.prepareInputBuffer(params);
   try {
@@ -1129,15 +956,56 @@ export const createWasmCalculationHost = <TTag>(
 
   // Prepare parameters.
   const wasmState = convertToWasmProjectionState<TTag>(wasm, params, deps);
-  try {
-    return {
-      prepareDrawSpriteImages: (params) =>
-        prepareDrawSpriteImagesInternal<TTag>(wasm, wasmState, deps, params),
-      release: () => {},
-    };
-  } catch (error) {
-    throw error;
-  }
+  let wasmFailed = false;
+  let fallbackHost: RenderCalculationHost<TTag> | null = null;
+
+  const ensureFallbackHost = (): RenderCalculationHost<TTag> => {
+    if (!fallbackHost) {
+      fallbackHost = createCalculationHost<TTag>(params);
+    }
+    return fallbackHost;
+  };
+
+  const releaseFallbackHost = () => {
+    if (!fallbackHost) {
+      return;
+    }
+    fallbackHost.release();
+    fallbackHost = null;
+  };
+
+  const runWithFallback = <TReturn>(
+    invokeWasm: () => TReturn,
+    invokeJs: () => TReturn
+  ): TReturn => {
+    if (wasmFailed) {
+      return invokeJs();
+    }
+    try {
+      return invokeWasm();
+    } catch (error) {
+      wasmFailed = true;
+      reportWasmRuntimeFailure(error);
+      return invokeJs();
+    }
+  };
+
+  return {
+    prepareDrawSpriteImages: (callParams) =>
+      runWithFallback(
+        () =>
+          prepareDrawSpriteImagesInternal<TTag>(
+            wasm,
+            wasmState,
+            deps,
+            callParams
+          ),
+        () => ensureFallbackHost().prepareDrawSpriteImages(callParams)
+      ),
+    release: () => {
+      releaseFallbackHost();
+    },
+  };
 };
 
 // Only testing purpose, DO NOT USE in production code.
