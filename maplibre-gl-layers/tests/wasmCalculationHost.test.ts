@@ -186,9 +186,11 @@ const createImage = (): InternalSpriteImageState =>
     rotationInterpolationOptions: null,
     offsetDegInterpolationState: null,
     offsetMetersInterpolationState: null,
+    opacityInterpolationState: null,
     lastCommandRotateDeg: 0,
     lastCommandOffsetDeg: 0,
     lastCommandOffsetMeters: 0,
+    lastCommandOpacity: 1,
     surfaceShaderInputs: undefined,
     hitTestCorners: undefined,
   }) as InternalSpriteImageState;

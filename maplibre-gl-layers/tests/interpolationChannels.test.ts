@@ -38,10 +38,12 @@ const createImageState = (): InternalSpriteImageState => ({
   rotationInterpolationOptions: null,
   offsetDegInterpolationState: null,
   offsetMetersInterpolationState: null,
+  opacityInterpolationState: null,
   originLocation: undefined,
   lastCommandRotateDeg: 0,
   lastCommandOffsetDeg: 0,
   lastCommandOffsetMeters: 0,
+  lastCommandOpacity: 1,
 });
 
 describe('applyOffsetUpdate', () => {

@@ -588,9 +588,11 @@ export interface InternalSpriteImageState {
   rotationInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
   offsetDegInterpolationState: Readonly<DegreeInterpolationState> | null;
   offsetMetersInterpolationState: Readonly<DistanceInterpolationState> | null;
+  opacityInterpolationState: Readonly<DistanceInterpolationState> | null;
   lastCommandRotateDeg: number;
   lastCommandOffsetDeg: number;
   lastCommandOffsetMeters: number;
+  lastCommandOpacity: number;
   surfaceShaderInputs?: Readonly<SurfaceShaderInputs>;
   hitTestCorners?: [
     MutableSpriteScreenPoint,

@@ -95,8 +95,11 @@ import {
 } from './math';
 import {
   applyOffsetUpdate,
+  applyOpacityUpdate,
   clearOffsetDegInterpolation,
   clearOffsetMetersInterpolation,
+  clearOpacityInterpolation,
+  clampOpacity,
   stepSpriteImageInterpolations,
   syncImageRotationChannel,
 } from './interpolationChannels';
@@ -1043,6 +1046,7 @@ export const createImageStateFromInit = (
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
   const initialOffset = cloneOffset(imageInit.offset);
+  const initialOpacity = clampOpacity(imageInit.opacity ?? 1.0);
   const initialRotateDeg = normalizeAngleDeg(imageInit.rotateDeg ?? 0);
   const originLocation = cloneOriginLocation(imageInit.originLocation);
   const originReferenceKey =
@@ -1055,7 +1059,7 @@ export const createImageStateFromInit = (
     imageId: imageInit.imageId,
     imageHandle: 0,
     mode,
-    opacity: imageInit.opacity ?? 1.0,
+    opacity: initialOpacity,
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
     offset: initialOffset,
@@ -1073,9 +1077,11 @@ export const createImageStateFromInit = (
     rotationInterpolationOptions: null,
     offsetDegInterpolationState: null,
     offsetMetersInterpolationState: null,
+    opacityInterpolationState: null,
     lastCommandRotateDeg: initialRotateDeg,
     lastCommandOffsetDeg: initialOffset.offsetDeg,
     lastCommandOffsetMeters: initialOffset.offsetMeters,
+    lastCommandOpacity: initialOpacity,
   };
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
   const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
@@ -4187,9 +4193,17 @@ export const createSpriteLayer = <T = any>(
       // Mode changes influence how geometry is generated.
       state.mode = imageUpdate.mode;
     }
+    const interpolationOptions = imageUpdate.interpolation;
+    const opacityInterpolationOption = interpolationOptions?.opacity;
     if (imageUpdate.opacity !== undefined) {
       // Update opacity; zero values will be filtered out during rendering.
-      state.opacity = imageUpdate.opacity;
+      applyOpacityUpdate(
+        state,
+        imageUpdate.opacity,
+        opacityInterpolationOption
+      );
+    } else if (opacityInterpolationOption === null) {
+      clearOpacityInterpolation(state);
     }
     if (imageUpdate.scale !== undefined) {
       // Adjust image scaling factor applied to dimensions and offsets.
@@ -4204,7 +4218,6 @@ export const createSpriteLayer = <T = any>(
     if (imageUpdate.anchor !== undefined) {
       state.anchor = cloneAnchor(imageUpdate.anchor);
     }
-    const interpolationOptions = imageUpdate.interpolation;
     // Optional interpolation payloads allow independent control over offset and rotation animations.
     const offsetDegInterpolationOption = interpolationOptions?.offsetDeg;
     const offsetMetersInterpolationOption = interpolationOptions?.offsetMeters;

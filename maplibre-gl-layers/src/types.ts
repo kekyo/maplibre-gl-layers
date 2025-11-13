@@ -103,6 +103,8 @@ export interface SpriteImageInterpolationOptions {
   offsetDeg?: SpriteInterpolationOptions | null;
   /** Interpolation settings for offset.offsetMeters; null disables interpolation. */
   offsetMeters?: SpriteInterpolationOptions | null;
+  /** Interpolation settings for opacity; null disables interpolation. */
+  opacity?: SpriteInterpolationOptions | null;
 }
 
 /**

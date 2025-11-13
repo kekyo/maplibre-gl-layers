@@ -18,6 +18,10 @@ import {
   createSpriteOriginReference,
 } from '../src/utils';
 import {
+  applyOpacityUpdate,
+  stepSpriteImageInterpolations,
+} from '../src/interpolationChannels';
+import {
   calculateBillboardAnchorShiftPixels,
   calculateZoomScaleFactor,
   resolveScalingOptions,
@@ -164,13 +168,14 @@ const createImageState = (
     originLocation !== undefined
       ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
       : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
+  const initialOpacity = overrides.opacity ?? 1;
   return {
     subLayer: overrides.subLayer ?? 0,
     order: overrides.order ?? 0,
     imageId: overrides.imageId ?? 'image',
     imageHandle: overrides.imageHandle ?? 0,
     mode: overrides.mode ?? 'billboard',
-    opacity: overrides.opacity ?? 1,
+    opacity: initialOpacity,
     scale: overrides.scale ?? 1,
     anchor: overrides.anchor ?? DEFAULT_ANCHOR,
     offset: overrides.offset ?? DEFAULT_OFFSET,
@@ -190,9 +195,11 @@ const createImageState = (
     offsetDegInterpolationState: overrides.offsetDegInterpolationState ?? null,
     offsetMetersInterpolationState:
       overrides.offsetMetersInterpolationState ?? null,
+    opacityInterpolationState: overrides.opacityInterpolationState ?? null,
     lastCommandRotateDeg: overrides.lastCommandRotateDeg ?? 0,
     lastCommandOffsetDeg: overrides.lastCommandOffsetDeg ?? 0,
     lastCommandOffsetMeters: overrides.lastCommandOffsetMeters ?? 0,
+    lastCommandOpacity: overrides.lastCommandOpacity ?? initialOpacity,
     surfaceShaderInputs: overrides.surfaceShaderInputs,
     hitTestCorners: overrides.hitTestCorners,
   };
@@ -722,6 +729,33 @@ describe('prepareDrawSpriteImages', () => {
     });
     expect(draw.hitTestCorners).not.toBeNull();
     expect(image.surfaceShaderInputs).toBeUndefined();
+  });
+
+  it('propagates interpolated opacity into prepared draw params', () => {
+    const resource = createImageResource('icon-fade');
+    const image = createImageState({ imageId: 'icon-fade', order: 0 });
+    applyOpacityUpdate(image, 0, { durationMs: 1000, easing: (t) => t });
+    stepSpriteImageInterpolations(image, 0);
+    stepSpriteImageInterpolations(image, 500);
+
+    const sprite = createSpriteState('sprite-fade', [image]);
+
+    const context = createCollectContext({
+      bucket: [[sprite, image] as const],
+      images: new Map([['icon-fade', resource]]),
+    });
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
+
+    const prepared = prepareItems(context, items);
+
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].opacity).toBeCloseTo(0.5, 6);
   });
 
   it('uses billboard shader geometry when enabled', () => {

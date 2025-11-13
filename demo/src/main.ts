@@ -46,6 +46,7 @@ const INITIAL_NUMBER_OF_SPRITES = 1000;
  * Interval in milliseconds between movement updates.
  */
 const MOVEMENT_INTERVAL_MS = 500;
+const PRIMARY_OPACITY_SEQUENCE = [0.6, 0.3, 0.6, 1.0] as const;
 
 /** Identifier assigned to the sprite layer instance registered with MapLibre. */
 const SPRITE_LAYER_ID = 'demo-sprite';
@@ -483,6 +484,8 @@ interface DemoSpriteTag {
  */
 type AnimationMode = 'random' | 'linear';
 
+type PrimaryOpacityMode = 'show' | 'wave';
+
 /** Identifiers for the base maps available in the demo. */
 type BasemapId = 'osm' | 'carto';
 
@@ -509,6 +512,14 @@ let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 let isRotateInterpolationEnabled = true;
 /** Interpolation mode applied to primary image rotation. */
 let rotateInterpolationMode: SpriteInterpolationMode = 'feedback';
+/** Whether opacity interpolation is active for primary images. */
+let isOpacityInterpolationEnabled = true;
+/** Opacity mode applied to primary images. */
+let primaryOpacityMode: PrimaryOpacityMode = 'show';
+/** Current index within the opacity wave sequence. */
+let primaryOpacityWaveIndex = 0;
+/** Last applied opacity value for the primary image. */
+let primaryOpacityCurrentValue = 1.0;
 /** Height mode used for arrow icons. */
 let currentArrowShapeMode: IconHeightMode = 'elongated';
 /** Global multiplier applied to sprite movement speed. */
@@ -539,6 +550,10 @@ let updateSecondaryImageButtons: (() => void) | undefined;
 let updateSecondaryImageTypeButtons: (() => void) | undefined;
 /** UI updater for the rotate-interpolation toggle. */
 let updateRotateInterpolationButton: (() => void) | undefined;
+/** UI updater for the primary opacity buttons. */
+let updatePrimaryOpacityButtons: (() => void) | undefined;
+/** UI updater for the opacity interpolation toggle. */
+let updateOpacityInterpolationButton: (() => void) | undefined;
 /** UI updater for the orbit degree interpolation toggle. */
 let updateOrbitDegInterpolationButton: (() => void) | undefined;
 /** UI updater for the orbit meters interpolation toggle. */
@@ -812,8 +827,8 @@ const createHud = () => {
               data-selected-field="tag"
               data-testid="selected-tag"
             >--</span>
-          </div>
-        </div>
+      </div>
+    </div>
       </section>
     </aside>
     <aside id="controls" data-testid="panel-controls">
@@ -1026,6 +1041,49 @@ const createHud = () => {
             data-testid="toggle-rotate-feedforward"
           >
             Feedforward
+          </button>
+      </div>
+    </div>
+      <div class="control-group" data-testid="group-opacity">
+        <h1>Opacity</h1>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${primaryOpacityMode === 'show' ? ' active' : ''}"
+            data-control="primary-opacity-mode"
+            data-option="show"
+            data-label="Show"
+            aria-pressed="${primaryOpacityMode === 'show'}"
+            data-testid="toggle-opacity-show"
+          >
+            Show
+          </button>
+          <button
+            type="button"
+            class="toggle-button${primaryOpacityMode === 'wave' ? ' active' : ''}"
+            data-control="primary-opacity-mode"
+            data-option="wave"
+            data-label="Wave"
+            aria-pressed="${primaryOpacityMode === 'wave'}"
+            data-testid="toggle-opacity-wave"
+          >
+            Wave
+          </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${isOpacityInterpolationEnabled ? ' active' : ''}"
+            data-control="opacity-interpolation-toggle"
+            data-label="Opacity Interpolation"
+            data-active-text="On"
+            data-inactive-text="Off"
+            aria-pressed="${isOpacityInterpolationEnabled}"
+            data-testid="toggle-opacity-interpolation"
+          >
+            Opacity Interpolation: ${
+              isOpacityInterpolationEnabled ? 'On' : 'Off'
+            }
           </button>
         </div>
       </div>
@@ -2163,6 +2221,73 @@ const main = async () => {
         });
         return true;
       });
+    };
+
+    const applyPrimaryOpacityValue = (
+      opacity: number,
+      preferInterpolation: boolean
+    ): void => {
+      primaryOpacityCurrentValue = opacity;
+      const shouldInterpolate =
+        preferInterpolation && isOpacityInterpolationEnabled;
+      spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        sprite.images.forEach((orderMap) => {
+          orderMap.forEach((image) => {
+            if (image.subLayer !== PRIMARY_SUB_LAYER) {
+              return;
+            }
+            const imageUpdate: SpriteImageDefinitionUpdate = {
+              opacity,
+            };
+            if (shouldInterpolate) {
+              imageUpdate.interpolation = {
+                opacity: {
+                  durationMs: MOVEMENT_INTERVAL_MS,
+                },
+              };
+            } else {
+              imageUpdate.interpolation = { opacity: null };
+            }
+            spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
+          });
+        });
+        return true;
+      });
+    };
+
+    const advancePrimaryOpacityWave = (forceImmediate = false): void => {
+      if (!forceImmediate && primaryOpacityMode !== 'wave') {
+        return;
+      }
+      const value =
+        PRIMARY_OPACITY_SEQUENCE[primaryOpacityWaveIndex] ??
+        PRIMARY_OPACITY_SEQUENCE[0];
+      primaryOpacityWaveIndex =
+        (primaryOpacityWaveIndex + 1) % PRIMARY_OPACITY_SEQUENCE.length;
+      applyPrimaryOpacityValue(value, true);
+    };
+
+    const setPrimaryOpacityMode = (mode: PrimaryOpacityMode): void => {
+      if (primaryOpacityMode === mode) {
+        return;
+      }
+      primaryOpacityMode = mode;
+      primaryOpacityWaveIndex = 0;
+      if (mode === 'show') {
+        applyPrimaryOpacityValue(1.0, true);
+      } else {
+        advancePrimaryOpacityWave(true);
+      }
+      updatePrimaryOpacityButtons?.();
+    };
+
+    const setOpacityInterpolationEnabled = (enabled: boolean): void => {
+      if (isOpacityInterpolationEnabled === enabled) {
+        return;
+      }
+      isOpacityInterpolationEnabled = enabled;
+      updateOpacityInterpolationButton?.();
+      applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
     };
 
     /**
@@ -3467,6 +3592,53 @@ const main = async () => {
           applyRotateInterpolationToAll(isRotateInterpolationEnabled);
         });
       }
+
+      const primaryOpacityButtons = Array.from(
+        queryAll<HTMLButtonElement>('[data-control="primary-opacity-mode"]')
+      );
+      if (primaryOpacityButtons.length > 0) {
+        updatePrimaryOpacityButtons = () => {
+          primaryOpacityButtons.forEach((button) => {
+            const mode = button.dataset.option as
+              | PrimaryOpacityMode
+              | undefined;
+            if (!mode) {
+              return;
+            }
+            setToggleButtonState(button, primaryOpacityMode === mode, 'select');
+          });
+        };
+        updatePrimaryOpacityButtons();
+        primaryOpacityButtons.forEach((button) => {
+          const mode = button.dataset.option as PrimaryOpacityMode | undefined;
+          if (!mode) {
+            return;
+          }
+          button.addEventListener('click', () => {
+            if (primaryOpacityMode === mode) {
+              return;
+            }
+            setPrimaryOpacityMode(mode);
+          });
+        });
+      }
+
+      const opacityInterpolationButton = queryFirst<HTMLButtonElement>(
+        '[data-control="opacity-interpolation-toggle"]'
+      );
+      if (opacityInterpolationButton) {
+        updateOpacityInterpolationButton = () => {
+          setToggleButtonState(
+            opacityInterpolationButton,
+            isOpacityInterpolationEnabled,
+            'binary'
+          );
+        };
+        updateOpacityInterpolationButton();
+        opacityInterpolationButton.addEventListener('click', () => {
+          setOpacityInterpolationEnabled(!isOpacityInterpolationEnabled);
+        });
+      }
     };
 
     initializeControlPanel();
@@ -3693,6 +3865,7 @@ const main = async () => {
         applyLocationInterpolationToAll();
         applyRotateInterpolationToAll(isRotateInterpolationEnabled);
         applyOrbitInterpolationToAll();
+        applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
         applyLayerVisibility(isActive);
         reconcileSpriteVisibility();
 
@@ -3829,6 +4002,7 @@ const main = async () => {
 
         return true;
       });
+      advancePrimaryOpacityWave();
       advanceSecondaryOrbitRotation();
     };
 

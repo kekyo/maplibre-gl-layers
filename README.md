@@ -362,6 +362,31 @@ Calculations proceed in the above order.
 
 When the anchor is set outside the center, rotation and offset are always applied relative to the anchor. If the position feels unintended, review the combination of anchor, rotation, and offset. Note that in Billboard mode, the offset angle is relative to the screen, while in Surface mode it is relative to geographic coordinates using magnetic north as the reference.
 
+## Opacity
+
+Each image can have an `opacity` value specified, which is multiplied by the alpha channel within the range 0.0 to 1.0.
+A value of 1.0 represents the texture's inherent opacity, while 0.0 makes it completely invisible.
+
+Setting it below 0 excludes the image from the rendering queue. This allows you to set the `opacity` of unnecessary images to 0 when layering multiple images, reducing calculation cost.
+
+The following example makes only the label semi-transparent:
+
+```typescript
+spriteLayer.addSprite('vehicle-opacity', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    { subLayer: 0, order: 0, imageId: ARROW_IMAGE_ID },
+    {
+      subLayer: 1,
+      order: 0,
+      imageId: TEXT_LABEL1_ID,
+      mode: 'billboard',
+      opacity: 0.6, // Make only the text semi-transparent
+    },
+  ],
+});
+```
+
 ## Auto Heading Rotation
 
 Enable `autoRotation` to rotate images automatically according to their movement.
@@ -428,32 +453,41 @@ With feedback, even if a new coordinate is set, the animation won't reach that c
 
 Of course, since this is a predicted coordinate, a disadvantage is that if the movement direction or speed changes significantly during the move, it will continue moving toward an incorrect coordinate. Nevertheless, when a new coordinate is supplied, it will be corrected to move quickly toward that new coordinate, so the coordinate deviation should converge.
 
-## Interpolating Rotation and Offsets
+## Interpolation of Image Rotation Angle, Offset, and Opacity
 
-Similar to sprite movement interpolation, you can also interpolate image rotation and the offset parameters. While these functions are similar, they are distinct from sprite position interpolation.
+Similar to sprite position interpolation, you can smoothly change the rotation, offset, and opacity of each image.
+These are independent of sprite position interpolation and are controlled individually via the `interpolation` field in `SpriteImageDefinitionUpdate`.
 
-Use the per-image `interpolation` property to smooth changes to `rotateDeg`, `offset.offsetDeg`, and `offset.offsetMeters`. Each channel accepts its own `durationMs`, optional easing function, and interpolation mode. While interpolation is active, the values update every frame until the specified duration completes; passing `null` disables interpolation for that channel.
+`interpolation` supports the following channels:
 
-Below are examples of applying interpolation for the image rotation angle and both offset parameters:
+- `rotateDeg`: Additional rotation angle for the image. Interpolated along the shortest path and snaps to the final angle upon completion.
+- `offsetDeg` / `offsetMeters`: Offset direction and distance. Angle and distance can be controlled with separate timing and easing.
+- `opacity`: Fades automatically clipping values between 0.0 and 1.0. As the value approaches 0, rendering is suppressed, making it useful for LOD or highlight effects.
+
+Assign `durationMs` and an interpolation mode (`feedback`/`feedforward`) to each channel, along with an optional easing function.
+If no easing function is specified, simple linear interpolation is used.
+Removing the setting or passing `null` immediately stops that channel.
+
+Below is an example applying interpolation to rotation, offset, and opacity:
 
 ```typescript
 // Smoothly rotate the image to 180 degrees over 400 ms
 spriteLayer.updateSpriteImage('vehicle-rotated', 0, 0, {
   rotateDeg: 180, // Rotate toward 180 degrees
   interpolation: {
-    rotateDeg: { durationMs: 400 },
+    rotateDeg: { durationMs: 400, },
   },
 });
 
 // Smoothly change the offset heading over 600 ms
 spriteLayer.updateSpriteImage('vehicle-label', 1, 0, {
   offset: {
+    offsetDeg: 45, // Rotate toward 45 degrees
     offsetMeters: 12,
-    offsetDeg: 45 // Rotate toward 180 degrees
   },
   interpolation: {
-    offsetDeg: { durationMs: 600 },
-    offsetMeters: { durationMs: 600 },
+    offsetDeg: { durationMs: 600, mode: 'feedforward', },
+    offsetMeters: { durationMs: 600, },
   },
 });
 
@@ -462,6 +496,14 @@ spriteLayer.updateSpriteImage('vehicle-label', 1, 0, {
   interpolation: {
     offsetDeg: null,
     offsetMeters: null,
+  },
+});
+
+// Fade out the opacity over 800 milliseconds.
+spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
+  opacity: 0,
+  interpolation: {
+    opacity: { durationMs: 800, },
   },
 });
 ```
