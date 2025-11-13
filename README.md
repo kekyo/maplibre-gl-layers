@@ -86,6 +86,8 @@ In addition to images, you can render text alongside sprites and animate them to
 - Add multiple images and text to the same sprite, adjusting rotation, offset, scale, opacity, and more.
 - Animate sprite movement, rotation, and offsets with interpolation controls.
 - Control draw order via sub-layers and per-sprite ordering.
+- Fully imperative APIs. Updates with high-performance and extensible.
+- Accelerating computational processing with WASM and shaders.
 
 ### Requirements
 
@@ -819,8 +821,11 @@ Note that depending on the browser implementation, if the correct MIME type is n
 The return value indicates the selected calculation type.
 For example, if loading a SIMD calculation module fails, a different type is returned.
 
+If an unknown error occurs during calculation in the WASM module (mainly OOM (Out of memory)), it will fall back to the JavaScript implementation and continue working.
+Once this situation occurs, the WASM module cannot be reused unless the page is reloaded.
+
 To release WASM when the SPA page terminates, call `releaseRuntimeHost()`.
-After release, it will operate using JavaScript computation until `initializeRuntimeHost()` is called again.
+After release, it will operate using JavaScript calculation until `initializeRuntimeHost()` is called again.
 
 #### WASM multi-threading limitation
 
@@ -840,8 +845,8 @@ However, `simd-mt` does not function simply by being specified.
 2. The amount of memory used and the number of threads used must be statically determined during the WASM module build.
    The WASM module included in the distribution package is set to 512MB/4 threads.
    - The 512MB memory requirement is based on displaying 10,000 sprites with secondary images on the demo page.
-   - If memory usage exceeds the limit, an "OOM error" occurs within the WASM module's worker, causing all functions to stop.
-     Therefore, if your usage conditions differ from this assumption, you must build and deploy your own WASM module.
+   - If memory usage exceeds the limit, an OOM occurs within the WASM module worker, causing a fallback to the JavaScript implementation.
+     Therefore, if your usage conditions differ from the assumptions, you must build and deploy your own WASM module.
 
 Note: The [demo page](https://kekyo.github.io/maplibre-gl-layers/) is deployed on github.io, but unfortunately, github.io does not meet these requirements, so you cannot select `simd-mt` on the demo page.
 If you want to try it out quickly, clone the repository and run the demo page locally with `npm install && npm run dev`.
