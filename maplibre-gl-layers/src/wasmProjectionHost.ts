@@ -5,6 +5,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import {
+  createProjectionHost,
   prepareProjectionState,
   type PreparedProjectionState,
   type ProjectionHostParams,
@@ -12,6 +13,7 @@ import {
 import type { ProjectionHost, SpriteMercatorCoordinate } from './internalTypes';
 import type { SpriteLocation, SpritePoint } from './types';
 import { prepareWasmHost, type WasmHost } from './wasmHost';
+import { reportWasmRuntimeFailure } from './runtime';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -332,28 +334,99 @@ export const createWasmProjectionHost = (
   //----------------------------------------------------------
 
   // Member: fromLngLat
-  const fromLngLat = createFromLngLat(wasm);
+  const wasmFromLngLat = createFromLngLat(wasm);
 
   // Member: project
-  const project = createProject(wasm, preparedState);
+  const wasmProject = createProject(wasm, preparedState);
 
   // Member: unproject
-  const unproject = createUnproject(wasm, preparedState);
+  const wasmUnproject = createUnproject(wasm, preparedState);
 
   // Member: calculatePerspectiveRatio
-  const calculatePerspectiveRatio = createCalculatePerspectiveRatio(
+  const wasmCalculatePerspectiveRatio = createCalculatePerspectiveRatio(
     wasm,
     preparedState
   );
+
+  let wasmFailed = false;
+  let wasmResourcesReleased = false;
+  let fallbackHost: ProjectionHost | null = null;
+
+  const ensureFallbackHost = (): ProjectionHost => {
+    if (!fallbackHost) {
+      fallbackHost = createProjectionHost(params);
+    }
+    return fallbackHost;
+  };
+
+  const releaseWasmResources = () => {
+    if (wasmResourcesReleased) {
+      return;
+    }
+    wasmResourcesReleased = true;
+    wasmFromLngLat.release();
+    wasmProject.release();
+    wasmUnproject.release();
+    wasmCalculatePerspectiveRatio.release();
+  };
+
+  const releaseFallbackHost = () => {
+    if (!fallbackHost) {
+      return;
+    }
+    fallbackHost.release();
+    fallbackHost = null;
+  };
+
+  const runWithFallback = <T>(invokeWasm: () => T, invokeJs: () => T): T => {
+    if (wasmFailed) {
+      return invokeJs();
+    }
+    try {
+      return invokeWasm();
+    } catch (error) {
+      wasmFailed = true;
+      releaseWasmResources();
+      reportWasmRuntimeFailure(error);
+      return invokeJs();
+    }
+  };
+
+  const fromLngLat: ProjectionHost['fromLngLat'] = (location) =>
+    runWithFallback(
+      () => wasmFromLngLat(location),
+      () => ensureFallbackHost().fromLngLat(location)
+    );
+
+  const project: ProjectionHost['project'] = (location) =>
+    runWithFallback(
+      () => wasmProject(location),
+      () => ensureFallbackHost().project(location)
+    );
+
+  const unproject: ProjectionHost['unproject'] = (point) =>
+    runWithFallback(
+      () => wasmUnproject(point),
+      () => ensureFallbackHost().unproject(point)
+    );
+
+  const calculatePerspectiveRatio: ProjectionHost['calculatePerspectiveRatio'] =
+    (location, cachedMercator) =>
+      runWithFallback(
+        () => wasmCalculatePerspectiveRatio(location, cachedMercator),
+        () =>
+          ensureFallbackHost().calculatePerspectiveRatio(
+            location,
+            cachedMercator
+          )
+      );
 
   //----------------------------------------------------------
 
   // The projection host disposer
   const release = () => {
-    fromLngLat.release();
-    project.release();
-    unproject.release();
-    calculatePerspectiveRatio.release();
+    releaseWasmResources();
+    releaseFallbackHost();
   };
 
   return {

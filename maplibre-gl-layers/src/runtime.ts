@@ -20,9 +20,28 @@ import {
 
 const spriteLayerHostInitializationMutex = createMutex();
 let spriteLayerHostVariant: WasmVariant = 'disabled';
+let wasmHostFatalError: unknown = null;
+
+const logWasmFallback = (reason?: unknown) => {
+  if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+    console.warn(
+      '[maplibre-gl-layers] Falling back to JS hosts due to a WASM error.',
+      reason
+    );
+  }
+};
 
 export const isSpriteLayerHostEnabled = () =>
-  spriteLayerHostVariant !== 'disabled';
+  spriteLayerHostVariant !== 'disabled' && wasmHostFatalError === null;
+
+export const reportWasmRuntimeFailure = (reason?: unknown): void => {
+  if (wasmHostFatalError !== null) {
+    return;
+  }
+  wasmHostFatalError = reason ?? true;
+  logWasmFallback(reason);
+  releaseRuntimeHost();
+};
 
 /**
  * Initialize maplibre-gl-layers runtime host.
@@ -34,6 +53,12 @@ export const initializeRuntimeHost = async (
 ): Promise<SpriteLayerCalculationVariant> => {
   const locker = await spriteLayerHostInitializationMutex.lock();
   try {
+    if (wasmHostFatalError !== null) {
+      logWasmFallback(
+        'WASM hosts have been permanently disabled after a previous error.'
+      );
+      return 'disabled';
+    }
     const requestedVariant = options?.variant ?? 'simd';
     if (requestedVariant === 'disabled') {
       releaseRuntimeHost();
