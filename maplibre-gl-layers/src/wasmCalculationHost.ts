@@ -116,12 +116,6 @@ const createProjectLngLatToClipSpace = (wasm: WasmHost) => {
   return projectLngLatToClipSpace;
 };
 
-// TODO: Remove this when wasm implementation is done.
-export const createWasmProjectLngLatToClipSpace = () => {
-  const wasm = prepareWasmHost();
-  return createProjectLngLatToClipSpace(wasm);
-};
-
 //////////////////////////////////////////////////////////////////////////////////////
 
 const WASM_CalculateBillboardDepthKey_MATRIX_ELEMENT_COUNT = 16;
@@ -206,14 +200,6 @@ const createCalculateBillboardDepthKey = (
   };
 
   return calculateBillboardDepthKey;
-};
-
-// TODO: Remove this when wasm implementation is done.
-export const createWasmCalculateBillboardDepthKey = (
-  preparedState: PreparedProjectionState
-) => {
-  const wasm = prepareWasmHost();
-  return createCalculateBillboardDepthKey(wasm, preparedState);
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -795,13 +781,6 @@ const prepareDrawSpriteImagesInternal = <TTag>(
   deps: WasmCalculationInteropDependencies<TTag>,
   params: PrepareDrawSpriteImageParams<TTag>
 ): PreparedDrawSpriteImageParams<TTag>[] => {
-  // TODO: Removed in the future.
-  if (!wasm.prepareDrawSpriteImages) {
-    throw new Error(
-      'prepareDrawSpriteImages entry point is not available in the current wasm host.'
-    );
-  }
-
   // Construct wasm input parameters
   const inputBuffer = wasmState.prepareInputBuffer(params);
   try {
