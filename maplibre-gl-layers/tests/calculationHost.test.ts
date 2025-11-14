@@ -7,14 +7,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MercatorCoordinate, type Map as MapLibreMap } from 'maplibre-gl';
 
-import { createMapLibreProjectionHost } from '../src/mapLibreProjectionHost';
+import { createMapLibreProjectionHost } from '../src/host/mapLibreProjectionHost';
 import {
   collectDepthSortedItemsInternal,
   prepareDrawSpriteImageInternal,
   processInterpolationsInternal,
   type ProcessInterpolationsEvaluationHandlers,
   type ProcessInterpolationPresetRequests,
-} from '../src/calculationHost';
+} from '../src/host/calculationHost';
 import {
   createImageHandleBufferController,
   createRenderTargetBucketBuffers,

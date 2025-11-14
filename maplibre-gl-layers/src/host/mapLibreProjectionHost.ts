@@ -7,12 +7,12 @@
 import { MercatorCoordinate, Map as MapLibreMap } from 'maplibre-gl';
 import { vec4, type ReadonlyMat4 } from 'gl-matrix';
 
-import type { SpriteLocation, SpritePoint } from './types';
+import type { SpriteLocation, SpritePoint } from '../types';
 import type {
   ClipContext,
   ProjectionHost,
   SpriteMercatorCoordinate,
-} from './internalTypes';
+} from '../internalTypes';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

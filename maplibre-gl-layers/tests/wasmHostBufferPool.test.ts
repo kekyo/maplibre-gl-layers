@@ -10,7 +10,7 @@ import {
   initializeWasmHost,
   prepareWasmHost,
   releaseWasmHost,
-} from '../src/wasmHost';
+} from '../src/host/wasmHost';
 
 describe('WasmHost.allocateTypedBuffer', () => {
   it('reuses buffers of the same size without clearing previous contents', async () => {

@@ -27,36 +27,36 @@ import type {
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
-} from './internalTypes';
+} from '../internalTypes';
 import {
   SURFACE_CORNER_DISPLACEMENT_COUNT,
   cloneSpriteLocation,
   type SurfaceCorner,
-} from './math';
+} from '../math';
 import type {
   SpriteAnchor,
   SpriteLocation,
   SpritePoint,
   SpriteMode,
   SpriteEasingPresetName,
-} from './types';
+} from '../types';
 import { prepareWasmHost, type BufferHolder, type WasmHost } from './wasmHost';
 import {
   collectDistanceInterpolationWorkItems,
   applyDistanceInterpolationEvaluations,
   type DistanceInterpolationWorkItem,
-} from './interpolation/distanceInterpolation';
+} from '../interpolation/distanceInterpolation';
 import {
   collectDegreeInterpolationWorkItems,
   applyDegreeInterpolationEvaluations,
   type DegreeInterpolationWorkItem,
-} from './interpolation/degreeInterpolation';
-import { evaluateInterpolation } from './interpolation/interpolation';
+} from '../interpolation/degreeInterpolation';
+import { evaluateInterpolation } from '../interpolation/interpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
   hasActiveImageInterpolations,
-} from './interpolation/interpolationChannels';
+} from '../interpolation/interpolationChannels';
 import {
   createCalculationHost,
   type ProcessInterpolationPresetRequests,
@@ -72,18 +72,18 @@ import {
   ORDER_BUCKET,
   ORDER_MAX,
   EPS_NDC,
-} from './const';
+} from '../const';
 import {
   ENABLE_NDC_BIAS_SURFACE,
   USE_SHADER_BILLBOARD_GEOMETRY,
   USE_SHADER_SURFACE_GEOMETRY,
-} from './config';
+} from '../config';
 import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
-} from './internalTypes';
-import { QUAD_VERTEX_COUNT, VERTEX_COMPONENT_COUNT } from './shader';
-import { reportWasmRuntimeFailure } from './runtime';
+} from '../internalTypes';
+import { QUAD_VERTEX_COUNT, VERTEX_COMPONENT_COUNT } from '../shader';
+import { reportWasmRuntimeFailure } from '../runtime';
 
 const WASM_CalculateSurfaceDepthKey_MATRIX_ELEMENT_COUNT = 16;
 const WASM_CalculateSurfaceDepthKey_DISPLACEMENT_ELEMENT_COUNT =

@@ -115,13 +115,13 @@ import {
   type SpriteDrawProgram,
   type DebugOutlineRenderer,
 } from './shader';
-import { createCalculationHost } from './calculationHost';
+import { createCalculationHost } from './host/calculationHost';
 import {
   createProjectionHost,
   createProjectionHostParamsFromMapLibre,
-} from './projectionHost';
-import { createWasmProjectionHost } from './wasmProjectionHost';
-import { createWasmCalculationHost } from './wasmCalculationHost';
+} from './host/projectionHost';
+import { createWasmProjectionHost } from './host/wasmProjectionHost';
+import { createWasmCalculationHost } from './host/wasmCalculationHost';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_IMAGE_OFFSET,

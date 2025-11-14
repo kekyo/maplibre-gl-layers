@@ -8,14 +8,14 @@ import { mat4 } from 'gl-matrix';
 import type { mat4 as Mat4 } from 'gl-matrix';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 
-import type { SpriteLocation, SpritePoint } from './types';
+import type { SpriteLocation, SpritePoint } from '../types';
 import type {
   ClipContext,
   ProjectionHost,
   SpriteMercatorCoordinate,
-} from './internalTypes';
-import { DEG2RAD, EARTH_RADIUS_METERS, TILE_SIZE } from './const';
-import { multiplyMatrixAndVector } from './math';
+} from '../internalTypes';
+import { DEG2RAD, EARTH_RADIUS_METERS, TILE_SIZE } from '../const';
+import { multiplyMatrixAndVector } from '../math';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

@@ -9,9 +9,9 @@ import { describe, expect, it } from 'vitest';
 import {
   createProjectionHost,
   type ProjectionHostParams,
-} from '../src/projectionHost';
-import { createWasmProjectionHost } from '../src/wasmProjectionHost';
-import { initializeWasmHost } from '../src/wasmHost';
+} from '../src/host/projectionHost';
+import { createWasmProjectionHost } from '../src/host/wasmProjectionHost';
+import { initializeWasmHost } from '../src/host/wasmHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

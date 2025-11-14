@@ -14,7 +14,7 @@ import {
   initializeWasmHost,
   releaseWasmHost,
   type WasmVariant,
-} from './wasmHost';
+} from './host/wasmHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

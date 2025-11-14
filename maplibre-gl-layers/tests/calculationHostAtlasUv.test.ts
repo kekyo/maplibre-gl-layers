@@ -7,8 +7,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MercatorCoordinate } from 'maplibre-gl';
 
-import { createCalculationHost } from '../src/calculationHost';
-import { createWasmCalculationHost } from '../src/wasmCalculationHost';
+import { createCalculationHost } from '../src/host/calculationHost';
+import { createWasmCalculationHost } from '../src/host/wasmCalculationHost';
 import {
   createImageHandleBufferController,
   createIdHandler,
@@ -35,14 +35,14 @@ import type {
 import {
   createProjectionHost,
   type ProjectionHostParams,
-} from '../src/projectionHost';
-import type { WasmCalculationInteropDependencies } from '../src/wasmCalculationHost';
+} from '../src/host/projectionHost';
+import type { WasmCalculationInteropDependencies } from '../src/host/wasmCalculationHost';
 import { DEFAULT_ANCHOR, DEFAULT_IMAGE_OFFSET } from '../src/const';
 import {
   POSITION_COMPONENT_COUNT,
   VERTEX_COMPONENT_COUNT,
 } from '../src/shader';
-import { initializeWasmHost, releaseWasmHost } from '../src/wasmHost';
+import { initializeWasmHost, releaseWasmHost } from '../src/host/wasmHost';
 
 const PROJECTION_PARAMS: ProjectionHostParams = {
   zoom: 12,

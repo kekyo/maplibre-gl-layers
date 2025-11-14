@@ -4,9 +4,9 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { Releaseable } from './internalTypes';
-import type { SpriteLayerCalculationVariant } from './types';
-import wasmConfig from './wasm/config.json' assert { type: 'json' };
+import type { Releaseable } from '../internalTypes';
+import type { SpriteLayerCalculationVariant } from '../types';
+import wasmConfig from '../wasm/config.json' assert { type: 'json' };
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -248,7 +248,7 @@ const buildAssetUrlFromFile = (fileName: string): URL => {
     const baseUrl = resolveBaseUrl(normalizedBase);
     return new URL(fileName, baseUrl);
   }
-  return new URL(`./wasm/${fileName}`, import.meta.url);
+  return new URL(`../wasm/${fileName}`, import.meta.url);
 };
 
 const resolveVariantAssetUrl = (

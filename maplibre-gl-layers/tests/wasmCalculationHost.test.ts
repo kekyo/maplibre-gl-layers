@@ -9,14 +9,14 @@ import { describe, expect, it } from 'vitest';
 import {
   __wasmCalculationTestInternals,
   type WasmCalculationInteropDependencies,
-} from '../src/wasmCalculationHost';
+} from '../src/host/wasmCalculationHost';
 import {
   type BufferHolder,
   type TypedArrayBufferView,
   type TypedArrayConstructor,
   type TypedArrayElement,
   type WasmHost,
-} from '../src/wasmHost';
+} from '../src/host/wasmHost';
 import { createIdHandler } from '../src/utils';
 import type {
   InternalSpriteCurrentState,
@@ -42,7 +42,7 @@ import type {
   SpriteLocation,
 } from '../src/types';
 import type { ResolvedSpriteScalingOptions } from '../src/math';
-import type { ProjectionHostParams } from '../src/projectionHost';
+import type { ProjectionHostParams } from '../src/host/projectionHost';
 
 const RESULT_HEADER_LENGTH = 7;
 const RESULT_VERTEX_COMPONENT_LENGTH = 36;

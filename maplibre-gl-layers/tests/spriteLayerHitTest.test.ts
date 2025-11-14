@@ -6,7 +6,7 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { MercatorCoordinate } from 'maplibre-gl';
-import type { ProjectionHostParams } from '../src/projectionHost';
+import type { ProjectionHostParams } from '../src/host/projectionHost';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
@@ -16,8 +16,9 @@ import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
 } from '../src/internalTypes';
 
-vi.mock('../src/projectionHost', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/projectionHost')>();
+vi.mock('../src/host/projectionHost', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../src/host/projectionHost')>();
   const paramsToMap = new WeakMap<ProjectionHostParams, FakeMap>();
 
   return {

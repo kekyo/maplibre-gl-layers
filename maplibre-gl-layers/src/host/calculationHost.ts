@@ -5,7 +5,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import { Map as MapLibreMap } from 'maplibre-gl';
-import { normalizeAngleDeg } from './interpolation/rotationInterpolation';
+import { normalizeAngleDeg } from '../interpolation/rotationInterpolation';
 import {
   calculateBillboardCenterPosition,
   calculateBillboardCornerScreenPositions,
@@ -30,13 +30,13 @@ import {
   resolveScalingOptions,
   resolveSpriteMercator,
   cloneSpriteLocation,
-} from './math';
+} from '../math';
 import {
   BILLBOARD_BASE_CORNERS,
   SURFACE_BASE_CORNERS,
   QUAD_VERTEX_SCRATCH,
   computeBillboardCornersShaderModel,
-} from './shader';
+} from '../shader';
 import type {
   DistanceInterpolationEvaluationParams,
   DistanceInterpolationEvaluationResult,
@@ -61,14 +61,14 @@ import type {
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
-} from './internalTypes';
-import { SPRITE_ORIGIN_REFERENCE_INDEX_NONE } from './internalTypes';
+} from '../internalTypes';
+import { SPRITE_ORIGIN_REFERENCE_INDEX_NONE } from '../internalTypes';
 import type {
   SpriteAnchor,
   SpriteLocation,
   SpritePoint,
   SpriteScreenPoint,
-} from './types';
+} from '../types';
 import { createMapLibreProjectionHost } from './mapLibreProjectionHost';
 import {
   createProjectionHost,
@@ -85,31 +85,31 @@ import {
   ORDER_MAX,
   TRIANGLE_INDICES,
   UV_CORNERS,
-} from './const';
+} from '../const';
 import {
   ENABLE_NDC_BIAS_SURFACE,
   SL_DEBUG,
   USE_SHADER_BILLBOARD_GEOMETRY,
   USE_SHADER_SURFACE_GEOMETRY,
-} from './config';
+} from '../config';
 import { createWasmProjectionHost } from './wasmProjectionHost';
 import {
   collectDistanceInterpolationWorkItems,
   applyDistanceInterpolationEvaluations,
   evaluateDistanceInterpolation,
   type DistanceInterpolationWorkItem,
-} from './interpolation/distanceInterpolation';
+} from '../interpolation/distanceInterpolation';
 import {
   collectDegreeInterpolationWorkItems,
   applyDegreeInterpolationEvaluations,
   evaluateDegreeInterpolation,
   type DegreeInterpolationWorkItem,
-} from './interpolation/degreeInterpolation';
-import { evaluateInterpolation } from './interpolation/interpolation';
+} from '../interpolation/degreeInterpolation';
+import { evaluateInterpolation } from '../interpolation/interpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
-} from './interpolation/interpolationChannels';
+} from '../interpolation/interpolationChannels';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
