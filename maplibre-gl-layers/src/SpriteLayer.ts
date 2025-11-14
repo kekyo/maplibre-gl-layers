@@ -75,21 +75,11 @@ import { createInterpolationState } from './interpolation/interpolation';
 import { normalizeAngleDeg } from './interpolation/rotationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
-  calculateMetersPerPixelAtLatitude,
   calculateZoomScaleFactor,
-  calculateSurfaceOffsetMeters,
-  calculateSurfaceWorldDimensions,
-  applySurfaceDisplacement,
   isFiniteNumber,
   resolveScalingOptions,
-  calculateBillboardAnchorShiftPixels,
-  calculateBillboardPixelDimensions,
-  calculateBillboardOffsetPixels,
-  calculateEffectivePixelsPerMeter,
-  calculateSurfaceCornerDisplacements,
   cloneSpriteLocation,
   spriteLocationsEqual,
-  resolveSpriteMercator,
   clampOpacity,
 } from './utils/math';
 import {
@@ -103,13 +93,6 @@ import {
 } from './interpolation/interpolationChannels';
 import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './default';
 import {
-  createLooseQuadTree,
-  type Item as LooseQuadTreeItem,
-  type LooseQuadTree,
-  type Rect as LooseQuadTreeRect,
-} from './utils/looseQuadTree';
-import {
-  DEBUG_OUTLINE_CORNER_ORDER,
   createSpriteDrawProgram,
   createDebugOutlineRenderer,
   type SpriteDrawProgram,
@@ -132,8 +115,6 @@ import {
   DEFAULT_TEXT_GLYPH_FONT_STYLE,
   DEFAULT_TEXT_GLYPH_FONT_WEIGHT,
   DEFAULT_TEXT_GLYPH_RENDER_PIXEL_RATIO,
-  HIT_TEST_EPSILON,
-  HIT_TEST_WORLD_BOUNDS,
   MAX_TEXT_GLYPH_RENDER_PIXEL_RATIO,
   MIN_TEXT_GLYPH_FONT_SIZE,
 } from './const';
@@ -155,6 +136,7 @@ import {
   type AtlasPageState,
   createAtlasOperationQueue,
 } from './gl/atlas';
+import { createHitTestController, type HitTestEntry } from './gl/hitTest';
 import {
   createDeferred,
   onAbort,
@@ -205,9 +187,6 @@ const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
 
 /** Sentinel used when an image has not been placed on any atlas page. */
 const ATLAS_PAGE_INDEX_NONE = -1;
-
-/** Query radius (in CSS pixels) when sampling the hit-test QuadTree. */
-const HIT_TEST_QUERY_RADIUS_PIXELS = 32;
 
 /** List of acceptable minification filters exposed to callers. */
 const MIN_FILTER_VALUES: readonly SpriteTextureMinFilter[] = [
@@ -1484,469 +1463,10 @@ export const createSpriteLayer = <T = any>(
       });
     });
   };
-
-  /**
-   * State stored in the QuadTree used for hit testing.
-   */
-  interface HitTestTreeState {
-    readonly sprite: Readonly<InternalSpriteCurrentState<T>>;
-    readonly image: Readonly<InternalSpriteImageState>;
-    drawIndex: number;
-  }
-
-  /**
-   * Hit-test QuadTree based on longitude and latitude.
-   */
-  const hitTestTree: LooseQuadTree<HitTestTreeState> = createLooseQuadTree({
-    bounds: HIT_TEST_WORLD_BOUNDS,
+  const hitTestController = createHitTestController<T>({
+    images,
+    getResolvedScaling: () => resolvedScaling,
   });
-
-  interface HitTestTreeHandle {
-    rect: Readonly<LooseQuadTreeRect>;
-    item: Readonly<LooseQuadTreeItem<HitTestTreeState>>;
-  }
-
-  /**
-   * Reverse lookup table from an image state to the corresponding QuadTree item.
-   * Using a WeakMap avoids blocking GC when an image is disposed.
-   */
-  let hitTestTreeItems = new WeakMap<
-    InternalSpriteImageState,
-    HitTestTreeHandle
-  >();
-
-  let isHitTestEnabled = true;
-
-  /**
-   * Computes an axis-aligned rectangle that encloses the given longitude/latitude points.
-   * @param {SpriteLocation[]} points - List of geographic coordinates to include.
-   * @returns {LooseQuadTreeRect | null} Generated rectangle; returns null when the input is invalid.
-   */
-  const rectFromLngLatPoints = (
-    points: readonly Readonly<SpriteLocation>[]
-  ): LooseQuadTreeRect | null => {
-    let minLng = Number.POSITIVE_INFINITY;
-    let maxLng = Number.NEGATIVE_INFINITY;
-    let minLat = Number.POSITIVE_INFINITY;
-    let maxLat = Number.NEGATIVE_INFINITY;
-
-    for (const point of points) {
-      if (
-        !point ||
-        !Number.isFinite(point.lng) ||
-        !Number.isFinite(point.lat)
-      ) {
-        continue;
-      }
-      if (point.lng < minLng) minLng = point.lng;
-      if (point.lng > maxLng) maxLng = point.lng;
-      if (point.lat < minLat) minLat = point.lat;
-      if (point.lat > maxLat) maxLat = point.lat;
-    }
-
-    if (
-      minLng === Number.POSITIVE_INFINITY ||
-      maxLng === Number.NEGATIVE_INFINITY ||
-      minLat === Number.POSITIVE_INFINITY ||
-      maxLat === Number.NEGATIVE_INFINITY
-    ) {
-      return null;
-    }
-
-    return {
-      x0: Math.max(
-        HIT_TEST_WORLD_BOUNDS.x0,
-        Math.min(minLng, HIT_TEST_WORLD_BOUNDS.x1)
-      ),
-      y0: Math.max(
-        HIT_TEST_WORLD_BOUNDS.y0,
-        Math.min(minLat, HIT_TEST_WORLD_BOUNDS.y1)
-      ),
-      x1: Math.max(
-        HIT_TEST_WORLD_BOUNDS.x0,
-        Math.min(maxLng, HIT_TEST_WORLD_BOUNDS.x1)
-      ),
-      y1: Math.max(
-        HIT_TEST_WORLD_BOUNDS.y0,
-        Math.min(maxLat, HIT_TEST_WORLD_BOUNDS.y1)
-      ),
-    };
-  };
-
-  /**
-   * Creates a rectangle based on the built-in safety radius shared by surface and billboard modes.
-   * @param {SpriteLocation} base - Center geographic coordinate.
-   * @param {number} radiusMeters - Safety radius in meters along east-west and north-south.
-   * @returns {LooseQuadTreeRect | null} Generated rectangle.
-   */
-  const rectFromRadiusMeters = (
-    base: Readonly<SpriteLocation>,
-    radiusMeters: number
-  ): LooseQuadTreeRect | null => {
-    if (
-      !Number.isFinite(base.lng) ||
-      !Number.isFinite(base.lat) ||
-      !Number.isFinite(radiusMeters) ||
-      radiusMeters <= 0
-    ) {
-      return null;
-    }
-
-    const cornerNE = applySurfaceDisplacement(base, {
-      east: radiusMeters,
-      north: radiusMeters,
-    });
-    const cornerSW = applySurfaceDisplacement(base, {
-      east: -radiusMeters,
-      north: -radiusMeters,
-    });
-
-    return rectFromLngLatPoints([cornerNE, cornerSW]);
-  };
-
-  /**
-   * Estimates the geographic rectangle that a surface-mode image may occupy.
-   * @param {ProjectionHost} projectionHost - Projection host.
-   * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
-   * @param {InternalSpriteImageState} image - Target image.
-   * @returns {LooseQuadTreeRect | null} Estimated rectangle.
-   */
-  const estimateSurfaceImageBounds = (
-    projectionHost: ProjectionHost,
-    sprite: Readonly<InternalSpriteCurrentState<T>>,
-    image: Readonly<InternalSpriteImageState>
-  ): LooseQuadTreeRect | null => {
-    const imageResource = images.get(image.imageId);
-    if (!imageResource) {
-      return null;
-    }
-
-    const baseLocation = sprite.currentLocation;
-    const zoom = projectionHost.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
-    const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
-      zoom,
-      baseLocation.lat
-    );
-    if (!Number.isFinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0) {
-      return null;
-    }
-
-    const spriteMercator = resolveSpriteMercator(projectionHost, sprite);
-    const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
-      baseLocation,
-      spriteMercator
-    );
-    const effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
-      metersPerPixelAtLat,
-      perspectiveRatio
-    );
-    if (
-      !Number.isFinite(effectivePixelsPerMeter) ||
-      effectivePixelsPerMeter <= 0
-    ) {
-      return null;
-    }
-
-    const imageScale = image.scale ?? 1;
-    const baseMetersPerPixel = resolvedScaling.metersPerPixel;
-    const spriteMinPixel = resolvedScaling.spriteMinPixel;
-    const spriteMaxPixel = resolvedScaling.spriteMaxPixel;
-
-    const worldDims = calculateSurfaceWorldDimensions(
-      imageResource.width,
-      imageResource.height,
-      baseMetersPerPixel,
-      imageScale,
-      zoomScaleFactor,
-      {
-        effectivePixelsPerMeter,
-        spriteMinPixel,
-        spriteMaxPixel,
-      }
-    );
-    if (worldDims.width <= 0 || worldDims.height <= 0) {
-      return null;
-    }
-
-    const anchor = image.anchor ?? DEFAULT_ANCHOR;
-    const offsetDef = image.offset ?? DEFAULT_IMAGE_OFFSET;
-    const offsetMetersVec = calculateSurfaceOffsetMeters(
-      offsetDef,
-      imageScale,
-      zoomScaleFactor,
-      worldDims.scaleAdjustment
-    );
-
-    const totalRotateDeg = Number.isFinite(image.displayedRotateDeg)
-      ? image.displayedRotateDeg
-      : normalizeAngleDeg(
-          (image.resolvedBaseRotateDeg ?? 0) + (image.rotateDeg ?? 0)
-        );
-
-    const cornerDisplacements = calculateSurfaceCornerDisplacements({
-      worldWidthMeters: worldDims.width,
-      worldHeightMeters: worldDims.height,
-      anchor,
-      totalRotateDeg,
-      offsetMeters: offsetMetersVec,
-    });
-
-    const corners = cornerDisplacements.map((corner) =>
-      applySurfaceDisplacement(baseLocation, corner)
-    );
-    return rectFromLngLatPoints(corners);
-  };
-
-  /**
-   * Estimates the geographic rectangle that a billboard-mode image may occupy.
-   * Currently evaluates it using a safety radius converted from screen pixels to meters.
-   * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
-   * @param {InternalSpriteImageState} image - Target image.
-   * @returns {LooseQuadTreeRect | null} Estimated rectangle.
-   */
-  const estimateBillboardImageBounds = (
-    projectionHost: ProjectionHost,
-    sprite: InternalSpriteCurrentState<T>,
-    image: InternalSpriteImageState
-  ): LooseQuadTreeRect | null => {
-    const imageResource = images.get(image.imageId);
-    if (!imageResource) {
-      return null;
-    }
-
-    const baseLocation = sprite.currentLocation;
-    const zoom = projectionHost.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
-    const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
-      zoom,
-      baseLocation.lat
-    );
-    if (!Number.isFinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0) {
-      return null;
-    }
-
-    const spriteMercator = resolveSpriteMercator(projectionHost, sprite);
-    const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
-      baseLocation,
-      spriteMercator
-    );
-    const effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
-      metersPerPixelAtLat,
-      perspectiveRatio
-    );
-    if (
-      !Number.isFinite(effectivePixelsPerMeter) ||
-      effectivePixelsPerMeter <= 0
-    ) {
-      return null;
-    }
-
-    const baseMetersPerPixel = resolvedScaling.metersPerPixel;
-    const spriteMinPixel = resolvedScaling.spriteMinPixel;
-    const spriteMaxPixel = resolvedScaling.spriteMaxPixel;
-    const imageScale = image.scale ?? 1;
-    const totalRotateDeg = Number.isFinite(image.displayedRotateDeg)
-      ? image.displayedRotateDeg
-      : normalizeAngleDeg(
-          (image.resolvedBaseRotateDeg ?? 0) + (image.rotateDeg ?? 0)
-        );
-
-    const pixelDims = calculateBillboardPixelDimensions(
-      imageResource.width,
-      imageResource.height,
-      baseMetersPerPixel,
-      imageScale,
-      zoomScaleFactor,
-      effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel
-    );
-
-    const halfWidthMeters = pixelDims.width / 2 / effectivePixelsPerMeter;
-    const halfHeightMeters = pixelDims.height / 2 / effectivePixelsPerMeter;
-
-    const anchorShift = calculateBillboardAnchorShiftPixels(
-      pixelDims.width / 2,
-      pixelDims.height / 2,
-      image.anchor,
-      totalRotateDeg
-    );
-
-    const offsetShift = calculateBillboardOffsetPixels(
-      image.offset ?? DEFAULT_IMAGE_OFFSET,
-      imageScale,
-      zoomScaleFactor,
-      effectivePixelsPerMeter
-    );
-
-    const anchorShiftMeters =
-      Math.hypot(anchorShift.x, anchorShift.y) / effectivePixelsPerMeter;
-    const offsetShiftMeters =
-      Math.hypot(offsetShift.x, offsetShift.y) / effectivePixelsPerMeter;
-    const safetyRadius =
-      Math.hypot(halfWidthMeters, halfHeightMeters) +
-      anchorShiftMeters +
-      offsetShiftMeters;
-
-    return rectFromRadiusMeters(baseLocation, safetyRadius);
-  };
-
-  /**
-   * Estimates the geographic bounding box of an image.
-   * @param {ProjectionHost} projectionHost - Projection host.
-   * @param {InternalSpriteCurrentState<T>} sprite - Target sprite.
-   * @param {InternalSpriteImageState} image - Target image.
-   * @returns {LooseQuadTreeRect | null} Estimated rectangle.
-   */
-  const estimateImageBounds = (
-    projectionHost: ProjectionHost,
-    sprite: Readonly<InternalSpriteCurrentState<T>>,
-    image: Readonly<InternalSpriteImageState>
-  ): LooseQuadTreeRect | null => {
-    if (image.opacity <= 0 || !sprite.isEnabled) {
-      return null;
-    }
-    if (image.mode === 'surface') {
-      return estimateSurfaceImageBounds(projectionHost, sprite, image);
-    }
-    return estimateBillboardImageBounds(projectionHost, sprite, image);
-  };
-
-  const removeImageBoundsFromHitTestTree = (
-    image: InternalSpriteImageState
-  ): void => {
-    const handle = hitTestTreeItems.get(image);
-    if (!handle) {
-      return;
-    }
-    hitTestTree.remove(
-      handle.rect.x0,
-      handle.rect.y0,
-      handle.rect.x1,
-      handle.rect.y1,
-      handle.item
-    );
-    hitTestTreeItems.delete(image);
-  };
-
-  const setItemRect = (
-    item: LooseQuadTreeItem<HitTestTreeState>,
-    rect: LooseQuadTreeRect
-  ): void => {
-    const mutable = item as unknown as {
-      x0: number;
-      y0: number;
-      x1: number;
-      y1: number;
-    };
-    mutable.x0 = rect.x0;
-    mutable.y0 = rect.y0;
-    mutable.x1 = rect.x1;
-    mutable.y1 = rect.y1;
-  };
-
-  const registerImageBoundsInHitTestTree = (
-    projectionHost: ProjectionHost,
-    sprite: Readonly<InternalSpriteCurrentState<T>>,
-    image: Readonly<InternalSpriteImageState>
-  ): void => {
-    const existingHandle = hitTestTreeItems.get(image);
-
-    if (!isHitTestEnabled) {
-      if (existingHandle) {
-        removeImageBoundsFromHitTestTree(image);
-      }
-      return;
-    }
-
-    const rect = estimateImageBounds(projectionHost, sprite, image);
-
-    if (!rect) {
-      if (existingHandle) {
-        removeImageBoundsFromHitTestTree(image);
-      }
-      return;
-    }
-    if (!existingHandle) {
-      const handle: HitTestTreeHandle = {
-        rect,
-        item: {
-          x0: rect.x0,
-          y0: rect.y0,
-          x1: rect.x1,
-          y1: rect.y1,
-          state: {
-            sprite,
-            image,
-            drawIndex: 0,
-          },
-        },
-      };
-      hitTestTree.add(handle.item);
-      hitTestTreeItems.set(image, handle);
-      return;
-    }
-
-    const currentRect = existingHandle.rect;
-    const unchanged =
-      currentRect.x0 === rect.x0 &&
-      currentRect.y0 === rect.y0 &&
-      currentRect.x1 === rect.x1 &&
-      currentRect.y1 === rect.y1;
-
-    if (unchanged) {
-      return;
-    }
-
-    const updated = hitTestTree.update(
-      currentRect.x0,
-      currentRect.y0,
-      currentRect.x1,
-      currentRect.y1,
-      rect.x0,
-      rect.y0,
-      rect.x1,
-      rect.y1,
-      existingHandle.item
-    );
-
-    if (updated) {
-      existingHandle.rect = rect;
-      setItemRect(existingHandle.item, rect);
-      return;
-    }
-
-    // Fallback: remove and re-add when update failed (e.g., stale registry).
-    removeImageBoundsFromHitTestTree(image);
-    const newHandle: HitTestTreeHandle = {
-      rect,
-      item: {
-        x0: rect.x0,
-        y0: rect.y0,
-        x1: rect.x1,
-        y1: rect.y1,
-        state: {
-          sprite,
-          image,
-          drawIndex: 0,
-        },
-      },
-    };
-    hitTestTree.add(newHandle.item);
-    hitTestTreeItems.set(image, newHandle);
-  };
-
-  const refreshSpriteHitTestBounds = (
-    projectionHost: ProjectionHost,
-    sprite: Readonly<InternalSpriteCurrentState<T>>
-  ): void => {
-    sprite.images.forEach((orderMap) => {
-      orderMap.forEach((image) => {
-        registerImageBoundsInHitTestTree(projectionHost, sprite, image);
-      });
-    });
-  };
 
   // Helpers for manipulating image maps.
 
@@ -2025,90 +1545,6 @@ export const createSpriteLayer = <T = any>(
     InternalSpriteImageState,
   ];
 
-  interface HitTestEntry {
-    readonly sprite: InternalSpriteCurrentState<T>;
-    readonly image: InternalSpriteImageState;
-    readonly corners: readonly [
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-    ];
-    readonly minX: number;
-    readonly maxX: number;
-    readonly minY: number;
-    readonly maxY: number;
-  }
-
-  /**
-   * Determines whether a point lies inside the quad defined by `corners`.
-   * Uses the edge order shared with the debug outline rendering so hit testing stays in sync
-   * with the visible polygon even when rotation reorders the logical corner layout.
-   * @param {SpriteScreenPoint} point - Point to test.
-   * @param {readonly SpriteScreenPoint[]} corners - Quad corners used during rendering.
-   * @returns {boolean} `true` when the point lies inside either rendered triangle.
-   */
-  const pointInRenderedQuad = (
-    point: SpriteScreenPoint,
-    corners: readonly [
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-    ]
-  ): boolean => {
-    let hasPositiveCross = false;
-    let hasNegativeCross = false;
-    for (let i = 0; i < DEBUG_OUTLINE_CORNER_ORDER.length; i++) {
-      const currentIndex = DEBUG_OUTLINE_CORNER_ORDER[i]!;
-      const nextIndex =
-        DEBUG_OUTLINE_CORNER_ORDER[
-          (i + 1) % DEBUG_OUTLINE_CORNER_ORDER.length
-        ]!;
-      const a = corners[currentIndex]!;
-      const b = corners[nextIndex]!;
-      const edgeX = b.x - a.x;
-      const edgeY = b.y - a.y;
-      const pointX = point.x - a.x;
-      const pointY = point.y - a.y;
-      const cross = edgeX * pointY - edgeY * pointX;
-      if (Math.abs(cross) <= HIT_TEST_EPSILON) {
-        continue;
-      }
-      if (cross > 0) {
-        hasPositiveCross = true;
-      } else {
-        hasNegativeCross = true;
-      }
-      if (hasPositiveCross && hasNegativeCross) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  /**
-   * Performs bounding-box precheck followed by triangle tests to confirm pointer hits.
-   * @param {HitTestEntry} entry - Hit-test entry to evaluate.
-   * @param {SpriteScreenPoint} point - Point to test.
-   * @returns {boolean} `true` when the point hits the sprite image.
-   */
-  const isPointInsideHitEntry = (
-    entry: HitTestEntry,
-    point: SpriteScreenPoint
-  ): boolean => {
-    // Early reject when outside the expanded bounding box to avoid expensive triangle tests.
-    if (
-      point.x < entry.minX - HIT_TEST_EPSILON ||
-      point.x > entry.maxX + HIT_TEST_EPSILON ||
-      point.y < entry.minY - HIT_TEST_EPSILON ||
-      point.y > entry.maxY + HIT_TEST_EPSILON
-    ) {
-      return false;
-    }
-    return pointInRenderedQuad(point, entry.corners);
-  };
-
   /**
    * Groups render entries by sub-layer and returns them sorted by sub-layer index.
    * @param {readonly RenderTargetEntry[]} entries - Entries to bucket.
@@ -2139,160 +1575,12 @@ export const createSpriteLayer = <T = any>(
    */
   const renderTargetEntries: RenderTargetEntry[] = [];
 
-  const hitTestEntries: HitTestEntry[] = [];
-  let hitTestEntryByImage = new WeakMap<
-    InternalSpriteImageState,
-    HitTestEntry
-  >();
-
-  /**
-   * Adds a hit-test entry to the cache, computing its axis-aligned bounding box.
-   * @param {InternalSpriteCurrentState<T>} spriteEntry - Sprite owning the image.
-   * @param {InternalSpriteImageState} imageEntry - Image reference.
-   * @param {readonly SpriteScreenPoint[]} screenCorners - Quad corners in screen space.
-   */
-  const registerHitTestEntry = (
-    spriteEntry: Readonly<InternalSpriteCurrentState<T>>,
-    imageEntry: Readonly<InternalSpriteImageState>,
-    screenCorners: readonly [
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-      SpriteScreenPoint,
-    ],
-    drawIndex: number
-  ): void => {
-    if (!isHitTestEnabled) {
-      return;
-    }
-    const corners = screenCorners;
-
-    let minX = corners[0].x;
-    let maxX = corners[0].x;
-    let minY = corners[0].y;
-    let maxY = corners[0].y;
-    // Walk the remaining corners to calculate the bounding box extrema.
-    for (let i = 1; i < corners.length; i++) {
-      const corner = corners[i]!;
-      // Track extrema to form a quick-reject bounding box.
-      if (corner.x < minX) minX = corner.x;
-      if (corner.x > maxX) maxX = corner.x;
-      if (corner.y < minY) minY = corner.y;
-      if (corner.y > maxY) maxY = corner.y;
-    }
-
-    const entry: HitTestEntry = {
-      sprite: spriteEntry,
-      image: imageEntry,
-      corners,
-      minX,
-      maxX,
-      minY,
-      maxY,
-    };
-    hitTestEntries.push(entry);
-    hitTestEntryByImage.set(imageEntry, entry);
-
-    const handle = hitTestTreeItems.get(imageEntry);
-    if (handle) {
-      handle.item.state.drawIndex = drawIndex;
-    }
-  };
-
-  const findTopmostHitEntryLinear = (
-    point: SpriteScreenPoint
-  ): HitTestEntry | null => {
-    // Iterate in reverse so later render entries (visually on top) win.
-    for (let i = hitTestEntries.length - 1; i >= 0; i--) {
-      const entry = hitTestEntries[i]!;
-      if (isPointInsideHitEntry(entry, point)) {
-        return entry;
-      }
-    }
-    return null;
-  };
-
-  /**
-   * Returns the top-most hit-test entry at the given screen point.
-   * @param {SpriteScreenPoint} point - Screen coordinate from the pointer event.
-   * @returns {HitTestEntry | null} Entry representing the hit or `null` if none.
-   */
-  const findTopmostHitEntry = (
-    point: SpriteScreenPoint
-  ): HitTestEntry | null => {
-    if (!isHitTestEnabled) {
-      return null;
-    }
-    const mapInstance = map;
-    if (!mapInstance) {
-      return findTopmostHitEntryLinear(point);
-    }
-
-    const centerLngLat = mapInstance.unproject([point.x, point.y] as any);
-    if (!centerLngLat) {
-      return findTopmostHitEntryLinear(point);
-    }
-
-    const searchPoints: SpriteLocation[] = [
-      { lng: centerLngLat.lng, lat: centerLngLat.lat },
-    ];
-    const radius = HIT_TEST_QUERY_RADIUS_PIXELS;
-    const offsets: Array<[number, number]> = [
-      [point.x - radius, point.y - radius],
-      [point.x + radius, point.y - radius],
-      [point.x - radius, point.y + radius],
-      [point.x + radius, point.y + radius],
-    ];
-    for (const [x, y] of offsets) {
-      const lngLat = mapInstance.unproject([x, y] as any);
-      if (lngLat) {
-        searchPoints.push({ lng: lngLat.lng, lat: lngLat.lat });
-      }
-    }
-
-    const searchRect = rectFromLngLatPoints(searchPoints);
-    if (!searchRect) {
-      return findTopmostHitEntryLinear(point);
-    }
-
-    const candidates = hitTestTree.lookup(
-      searchRect.x0,
-      searchRect.y0,
-      searchRect.x1,
-      searchRect.y1
-    );
-    if (candidates.length === 0) {
-      return findTopmostHitEntryLinear(point);
-    }
-
-    candidates.sort((a, b) => a.state.drawIndex - b.state.drawIndex);
-
-    const seenImages = new Set<InternalSpriteImageState>();
-    for (let i = candidates.length - 1; i >= 0; i--) {
-      const candidate = candidates[i]!;
-      const image = candidate.state.image;
-      if (seenImages.has(image)) {
-        continue;
-      }
-      seenImages.add(image);
-
-      const entry = hitTestEntryByImage.get(image);
-      if (!entry) {
-        continue;
-      }
-      if (isPointInsideHitEntry(entry, point)) {
-        return entry;
-      }
-    }
-
-    return findTopmostHitEntryLinear(point);
-  };
-
   // TODO: For debug purpose, DO NOT DELETE
   if (SL_DEBUG) {
     // Expose render pipeline state for developer diagnostics via global window hooks.
     (window as any).__renderTargetEntries = renderTargetEntries;
-    (window as any).__spriteHitTestEntries = hitTestEntries;
+    (window as any).__spriteHitTestEntries =
+      hitTestController.getHitTestEntries();
   }
   // TODO: end
 
@@ -2378,49 +1666,12 @@ export const createSpriteLayer = <T = any>(
     hasSpriteListeners('spritehover');
 
   /**
-   * Converts native pointer/touch events into screen-space coordinates relative to the canvas.
-   * @param {MouseEvent | PointerEvent | TouchEvent} nativeEvent - Event to process.
-   * @returns {SpriteScreenPoint | null} Screen point or `null` when unavailable.
-   */
-  const resolveScreenPointFromEvent = (
-    nativeEvent: MouseEvent | PointerEvent | TouchEvent
-  ): SpriteScreenPoint | null => {
-    // Without a canvas element we cannot translate event coordinates.
-    if (!canvasElement) {
-      return null;
-    }
-    const rect = canvasElement.getBoundingClientRect();
-    const toScreenPoint = (
-      clientX: number,
-      clientY: number
-    ): SpriteScreenPoint => ({
-      x: clientX - rect.left,
-      y: clientY - rect.top,
-    });
-
-    if ('changedTouches' in nativeEvent) {
-      const touchEvent = nativeEvent as TouchEvent;
-      const touch =
-        // Prefer the touch that triggered the event, otherwise fall back to any active touch (or null).
-        touchEvent.changedTouches?.[0] ?? touchEvent.touches?.[0] ?? null;
-      // Touch events may fire without active touches (e.g., cancellation); ignore when absent.
-      if (!touch) {
-        return null;
-      }
-      return toScreenPoint(touch.clientX, touch.clientY);
-    }
-
-    const mouseLike = nativeEvent as MouseEvent;
-    return toScreenPoint(mouseLike.clientX, mouseLike.clientY);
-  };
-
-  /**
    * Resolves sprite and image state for a hit-test entry.
    * @param {HitTestEntry} hitEntry - Hit-test entry returned from the lookup.
    * @returns {{ sprite: SpriteCurrentState<T> | undefined; image: SpriteImageState | undefined }} Sprite/image state pair.
    */
   const resolveSpriteEventPayload = (
-    hitEntry: HitTestEntry | null
+    hitEntry: HitTestEntry<T> | null
   ): {
     sprite: SpriteCurrentState<T> | undefined;
     image: SpriteImageState | undefined;
@@ -2450,7 +1701,7 @@ export const createSpriteLayer = <T = any>(
    * @param {MouseEvent | PointerEvent | TouchEvent} originalEvent - Native input event.
    */
   const dispatchSpriteClick = (
-    hitEntry: HitTestEntry,
+    hitEntry: HitTestEntry<T>,
     screenPoint: SpriteScreenPoint,
     originalEvent: MouseEvent | PointerEvent | TouchEvent
   ): void => {
@@ -2482,7 +1733,7 @@ export const createSpriteLayer = <T = any>(
    * @param {MouseEvent | PointerEvent} originalEvent - Native input event.
    */
   const dispatchSpriteHover = (
-    hitEntry: HitTestEntry | null,
+    hitEntry: HitTestEntry<T> | null,
     screenPoint: SpriteScreenPoint,
     originalEvent: MouseEvent | PointerEvent
   ): void => {
@@ -2515,18 +1766,14 @@ export const createSpriteLayer = <T = any>(
   const resolveHitTestResult = (
     nativeEvent: MouseEvent | PointerEvent | TouchEvent
   ): {
-    hitEntry: HitTestEntry | null;
+    hitEntry: HitTestEntry<T> | null;
     screenPoint: SpriteScreenPoint;
   } | null => {
-    const screenPoint = resolveScreenPointFromEvent(nativeEvent);
-    // Input may lack coordinates (e.g., touchend without touches); abort hit-testing in that case.
-    if (!screenPoint) {
-      return null;
-    }
-
-    const hitEntry = findTopmostHitEntry(screenPoint);
-    // No sprites intersected the event point; nothing to dispatch.
-    return { hitEntry: hitEntry ?? null, screenPoint };
+    return hitTestController.resolveHitTestResult(
+      nativeEvent,
+      canvasElement,
+      map
+    );
   };
 
   /**
@@ -2961,13 +2208,7 @@ export const createSpriteLayer = <T = any>(
     inputListenerDisposers.forEach((dispose) => dispose());
     inputListenerDisposers.length = 0;
     canvasElement = null;
-    hitTestEntries.length = 0;
-    hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
-    hitTestTree.clear();
-    hitTestTreeItems = new WeakMap<
-      InternalSpriteImageState,
-      HitTestTreeHandle
-    >();
+    hitTestController.clearAll();
 
     const glContext = gl;
     if (glContext) {
@@ -3011,8 +2252,7 @@ export const createSpriteLayer = <T = any>(
     _options: CustomRenderMethodInput
   ): void => {
     isRenderScheduled = false;
-    hitTestEntries.length = 0;
-    hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
+    hitTestController.beginFrame();
 
     // Abort early if any critical resource (map or shader program) is missing.
     const mapInstance = map;
@@ -3133,7 +2373,7 @@ export const createSpriteLayer = <T = any>(
           prepared.surfaceShaderInputs ?? undefined;
 
         if (prepared.hitTestCorners && prepared.hitTestCorners.length === 4) {
-          registerHitTestEntry(
+          hitTestController.registerHitTestEntry(
             prepared.spriteEntry,
             prepared.imageEntry,
             prepared.hitTestCorners as [
@@ -3229,7 +2469,7 @@ export const createSpriteLayer = <T = any>(
           screenToClipOffsetX,
           screenToClipOffsetY
         );
-        for (const entry of hitTestEntries) {
+        for (const entry of hitTestController.getHitTestEntries()) {
           debugOutlineRenderer.drawOutline(entry.corners);
         }
         debugOutlineRenderer.end();
@@ -3627,7 +2867,7 @@ export const createSpriteLayer = <T = any>(
       sprite.images.forEach((orderMap) => {
         orderMap.forEach((imageState) => {
           if (imageState.imageId === imageId) {
-            removeImageBoundsFromHitTestTree(imageState);
+            hitTestController.removeImageBounds(imageState);
           }
         });
       });
@@ -3690,12 +2930,7 @@ export const createSpriteLayer = <T = any>(
         });
       });
     });
-    hitTestTree.clear();
-    hitTestTreeItems = new WeakMap<
-      InternalSpriteImageState,
-      HitTestTreeHandle
-    >();
-    hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
+    hitTestController.clearAll();
     ensureRenderTargetEntries();
     scheduleRender();
   };
@@ -3826,7 +3061,7 @@ export const createSpriteLayer = <T = any>(
     sprites.set(spriteId, spriteState);
     spriteIdHandler.store(spriteHandle, spriteState);
 
-    refreshSpriteHitTestBounds(projectionHost, spriteState);
+    hitTestController.refreshSpriteHitTestBounds(projectionHost, spriteState);
 
     return true;
   };
@@ -3918,7 +3153,7 @@ export const createSpriteLayer = <T = any>(
     }
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
-        removeImageBoundsFromHitTestTree(image);
+        hitTestController.removeImageBounds(image);
       });
     });
     sprites.delete(spriteId);
@@ -3978,9 +3213,7 @@ export const createSpriteLayer = <T = any>(
       return 0;
     }
 
-    hitTestTree.clear();
-    hitTestTreeItems = new WeakMap();
-    hitTestEntryByImage = new WeakMap();
+    hitTestController.clearAll();
     sprites.clear();
     spriteIdHandler.reset();
 
@@ -4010,7 +3243,7 @@ export const createSpriteLayer = <T = any>(
     sprite.images.forEach((orderMap) => {
       removedCount += orderMap.size;
       orderMap.forEach((image) => {
-        removeImageBoundsFromHitTestTree(image);
+        hitTestController.removeImageBounds(image);
       });
     });
     sprite.images.clear();
@@ -4112,7 +3345,7 @@ export const createSpriteLayer = <T = any>(
     updateImageInterpolationDirtyState(sprite, state);
 
     setImageState(sprite, state);
-    registerImageBoundsInHitTestTree(projectionHost, sprite, state);
+    hitTestController.refreshSpriteHitTestBounds(projectionHost, sprite);
     resultOut.isUpdated = true;
     return true;
   };
@@ -4313,7 +3546,7 @@ export const createSpriteLayer = <T = any>(
 
     updateImageInterpolationDirtyState(sprite, state);
 
-    registerImageBoundsInHitTestTree(projectionHost, sprite, state);
+    hitTestController.refreshSpriteHitTestBounds(projectionHost, sprite);
 
     resultOut.isUpdated = true;
     return true;
@@ -4386,7 +3619,7 @@ export const createSpriteLayer = <T = any>(
   ): boolean => {
     const state = getImageState(sprite, subLayer, order);
     if (state) {
-      removeImageBoundsFromHitTestTree(state);
+      hitTestController.removeImageBounds(state);
     }
     const deleted = deleteImageState(sprite, subLayer, order);
     if (deleted) {
@@ -4589,7 +3822,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     if (needsHitTestRefresh) {
-      refreshSpriteHitTestBounds(projectionHost, sprite);
+      hitTestController.refreshSpriteHitTestBounds(projectionHost, sprite);
     }
 
     // Rendering must be scheduled when draw-affecting changes occurred.
@@ -4919,29 +4152,16 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
-  const setHitTestEnabled = (enabled: boolean) => {
-    if (isHitTestEnabled === enabled) {
-      return;
-    }
-    isHitTestEnabled = enabled;
-    hitTestTree.clear();
-    hitTestTreeItems = new WeakMap<
-      InternalSpriteImageState,
-      HitTestTreeHandle
-    >();
-    hitTestEntryByImage = new WeakMap<InternalSpriteImageState, HitTestEntry>();
-    if (!enabled) {
-      return;
-    }
-
-    if (!map) {
+  const setHitTestEnabled = (enabled: boolean): void => {
+    const changed = hitTestController.setHitTestEnabled(enabled);
+    if (!changed || !enabled || !map) {
       return;
     }
 
     const projectionHost = createProjectionHostForMap(map);
     try {
       sprites.forEach((sprite) => {
-        refreshSpriteHitTestBounds(projectionHost, sprite);
+        hitTestController.refreshSpriteHitTestBounds(projectionHost, sprite);
       });
     } finally {
       projectionHost.release();
