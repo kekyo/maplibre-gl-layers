@@ -11,13 +11,13 @@
  * buffers, and helper utilities for compiling and linking WebGL shader programs.
  */
 
-import type { SpriteAnchor, SpriteScreenPoint } from './types';
+import type { SpriteAnchor, SpriteScreenPoint } from '../types';
 import type {
   PreparedDrawSpriteImageParams,
   Releaseable,
   SurfaceShaderInputs,
-} from './internalTypes';
-import { DEG2RAD, UV_CORNERS } from './const';
+} from '../internalTypes';
+import { DEG2RAD, UV_CORNERS } from '../const';
 
 /** Number of components per vertex (clipPosition.xyzw + uv.xy). */
 export const VERTEX_COMPONENT_COUNT = 6;

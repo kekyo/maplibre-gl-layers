@@ -11,13 +11,13 @@ import type {
   SpritePoint,
   SpriteScalingOptions,
   SpriteScreenPoint,
-} from './types';
+} from '../types';
 import type {
   InternalSpriteCurrentState,
   MatrixInput,
   ProjectionHost,
   SpriteMercatorCoordinate,
-} from './internalTypes';
+} from '../internalTypes';
 import {
   DEG2RAD,
   EARTH_RADIUS_METERS,
@@ -25,8 +25,8 @@ import {
   TILE_SIZE,
   TRIANGLE_INDICES,
   UV_CORNERS,
-} from './const';
-import { UNLIMITED_SPRITE_SCALING_OPTIONS } from './default';
+} from '../const';
+import { UNLIMITED_SPRITE_SCALING_OPTIONS } from '../default';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

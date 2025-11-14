@@ -70,7 +70,7 @@ import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
 } from './internalTypes';
-import { loadImageBitmap, SvgSizeResolutionError } from './image';
+import { loadImageBitmap, SvgSizeResolutionError } from './utils/image';
 import { createInterpolationState } from './interpolation/interpolation';
 import { normalizeAngleDeg } from './interpolation/rotationInterpolation';
 import {
@@ -91,7 +91,7 @@ import {
   spriteLocationsEqual,
   resolveSpriteMercator,
   clampOpacity,
-} from './math';
+} from './utils/math';
 import {
   applyOffsetUpdate,
   applyOpacityUpdate,
@@ -107,14 +107,14 @@ import {
   type Item as LooseQuadTreeItem,
   type LooseQuadTree,
   type Rect as LooseQuadTreeRect,
-} from './looseQuadTree';
+} from './utils/looseQuadTree';
 import {
   DEBUG_OUTLINE_CORNER_ORDER,
   createSpriteDrawProgram,
   createDebugOutlineRenderer,
   type SpriteDrawProgram,
   type DebugOutlineRenderer,
-} from './shader';
+} from './gl/shader';
 import { createCalculationHost } from './host/calculationHost';
 import {
   createProjectionHost,
@@ -149,19 +149,19 @@ import {
   createIdHandler,
   createSpriteOriginReference,
   createRenderTargetBucketBuffers,
-} from './utils';
+} from './utils/utils';
 import {
   createAtlasManager,
   type AtlasPageState,
   createAtlasOperationQueue,
-} from './atlas';
+} from './gl/atlas';
 import {
   createDeferred,
   onAbort,
   type Deferred,
   type Releasable,
 } from 'async-primitives';
-import { isSpriteLayerHostEnabled } from './runtime';
+import { isSpriteLayerHostEnabled } from './host/runtime';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

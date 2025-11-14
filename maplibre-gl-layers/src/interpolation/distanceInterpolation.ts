@@ -16,7 +16,7 @@ import type {
   DistanceInterpolationState,
   InternalSpriteImageState,
 } from '../internalTypes';
-import { clampOpacity } from '../math';
+import { clampOpacity } from '../utils/math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

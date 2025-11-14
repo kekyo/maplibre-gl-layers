@@ -14,7 +14,7 @@ import {
   cloneSpriteLocation,
   lerpSpriteLocation,
   spriteLocationsEqual,
-} from '../src/math';
+} from '../src/utils/math';
 
 describe('createInterpolationState', () => {
   it('creates feedback interpolation state when locations differ', () => {

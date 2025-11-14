@@ -6,11 +6,11 @@
 
 export * from './types';
 export * from './default';
-export * from './image';
+export * from './utils/image';
 export {
   initializeRuntimeHost,
   releaseRuntimeHost,
   detectMultiThreadedModuleAvailability,
   type MultiThreadedModuleAvailability,
-} from './runtime';
+} from './host/runtime';
 export * from './SpriteLayer';

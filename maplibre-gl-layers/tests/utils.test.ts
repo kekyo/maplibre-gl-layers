@@ -10,7 +10,7 @@ import type { RegisteredImage } from '../src/internalTypes';
 import {
   createImageHandleBufferController,
   createIdHandler,
-} from '../src/utils';
+} from '../src/utils/utils';
 
 describe('createImageIdHandler', () => {
   it('reuses released handles before allocating new ones', () => {

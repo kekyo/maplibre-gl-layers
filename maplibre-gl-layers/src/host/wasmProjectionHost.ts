@@ -16,7 +16,7 @@ import type {
 } from '../internalTypes';
 import type { SpriteLocation, SpritePoint } from '../types';
 import { prepareWasmHost, type WasmHost } from './wasmHost';
-import { reportWasmRuntimeFailure } from '../runtime';
+import { reportWasmRuntimeFailure } from './runtime';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

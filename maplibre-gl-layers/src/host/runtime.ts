@@ -9,12 +9,12 @@ import { createMutex } from 'async-primitives';
 import type {
   SpriteLayerCalculationVariant,
   SpriteLayerHostOptions,
-} from './types';
+} from '../types';
 import {
   initializeWasmHost,
   releaseWasmHost,
   type WasmVariant,
-} from './host/wasmHost';
+} from './wasmHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

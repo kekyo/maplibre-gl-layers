@@ -17,7 +17,7 @@ import {
   type TypedArrayElement,
   type WasmHost,
 } from '../src/host/wasmHost';
-import { createIdHandler } from '../src/utils';
+import { createIdHandler } from '../src/utils/utils';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
@@ -41,7 +41,7 @@ import type {
   SpriteImageOffset,
   SpriteLocation,
 } from '../src/types';
-import type { ResolvedSpriteScalingOptions } from '../src/math';
+import type { ResolvedSpriteScalingOptions } from '../src/utils/math';
 import type { ProjectionHostParams } from '../src/host/projectionHost';
 
 const RESULT_HEADER_LENGTH = 7;

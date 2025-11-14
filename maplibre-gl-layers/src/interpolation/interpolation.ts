@@ -20,7 +20,7 @@ import {
   cloneSpriteLocation,
   lerpSpriteLocation,
   spriteLocationsEqual,
-} from '../math';
+} from '../utils/math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

@@ -4,8 +4,8 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { Canvas2DContext, Canvas2DSource } from './internalTypes';
 import type { Deferred } from 'async-primitives';
+import type { Canvas2DContext, Canvas2DSource } from '../internalTypes';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

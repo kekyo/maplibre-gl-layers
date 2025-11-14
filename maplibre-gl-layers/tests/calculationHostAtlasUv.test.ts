@@ -14,7 +14,7 @@ import {
   createIdHandler,
   createRenderTargetBucketBuffers,
   createSpriteOriginReference,
-} from '../src/utils';
+} from '../src/utils/utils';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
@@ -41,7 +41,7 @@ import { DEFAULT_ANCHOR, DEFAULT_IMAGE_OFFSET } from '../src/const';
 import {
   POSITION_COMPONENT_COUNT,
   VERTEX_COMPONENT_COUNT,
-} from '../src/shader';
+} from '../src/gl/shader';
 import { initializeWasmHost, releaseWasmHost } from '../src/host/wasmHost';
 
 const PROJECTION_PARAMS: ProjectionHostParams = {

@@ -11,7 +11,7 @@ import type {
   DegreeInterpolationEvaluationResult,
   InternalSpriteImageState,
 } from '../internalTypes';
-import { normalizeAngleDeg } from '../math';
+import { normalizeAngleDeg } from '../utils/math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

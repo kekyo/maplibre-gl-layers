@@ -11,7 +11,7 @@ import {
   type Item,
   type LooseQuadTree,
   type LooseQuadTreeOptions,
-} from '../src/looseQuadTree';
+} from '../src/utils/looseQuadTree';
 
 const bounds = { x0: 0, y0: 0, x1: 100, y1: 100 };
 

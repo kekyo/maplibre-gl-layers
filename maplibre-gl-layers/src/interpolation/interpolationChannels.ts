@@ -28,7 +28,7 @@ import {
   normalizeAngleDeg,
   resolveRotationTarget,
 } from './rotationInterpolation';
-import { clampOpacity } from '../math';
+import { clampOpacity } from '../utils/math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

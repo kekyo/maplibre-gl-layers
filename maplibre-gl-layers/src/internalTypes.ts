@@ -24,7 +24,7 @@ import type {
   SpritePoint,
   SpriteEasingPresetName,
 } from './types';
-import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './math';
+import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

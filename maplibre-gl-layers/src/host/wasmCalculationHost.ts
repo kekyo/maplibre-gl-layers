@@ -32,7 +32,7 @@ import {
   SURFACE_CORNER_DISPLACEMENT_COUNT,
   cloneSpriteLocation,
   type SurfaceCorner,
-} from '../math';
+} from '../utils/math';
 import type {
   SpriteAnchor,
   SpriteLocation,
@@ -82,8 +82,8 @@ import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
 } from '../internalTypes';
-import { QUAD_VERTEX_COUNT, VERTEX_COMPONENT_COUNT } from '../shader';
-import { reportWasmRuntimeFailure } from '../runtime';
+import { QUAD_VERTEX_COUNT, VERTEX_COMPONENT_COUNT } from '../gl/shader';
+import { reportWasmRuntimeFailure } from './runtime';
 
 const WASM_CalculateSurfaceDepthKey_MATRIX_ELEMENT_COUNT = 16;
 const WASM_CalculateSurfaceDepthKey_DISPLACEMENT_ELEMENT_COUNT =

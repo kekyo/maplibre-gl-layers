@@ -4,7 +4,7 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import { ORDER_BUCKET } from './const';
+import { ORDER_BUCKET } from '../const';
 import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -18,7 +18,7 @@ import {
   type RenderTargetEntryLike,
   type SpriteOriginReference,
   type SpriteOriginReferenceKey,
-} from './internalTypes';
+} from '../internalTypes';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

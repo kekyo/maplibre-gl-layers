@@ -4,7 +4,7 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { SpriteImageRegisterOptions } from './types';
+import type { SpriteImageRegisterOptions } from '../types';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

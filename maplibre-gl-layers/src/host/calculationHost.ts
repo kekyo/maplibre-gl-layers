@@ -30,13 +30,13 @@ import {
   resolveScalingOptions,
   resolveSpriteMercator,
   cloneSpriteLocation,
-} from '../math';
+} from '../utils/math';
 import {
   BILLBOARD_BASE_CORNERS,
   SURFACE_BASE_CORNERS,
   QUAD_VERTEX_SCRATCH,
   computeBillboardCornersShaderModel,
-} from '../shader';
+} from '../gl/shader';
 import type {
   DistanceInterpolationEvaluationParams,
   DistanceInterpolationEvaluationResult,

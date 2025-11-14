@@ -15,7 +15,7 @@ import type {
   SpriteMercatorCoordinate,
 } from '../internalTypes';
 import { DEG2RAD, EARTH_RADIUS_METERS, TILE_SIZE } from '../const';
-import { multiplyMatrixAndVector } from '../math';
+import { multiplyMatrixAndVector } from '../utils/math';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

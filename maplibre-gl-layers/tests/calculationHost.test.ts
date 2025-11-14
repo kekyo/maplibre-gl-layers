@@ -19,7 +19,7 @@ import {
   createImageHandleBufferController,
   createRenderTargetBucketBuffers,
   createSpriteOriginReference,
-} from '../src/utils';
+} from '../src/utils/utils';
 import {
   applyOpacityUpdate,
   stepSpriteImageInterpolations,
@@ -29,7 +29,7 @@ import {
   calculateZoomScaleFactor,
   resolveScalingOptions,
   type ResolvedSpriteScalingOptions,
-} from '../src/math';
+} from '../src/utils/math';
 import type {
   ClipContext,
   InternalSpriteCurrentState,
@@ -57,7 +57,7 @@ import {
   ORDER_MAX,
   TRIANGLE_INDICES,
 } from '../src/const';
-import { BILLBOARD_BASE_CORNERS, SURFACE_BASE_CORNERS } from '../src/shader';
+import { BILLBOARD_BASE_CORNERS, SURFACE_BASE_CORNERS } from '../src/gl/shader';
 import { createDistanceInterpolationState } from '../src/interpolation/distanceInterpolation';
 import { createInterpolationState } from '../src/interpolation/interpolation';
 
