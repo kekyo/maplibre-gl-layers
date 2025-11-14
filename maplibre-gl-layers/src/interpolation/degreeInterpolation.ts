@@ -4,14 +4,14 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { SpriteInterpolationOptions } from './types';
+import type { SpriteInterpolationOptions } from '../types';
 import { resolveEasing } from './easing';
 import type {
   DegreeInterpolationState,
   DegreeInterpolationEvaluationResult,
   InternalSpriteImageState,
-} from './internalTypes';
-import { normalizeAngleDeg } from './math';
+} from '../internalTypes';
+import { normalizeAngleDeg } from '../math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createDistanceInterpolationState,
   evaluateDistanceInterpolation,
-} from '../src/distanceInterpolation';
+} from '../src/interpolation/distanceInterpolation';
 
 describe('createDistanceInterpolationState', () => {
   it('reports interpolation when distance changes', () => {

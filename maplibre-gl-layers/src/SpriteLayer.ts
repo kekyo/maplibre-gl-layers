@@ -71,8 +71,8 @@ import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './image';
-import { createInterpolationState } from './interpolation';
-import { normalizeAngleDeg } from './rotationInterpolation';
+import { createInterpolationState } from './interpolation/interpolation';
+import { normalizeAngleDeg } from './interpolation/rotationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
   calculateMetersPerPixelAtLatitude,
@@ -100,7 +100,7 @@ import {
   clearOpacityInterpolation,
   syncImageRotationChannel,
   hasActiveImageInterpolations,
-} from './interpolationChannels';
+} from './interpolation/interpolationChannels';
 import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './default';
 import {
   createLooseQuadTree,

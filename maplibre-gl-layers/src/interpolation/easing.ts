@@ -8,7 +8,7 @@ import type {
   EasingFunction,
   SpriteEasingPresetName,
   SpriteInterpolationEasing,
-} from './types';
+} from '../types';
 
 /**
  * Linear interpolation that clamps the value to the [0, 1] range.

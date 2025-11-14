@@ -4,7 +4,7 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MercatorCoordinate } from 'maplibre-gl';
 
 import { createCalculationHost } from '../src/calculationHost';
@@ -42,7 +42,7 @@ import {
   POSITION_COMPONENT_COUNT,
   VERTEX_COMPONENT_COUNT,
 } from '../src/shader';
-import { initializeWasmHost } from '../src/wasmHost';
+import { initializeWasmHost, releaseWasmHost } from '../src/wasmHost';
 
 const PROJECTION_PARAMS: ProjectionHostParams = {
   zoom: 12,
@@ -68,10 +68,6 @@ const HOST_FACTORIES: readonly HostFactory[] = [
     create: (deps) => createWasmCalculationHost<null>(PROJECTION_PARAMS, deps),
   },
 ];
-
-beforeAll(async () => {
-  await initializeWasmHost();
-});
 
 const createSpriteState = (
   spriteId: string,
@@ -102,6 +98,7 @@ const createSpriteState = (
     lastCommandLocation: location,
     lastAutoRotationLocation: location,
     lastAutoRotationAngleDeg: 0,
+    interpolationDirty: false,
     cachedMercator: { x: mercator.x, y: mercator.y, z: mercator.z ?? 0 },
     cachedMercatorLng: location.lng,
     cachedMercatorLat: location.lat,
@@ -141,6 +138,7 @@ const createImageState = (
     lastCommandOffsetDeg: 0,
     lastCommandOffsetMeters: 0,
     lastCommandOpacity: 1,
+    interpolationDirty: false,
     surfaceShaderInputs: undefined,
     hitTestCorners: undefined,
   } as InternalSpriteImageState;
@@ -283,8 +281,8 @@ const extractUvs = (vertexData: Float32Array): Array<[number, number]> => {
   const uvOffset = POSITION_COMPONENT_COUNT;
   const uvs: Array<[number, number]> = [];
   for (let i = 0; i < vertexData.length; i += components) {
-    const u = vertexData[i + uvOffset];
-    const v = vertexData[i + uvOffset + 1];
+    const u = vertexData[i + uvOffset] ?? 0;
+    const v = vertexData[i + uvOffset + 1] ?? 0;
     uvs.push([u, v]);
   }
   return uvs;
@@ -327,7 +325,7 @@ const assertPreparedUvs = (
     if (!uvs) {
       throw new Error(`Prepared item missing for ${region.id}`);
     }
-    const expected = [
+    const expected: Array<readonly [number, number]> = [
       [region.u0, region.v0],
       [region.u1, region.v0],
       [region.u0, region.v1],
@@ -337,13 +335,21 @@ const assertPreparedUvs = (
     ];
     expect(uvs).toHaveLength(expected.length);
     uvs.forEach(([u, v], idx) => {
-      expect(u).toBeCloseTo(expected[idx]![0], 6);
-      expect(v).toBeCloseTo(expected[idx]![1], 6);
+      const [expectedU, expectedV] = expected[idx]!;
+      expect(u).toBeCloseTo(expectedU, 6);
+      expect(v).toBeCloseTo(expectedV, 6);
     });
   });
 };
 
 describe.each(HOST_FACTORIES)('calculation hosts atlas UVs (%s)', (factory) => {
+  beforeAll(async () => {
+    await initializeWasmHost();
+  });
+  afterAll(() => {
+    releaseWasmHost();
+  });
+
   it('applies atlas UV ranges to prepared vertex data (single page)', () => {
     const { params, deps } = buildParams([SINGLE_REGION]);
     const host = factory.create(deps);

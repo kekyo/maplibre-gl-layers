@@ -23,7 +23,7 @@ import {
 import {
   applyOpacityUpdate,
   stepSpriteImageInterpolations,
-} from '../src/interpolationChannels';
+} from '../src/interpolation/interpolationChannels';
 import {
   calculateBillboardAnchorShiftPixels,
   calculateZoomScaleFactor,
@@ -40,7 +40,6 @@ import type {
   PrepareDrawSpriteImageParamsBefore,
   PrepareDrawSpriteImageParamsAfter,
   PreparedDrawSpriteImageParams,
-  SpriteOriginReference,
 } from '../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -59,8 +58,8 @@ import {
   TRIANGLE_INDICES,
 } from '../src/const';
 import { BILLBOARD_BASE_CORNERS, SURFACE_BASE_CORNERS } from '../src/shader';
-import { createDistanceInterpolationState } from '../src/distanceInterpolation';
-import { createInterpolationState } from '../src/interpolation';
+import { createDistanceInterpolationState } from '../src/interpolation/distanceInterpolation';
+import { createInterpolationState } from '../src/interpolation/interpolation';
 
 const SCALE = 256;
 const IDENTITY_MATRIX = new Float64Array([
@@ -205,6 +204,7 @@ const createImageState = (
     lastCommandOffsetDeg: overrides.lastCommandOffsetDeg ?? 0,
     lastCommandOffsetMeters: overrides.lastCommandOffsetMeters ?? 0,
     lastCommandOpacity: overrides.lastCommandOpacity ?? initialOpacity,
+    interpolationDirty: overrides.interpolationDirty ?? false,
     surfaceShaderInputs: overrides.surfaceShaderInputs,
     hitTestCorners: overrides.hitTestCorners,
   };
@@ -231,6 +231,7 @@ const createSpriteState = (
 
   return {
     spriteId,
+    handle: overrides.handle ?? 0,
     isEnabled: overrides.isEnabled ?? true,
     currentLocation,
     fromLocation: overrides.fromLocation,
@@ -243,6 +244,7 @@ const createSpriteState = (
     lastAutoRotationLocation:
       overrides.lastAutoRotationLocation ?? currentLocation,
     lastAutoRotationAngleDeg: overrides.lastAutoRotationAngleDeg ?? 0,
+    interpolationDirty: overrides.interpolationDirty ?? false,
     cachedMercator,
     cachedMercatorLng: overrides.cachedMercatorLng ?? cachedMercator.x,
     cachedMercatorLat: overrides.cachedMercatorLat ?? cachedMercator.y,
@@ -602,8 +604,10 @@ describe('collectDepthSortedItems', () => {
       context.paramsBefore
     ) as DepthItem<null>[];
     expect(items).toHaveLength(2);
-    expect(items[0].sprite.spriteId).toBe('sprite-1');
-    expect(items[1].sprite.spriteId).toBe('sprite-2');
+    const firstItem = items[0]!;
+    const secondItem = items[1]!;
+    expect(firstItem.sprite.spriteId).toBe('sprite-1');
+    expect(secondItem.sprite.spriteId).toBe('sprite-2');
   });
 
   it('skips entries when clip context is unavailable for projection', () => {
@@ -664,8 +668,9 @@ describe('collectDepthSortedItems', () => {
     ) as DepthItem<null>[];
 
     expect(biased).toHaveLength(2);
-
-    const delta = Math.abs(biased[1].depthKey - biased[0].depthKey);
+    const baseItem = biased[0]!;
+    const frontItem = biased[1]!;
+    const delta = Math.abs(frontItem.depthKey - baseItem.depthKey);
     const expectedDelta =
       (Math.min(surfaceFront.order, ORDER_MAX - 1) -
         Math.min(surfaceBase.order, ORDER_MAX - 1)) *
@@ -721,7 +726,7 @@ describe('prepareDrawSpriteImages', () => {
     const prepared = prepareItems(context, items);
 
     expect(prepared).toHaveLength(1);
-    const [draw] = prepared;
+    const draw = prepared[0]!;
     expect(draw.spriteEntry).toBe(sprite);
     expect(draw.imageEntry).toBe(image);
     expect(draw.imageResource).toBe(resource);
@@ -760,7 +765,8 @@ describe('prepareDrawSpriteImages', () => {
     const prepared = prepareItems(context, items);
 
     expect(prepared).toHaveLength(1);
-    expect(prepared[0].opacity).toBeCloseTo(0.5, 6);
+    const singlePrepared = prepared[0]!;
+    expect(singlePrepared.opacity).toBeCloseTo(0.5, 6);
   });
 
   it('uses billboard shader geometry when enabled', () => {
@@ -783,12 +789,13 @@ describe('prepareDrawSpriteImages', () => {
     const prepared = prepareItems(context, items);
 
     expect(prepared).toHaveLength(1);
-    const [draw] = prepared;
+    const draw = prepared[0]!;
     expect(draw.useShaderBillboard).toBe(true);
     expect(draw.billboardUniforms).not.toBeNull();
     expect(draw.surfaceShaderInputs).toBeUndefined();
     for (let i = 0; i < TRIANGLE_INDICES.length; i++) {
-      const baseCorner = BILLBOARD_BASE_CORNERS[TRIANGLE_INDICES[i]]!;
+      const baseCornerIndex = TRIANGLE_INDICES[i]!;
+      const baseCorner = BILLBOARD_BASE_CORNERS[baseCornerIndex]!;
       const dataIndex = i * 6;
       expect(draw.vertexData[dataIndex]).toBeCloseTo(baseCorner[0], 6);
       expect(draw.vertexData[dataIndex + 1]).toBeCloseTo(baseCorner[1], 6);
@@ -850,7 +857,7 @@ describe('prepareDrawSpriteImages', () => {
     const prepared = prepareItems(context, items);
 
     expect(prepared).toHaveLength(1);
-    const [draw] = prepared;
+    const draw = prepared[0]!;
     const surfaceInputs = draw.surfaceShaderInputs;
     expect(surfaceInputs).toBeDefined();
     const expectedOrderIndex = Math.min(image.order, ORDER_MAX - 1);
@@ -886,7 +893,7 @@ describe('prepareDrawSpriteImages', () => {
     const prepared = prepareItems(context, items);
 
     expect(prepared).toHaveLength(1);
-    const [draw] = prepared;
+    const draw = prepared[0]!;
 
     expect(draw.useShaderSurface).toBe(true);
     expect(draw.surfaceClipEnabled).toBe(true);
@@ -895,8 +902,9 @@ describe('prepareDrawSpriteImages', () => {
     expect(draw.surfaceShaderInputs).toBeDefined();
     expect(draw.surfaceShaderInputs?.clipCorners?.length).toBe(4);
     expect(draw.vertexData.length).toBe(TRIANGLE_INDICES.length * 6);
-    expect(draw.vertexData[0]).toBeCloseTo(SURFACE_BASE_CORNERS[0][0], 6);
-    expect(draw.vertexData[1]).toBeCloseTo(SURFACE_BASE_CORNERS[0][1], 6);
+    const firstSurfaceCorner = SURFACE_BASE_CORNERS[0]!;
+    expect(draw.vertexData[0]).toBeCloseTo(firstSurfaceCorner[0], 6);
+    expect(draw.vertexData[1]).toBeCloseTo(firstSurfaceCorner[1], 6);
     expect(draw.hitTestCorners).not.toBeNull();
     const firstCornerX = draw.hitTestCorners?.[0].x ?? Number.NaN;
     expect(Number.isFinite(firstCornerX)).toBe(true);
@@ -1183,13 +1191,13 @@ describe('prepareDrawSpriteImages', () => {
     ) as DepthItem<null>[];
 
     const firstPrepared = prepareItems(context, items);
-
-    const firstCorners = firstPrepared[0].hitTestCorners;
+    expect(firstPrepared).toHaveLength(1);
+    const firstCorners = firstPrepared[0]!.hitTestCorners;
     expect(firstCorners).not.toBeNull();
 
     const secondPrepared = prepareItems(context, items);
-
-    const secondCorners = secondPrepared[0].hitTestCorners;
+    expect(secondPrepared).toHaveLength(1);
+    const secondCorners = secondPrepared[0]!.hitTestCorners;
     expect(secondCorners).not.toBeNull();
     expect(secondCorners![0]).toBe(firstCorners![0]);
     expect(secondCorners![1]).toBe(firstCorners![1]);

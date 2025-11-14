@@ -912,8 +912,8 @@ export interface InitializeWasmHostOptions {
  * @returns Initialized WasmHost.
  */
 export const initializeWasmHost = async (
-  preferredVariant: WasmVariant,
-  options: InitializeWasmHostOptions | undefined
+  preferredVariant: WasmVariant = 'simd',
+  options?: InitializeWasmHostOptions
 ): Promise<WasmVariant> => {
   let nextBaseUrl = wasmBaseUrlOverride;
   if (options?.wasmBaseUrl !== undefined) {

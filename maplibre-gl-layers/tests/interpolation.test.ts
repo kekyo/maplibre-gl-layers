@@ -8,8 +8,8 @@ import { describe, expect, it } from 'vitest';
 import {
   createInterpolationState,
   evaluateInterpolation,
-} from '../src/interpolation';
-import { linearEasing } from '../src/easing';
+} from '../src/interpolation/interpolation';
+import { linearEasing } from '../src/interpolation/easing';
 import {
   cloneSpriteLocation,
   lerpSpriteLocation,

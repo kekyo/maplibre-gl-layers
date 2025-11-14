@@ -5,7 +5,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import { Map as MapLibreMap } from 'maplibre-gl';
-import { normalizeAngleDeg } from './rotationInterpolation';
+import { normalizeAngleDeg } from './interpolation/rotationInterpolation';
 import {
   calculateBillboardCenterPosition,
   calculateBillboardCornerScreenPositions,
@@ -98,18 +98,18 @@ import {
   applyDistanceInterpolationEvaluations,
   evaluateDistanceInterpolation,
   type DistanceInterpolationWorkItem,
-} from './distanceInterpolation';
+} from './interpolation/distanceInterpolation';
 import {
   collectDegreeInterpolationWorkItems,
   applyDegreeInterpolationEvaluations,
   evaluateDegreeInterpolation,
   type DegreeInterpolationWorkItem,
-} from './degreeInterpolation';
-import { evaluateInterpolation } from './interpolation';
+} from './interpolation/degreeInterpolation';
+import { evaluateInterpolation } from './interpolation/interpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
-} from './interpolationChannels';
+} from './interpolation/interpolationChannels';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

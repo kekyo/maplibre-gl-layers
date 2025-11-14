@@ -8,19 +8,19 @@ import type {
   SpriteInterpolationMode,
   SpriteInterpolationOptions,
   SpriteLocation,
-} from './types';
+} from '../types';
 import type {
   SpriteInterpolationState,
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
-} from './internalTypes';
+} from '../internalTypes';
 
 import { resolveEasing } from './easing';
 import {
   cloneSpriteLocation,
   lerpSpriteLocation,
   spriteLocationsEqual,
-} from './math';
+} from '../math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

@@ -8,15 +8,15 @@ import type {
   EasingFunction,
   SpriteEasingPresetName,
   SpriteInterpolationOptions,
-} from './types';
+} from '../types';
 import { resolveEasing } from './easing';
 import type {
   DistanceInterpolationEvaluationParams,
   DistanceInterpolationEvaluationResult,
   DistanceInterpolationState,
   InternalSpriteImageState,
-} from './internalTypes';
-import { clampOpacity } from './math';
+} from '../internalTypes';
+import { clampOpacity } from '../math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

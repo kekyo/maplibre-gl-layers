@@ -9,12 +9,12 @@
  * Centralizes rotation and offset channel operations so SpriteLayer stays focused on orchestration.
  */
 
-import type { SpriteInterpolationOptions, SpriteImageOffset } from './types';
+import type { SpriteInterpolationOptions, SpriteImageOffset } from '../types';
 import type {
   InternalSpriteImageState,
   DegreeInterpolationState,
   DistanceInterpolationState,
-} from './internalTypes';
+} from '../internalTypes';
 
 import {
   createDegreeInterpolationState,
@@ -28,7 +28,7 @@ import {
   normalizeAngleDeg,
   resolveRotationTarget,
 } from './rotationInterpolation';
-import { clampOpacity } from './math';
+import { clampOpacity } from '../math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

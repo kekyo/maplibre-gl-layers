@@ -141,12 +141,13 @@ describe('LooseQuadTree basic operations', () => {
     expect(tree.lookup(0, 0, 15, 15)).toEqual([items[0]]);
     expect(tree.lookup(55, -5, 95, 35)).toEqual([items[1]]);
 
+    const target = items[3]!;
     const removed = tree.remove(
-      items[3].x0,
-      items[3].y0,
-      items[3].x1,
-      items[3].y1,
-      items[3]
+      target.x0,
+      target.y0,
+      target.x1,
+      target.y1,
+      target
     );
     expect(removed).toBe(true);
     expect(tree.lookup(50, 50, 95, 95)).toHaveLength(0);
@@ -206,7 +207,7 @@ describe('LooseQuadTree basic operations', () => {
     expect(tree.size).toBe(6);
 
     for (let i = 0; i < 4; i += 1) {
-      const item = cluster[i];
+      const item = cluster[i]!;
       const removed = tree.remove(item.x0, item.y0, item.x1, item.y1, item);
       expect(removed).toBe(true);
     }

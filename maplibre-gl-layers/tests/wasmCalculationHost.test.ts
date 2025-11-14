@@ -41,8 +41,8 @@ import type {
   SpriteImageOffset,
   SpriteLocation,
 } from '../src/types';
-import { ResolvedSpriteScalingOptions } from '../src/math';
-import { ProjectionHostParams } from '../src/projectionHost';
+import type { ResolvedSpriteScalingOptions } from '../src/math';
+import type { ProjectionHostParams } from '../src/projectionHost';
 
 const RESULT_HEADER_LENGTH = 7;
 const RESULT_VERTEX_COMPONENT_LENGTH = 36;
@@ -56,11 +56,8 @@ const RESULT_ITEM_STRIDE =
   RESULT_HIT_TEST_COMPONENT_LENGTH +
   RESULT_SURFACE_BLOCK_LENGTH;
 const DISTANCE_INTERPOLATION_ITEM_LENGTH = 7;
-const DISTANCE_INTERPOLATION_RESULT_LENGTH = 3;
 const DEGREE_INTERPOLATION_ITEM_LENGTH = 7;
-const DEGREE_INTERPOLATION_RESULT_LENGTH = 3;
 const SPRITE_INTERPOLATION_ITEM_LENGTH = 11;
-const SPRITE_INTERPOLATION_RESULT_LENGTH = 6;
 const PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
 interface WasmProcessInterpolationResults {
@@ -109,6 +106,7 @@ class MockWasmHost implements WasmHost {
     let buffer = new ArrayType(this.memory.buffer, ptr, length);
     let released = false;
     const holder: BufferHolder<TArray> = {
+      length,
       prepare: () => {
         if (released) {
           throw new Error('Buffer already released.');
@@ -248,6 +246,7 @@ const createSprite = (
     lastCommandLocation: location,
     lastAutoRotationLocation: location,
     lastAutoRotationAngleDeg: 0,
+    interpolationDirty: false,
     cachedMercator: { x: 10, y: 20, z: 30 },
     cachedMercatorLng: location.lng,
     cachedMercatorLat: location.lat,
@@ -285,6 +284,7 @@ const createImage = (): InternalSpriteImageState =>
     lastCommandOffsetDeg: 0,
     lastCommandOffsetMeters: 0,
     lastCommandOpacity: 1,
+    interpolationDirty: false,
     surfaceShaderInputs: undefined,
     hitTestCorners: undefined,
   }) as InternalSpriteImageState;
@@ -417,10 +417,10 @@ describe('convertToWasmProjectionState', () => {
       expect(buffer[3]).toBe(2); // resource count (handles 0..1)
       expect(buffer[5]).toBe(1); // sprite count
       expect(buffer[7]).toBe(1); // item count
-      const spriteOffset = buffer[6];
+      const spriteOffset = buffer[6] ?? 0;
       expect(buffer[spriteOffset]).toBeCloseTo(sprite.currentLocation.lng);
       expect(buffer[spriteOffset + 3]).toBeCloseTo(sprite.cachedMercator.x);
-      const resourceOffset = buffer[4];
+      const resourceOffset = buffer[4] ?? 0;
       const handleOffset = resourceOffset + resource.handle * RESOURCE_STRIDE;
       expect(buffer[handleOffset]).toBe(resource.handle);
       expect(buffer[handleOffset + 1]).toBe(resource.width);

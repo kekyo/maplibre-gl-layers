@@ -15,7 +15,7 @@ import {
   clearOffsetDegInterpolation,
   clearOffsetMetersInterpolation,
   stepSpriteImageInterpolations,
-} from '../src/interpolationChannels';
+} from '../src/interpolation/interpolationChannels';
 
 const createImageState = (): InternalSpriteImageState => ({
   subLayer: 0,
@@ -44,6 +44,7 @@ const createImageState = (): InternalSpriteImageState => ({
   lastCommandOffsetDeg: 0,
   lastCommandOffsetMeters: 0,
   lastCommandOpacity: 1,
+  interpolationDirty: false,
 });
 
 describe('applyOffsetUpdate', () => {

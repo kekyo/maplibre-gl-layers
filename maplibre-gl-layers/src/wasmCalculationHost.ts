@@ -45,18 +45,18 @@ import {
   collectDistanceInterpolationWorkItems,
   applyDistanceInterpolationEvaluations,
   type DistanceInterpolationWorkItem,
-} from './distanceInterpolation';
+} from './interpolation/distanceInterpolation';
 import {
   collectDegreeInterpolationWorkItems,
   applyDegreeInterpolationEvaluations,
   type DegreeInterpolationWorkItem,
-} from './degreeInterpolation';
-import { evaluateInterpolation } from './interpolation';
+} from './interpolation/degreeInterpolation';
+import { evaluateInterpolation } from './interpolation/interpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
   hasActiveImageInterpolations,
-} from './interpolationChannels';
+} from './interpolation/interpolationChannels';
 import {
   createCalculationHost,
   type ProcessInterpolationPresetRequests,

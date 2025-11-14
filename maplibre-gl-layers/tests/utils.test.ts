@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { RegisteredImage } from '../src/internalTypes';
+import type { RegisteredImage } from '../src/internalTypes';
 import {
   createImageHandleBufferController,
   createIdHandler,

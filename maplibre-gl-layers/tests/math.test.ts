@@ -841,7 +841,6 @@ describe('calculateSurfaceCenterPosition', () => {
 
 describe('calculateSurfaceDepthKey', () => {
   const baseLngLat = { lng: 139.7, lat: 35.6 };
-  const spriteLocation = { lng: 139.7, lat: 35.6, z: 0 };
   const displacements = [
     { east: 0, north: 0 },
     { east: 10, north: 0 },
