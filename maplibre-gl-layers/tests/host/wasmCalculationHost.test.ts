@@ -48,7 +48,7 @@ const RESULT_HEADER_LENGTH = 7;
 const RESULT_VERTEX_COMPONENT_LENGTH = 36;
 const RESULT_HIT_TEST_COMPONENT_LENGTH = 8;
 const RESULT_SURFACE_BLOCK_LENGTH = 68;
-const RESULT_COMMON_ITEM_LENGTH = 19;
+const RESULT_COMMON_ITEM_LENGTH = 20;
 const RESOURCE_STRIDE = 9;
 const RESULT_ITEM_STRIDE =
   RESULT_COMMON_ITEM_LENGTH +
@@ -273,13 +273,18 @@ const createImage = (): InternalSpriteImageState =>
     autoRotation: false,
     autoRotationMinDistanceMeters: 0,
     resolvedBaseRotateDeg: 0,
+    originLocation: undefined,
     originReferenceKey: SPRITE_ORIGIN_REFERENCE_KEY_NONE,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+    visibilityDistanceMeters: undefined,
     rotationInterpolationState: null,
     rotationInterpolationOptions: null,
     offsetDegInterpolationState: null,
     offsetMetersInterpolationState: null,
     opacityInterpolationState: null,
+    opacityInterpolationOptions: null,
+    opacityTargetValue: 1,
+    lodLastCommandOpacity: 1,
     lastCommandRotateDeg: 0,
     lastCommandOffsetDeg: 0,
     lastCommandOffsetMeters: 0,
@@ -484,6 +489,7 @@ describe('converToDrawImageParams', () => {
         buffer[cursor++] = 0; // anchor.y
         buffer[cursor++] = 0.5; // sin
         buffer[cursor++] = 0.5; // cos
+        buffer[cursor++] = 1234; // camera distance
 
         const vertexStart = cursor;
         for (let i = 0; i < RESULT_VERTEX_COMPONENT_LENGTH; i++) {
@@ -577,6 +583,7 @@ describe('converToDrawImageParams', () => {
         expect(item.surfaceShaderInputs!.mercatorCenter.x).toBe(30);
         expect(item.useShaderBillboard).toBe(true);
         expect(item.billboardUniforms?.center.x).toBe(10);
+        expect(item.cameraDistanceMeters).toBe(1234);
       } finally {
         resultBuffer.release();
       }

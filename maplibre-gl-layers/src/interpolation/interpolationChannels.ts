@@ -320,6 +320,8 @@ export const applyOpacityUpdate = (
     image.opacity = clampedTarget;
     image.opacityInterpolationState = null;
     image.lastCommandOpacity = clampedTarget;
+    image.opacityTargetValue = clampedTarget;
+    image.lodLastCommandOpacity = clampedTarget;
     return;
   }
 
@@ -331,6 +333,8 @@ export const applyOpacityUpdate = (
   });
 
   image.lastCommandOpacity = clampedTarget;
+  image.opacityTargetValue = clampedTarget;
+  image.lodLastCommandOpacity = clampedTarget;
 
   if (requiresInterpolation) {
     image.opacityInterpolationState = state;

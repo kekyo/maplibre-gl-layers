@@ -466,6 +466,12 @@ export const createImageStateFromInit = (
     originLocation !== undefined
       ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
       : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
+  const visibilityDistanceMeters =
+    typeof imageInit.visibilityDistanceMeters === 'number' &&
+    Number.isFinite(imageInit.visibilityDistanceMeters) &&
+    imageInit.visibilityDistanceMeters > 0
+      ? imageInit.visibilityDistanceMeters
+      : undefined;
   const state: InternalSpriteImageState = {
     subLayer,
     order,
@@ -486,11 +492,15 @@ export const createImageStateFromInit = (
     originLocation,
     originReferenceKey,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+    visibilityDistanceMeters,
     rotationInterpolationState: null,
     rotationInterpolationOptions: null,
     offsetDegInterpolationState: null,
     offsetMetersInterpolationState: null,
     opacityInterpolationState: null,
+    opacityInterpolationOptions: null,
+    opacityTargetValue: initialOpacity,
+    lodLastCommandOpacity: initialOpacity,
     lastCommandRotateDeg: initialRotateDeg,
     lastCommandOffsetDeg: initialOffset.offsetDeg,
     lastCommandOffsetMeters: initialOffset.offsetMeters,
@@ -502,6 +512,11 @@ export const createImageStateFromInit = (
   if (rotateInitOption) {
     state.rotationInterpolationOptions =
       cloneInterpolationOptions(rotateInitOption);
+  }
+  const opacityInitOption = imageInit.interpolation?.opacity ?? null;
+  if (opacityInitOption) {
+    state.opacityInterpolationOptions =
+      cloneInterpolationOptions(opacityInitOption);
   }
 
   syncImageRotationChannel(state);
@@ -2648,19 +2663,40 @@ export const createSpriteLayer = <T = any>(
     }
     const interpolationOptions = imageUpdate.interpolation;
     const opacityInterpolationOption = interpolationOptions?.opacity;
+    if (opacityInterpolationOption !== undefined) {
+      state.opacityInterpolationOptions =
+        opacityInterpolationOption === null
+          ? null
+          : cloneInterpolationOptions(opacityInterpolationOption);
+    }
+    const resolvedOpacityInterpolationOption =
+      opacityInterpolationOption === undefined
+        ? (state.opacityInterpolationOptions ?? null)
+        : opacityInterpolationOption;
     if (imageUpdate.opacity !== undefined) {
       // Update opacity; zero values will be filtered out during rendering.
       applyOpacityUpdate(
         state,
         imageUpdate.opacity,
-        opacityInterpolationOption
+        resolvedOpacityInterpolationOption
       );
+      state.opacityTargetValue = state.lastCommandOpacity;
+      state.lodLastCommandOpacity = state.lastCommandOpacity;
     } else if (opacityInterpolationOption === null) {
       clearOpacityInterpolation(state);
     }
     if (imageUpdate.scale !== undefined) {
       // Adjust image scaling factor applied to dimensions and offsets.
       state.scale = imageUpdate.scale;
+    }
+    if (imageUpdate.visibilityDistanceMeters !== undefined) {
+      const visibility = imageUpdate.visibilityDistanceMeters;
+      state.visibilityDistanceMeters =
+        typeof visibility === 'number' &&
+        Number.isFinite(visibility) &&
+        visibility > 0
+          ? visibility
+          : undefined;
     }
     const prevAutoRotation = state.autoRotation;
     const prevMinDistance = state.autoRotationMinDistanceMeters;

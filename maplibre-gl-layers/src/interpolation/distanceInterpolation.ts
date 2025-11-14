@@ -185,12 +185,21 @@ export interface DistanceInterpolationWorkItem {
   readonly state: DistanceInterpolationState;
 }
 
+export interface CollectDistanceInterpolationWorkItemOptions {
+  readonly includeOffsetMeters?: boolean;
+  readonly includeOpacity?: boolean;
+}
+
 export const collectDistanceInterpolationWorkItems = (
   image: InternalSpriteImageState,
-  workItems: DistanceInterpolationWorkItem[]
+  workItems: DistanceInterpolationWorkItem[],
+  options?: CollectDistanceInterpolationWorkItemOptions
 ): void => {
+  const includeOffsetMeters = options?.includeOffsetMeters ?? true;
+  const includeOpacity = options?.includeOpacity ?? true;
+
   const offsetMetersState = image.offsetMetersInterpolationState;
-  if (offsetMetersState) {
+  if (includeOffsetMeters && offsetMetersState) {
     workItems.push({
       descriptor: DISTANCE_INTERPOLATION_CHANNELS.offsetMeters,
       image,
@@ -199,7 +208,7 @@ export const collectDistanceInterpolationWorkItems = (
   }
 
   const opacityState = image.opacityInterpolationState;
-  if (opacityState) {
+  if (includeOpacity && opacityState) {
     workItems.push({
       descriptor: DISTANCE_INTERPOLATION_CHANNELS.opacity,
       image,

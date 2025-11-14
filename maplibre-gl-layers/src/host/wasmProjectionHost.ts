@@ -439,6 +439,20 @@ export const createWasmProjectionHost = (
     getClipContext: () => {
       return preparedState.clipContext;
     },
+    getCameraLocation: () => {
+      const location = preparedState.cameraLocation;
+      if (!location) {
+        return null;
+      }
+      const result: SpriteLocation = {
+        lng: location.lng,
+        lat: location.lat,
+      };
+      if (location.z !== undefined) {
+        result.z = location.z;
+      }
+      return result;
+    },
     fromLngLat, // Overrided
     project, // Overrided
     unproject, // Overrided

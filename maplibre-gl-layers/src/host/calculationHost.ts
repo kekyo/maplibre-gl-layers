@@ -30,6 +30,8 @@ import {
   resolveScalingOptions,
   resolveSpriteMercator,
   cloneSpriteLocation,
+  calculateCartesianDistanceMeters,
+  clampOpacity,
 } from '../utils/math';
 import {
   BILLBOARD_BASE_CORNERS,
@@ -99,6 +101,7 @@ import {
   collectDistanceInterpolationWorkItems,
   applyDistanceInterpolationEvaluations,
   evaluateDistanceInterpolation,
+  createDistanceInterpolationState,
   type DistanceInterpolationWorkItem,
 } from '../interpolation/distanceInterpolation';
 import {
@@ -144,6 +147,8 @@ export const DEFAULT_RENDER_INTERPOLATION_RESULT: RenderInterpolationResult = {
   handled: false,
   hasActiveInterpolation: false,
 };
+
+const OPACITY_TARGET_EPSILON = 1e-4;
 
 interface DepthSortedItem<T> {
   readonly sprite: InternalSpriteCurrentState<T>;
@@ -903,6 +908,32 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     }
   }
 
+  const resolveBaseLocation = (): SpriteLocation => {
+    const fallback = spriteEntry.currentLocation;
+    if (imageEntry.originLocation !== undefined) {
+      const unprojected = projectionHost.unproject(baseProjected);
+      if (unprojected) {
+        return {
+          lng: unprojected.lng,
+          lat: unprojected.lat,
+          z: fallback.z ?? unprojected.z ?? 0,
+        };
+      }
+    }
+    return {
+      lng: fallback.lng,
+      lat: fallback.lat,
+      z: fallback.z ?? 0,
+    };
+  };
+
+  const baseLocation = resolveBaseLocation();
+  const cameraLocation = projectionHost.getCameraLocation();
+  const cameraDistanceMeters =
+    cameraLocation !== null
+      ? calculateCartesianDistanceMeters(cameraLocation, baseLocation)
+      : Number.POSITIVE_INFINITY;
+
   if (imageEntry.mode === 'surface') {
     screenToClipUniforms = {
       scaleX: identityScaleX,
@@ -910,13 +941,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       offsetX: identityOffsetX,
       offsetY: identityOffsetY,
     };
-    const baseLngLat =
-      imageEntry.originLocation !== undefined
-        ? // When an origin reference is set, reproject the cached screen point back to geographic space.
-          (projectionHost.unproject(baseProjected) ??
-          spriteEntry.currentLocation)
-        : // Otherwise base the surface on the sprite's current longitude/latitude.
-          spriteEntry.currentLocation;
+    const baseLngLat = baseLocation;
 
     const surfaceCenter = calculateSurfaceCenterPosition({
       baseLngLat,
@@ -1375,6 +1400,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     surfaceClipEnabled,
     useShaderBillboard,
     billboardUniforms,
+    cameraDistanceMeters,
   };
 };
 
@@ -1428,6 +1454,56 @@ const prepareDrawSpriteImages = <TTag>(
   }
 
   return preparedItems;
+};
+
+const resolveVisibilityTargetOpacity = (
+  image: InternalSpriteImageState,
+  cameraDistanceMeters: number
+): number => {
+  const baseOpacity = clampOpacity(image.lastCommandOpacity);
+  const threshold = image.visibilityDistanceMeters;
+  if (
+    threshold === undefined ||
+    !Number.isFinite(threshold) ||
+    threshold <= 0 ||
+    !Number.isFinite(cameraDistanceMeters)
+  ) {
+    return baseOpacity;
+  }
+  return cameraDistanceMeters >= threshold ? 0 : baseOpacity;
+};
+
+export const applyVisibilityDistanceLod = <TTag>(
+  preparedItems: readonly PreparedDrawSpriteImageParams<TTag>[]
+): void => {
+  if (!preparedItems.length) {
+    return;
+  }
+  for (const prepared of preparedItems) {
+    const image = prepared.imageEntry;
+    const targetOpacity = resolveVisibilityTargetOpacity(
+      image,
+      prepared.cameraDistanceMeters
+    );
+    if (
+      !Number.isFinite(image.opacityTargetValue) ||
+      Math.abs(image.opacityTargetValue - targetOpacity) >
+        OPACITY_TARGET_EPSILON
+    ) {
+      image.opacityTargetValue = targetOpacity;
+    }
+  }
+};
+
+export const syncPreparedOpacities = <TTag>(
+  preparedItems: readonly PreparedDrawSpriteImageParams<TTag>[]
+): void => {
+  if (!preparedItems.length) {
+    return;
+  }
+  for (const prepared of preparedItems) {
+    prepared.opacity = prepared.imageEntry.opacity;
+  }
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -1527,6 +1603,45 @@ const applySpriteInterpolationEvaluations = <TTag>(
   return active;
 };
 
+const ensureOpacityInterpolationTarget = (
+  image: InternalSpriteImageState
+): void => {
+  const target = clampOpacity(
+    image.opacityTargetValue ?? image.lastCommandOpacity ?? image.opacity
+  );
+  const interpolationState = image.opacityInterpolationState;
+  const currentStateTarget = interpolationState
+    ? clampOpacity(interpolationState.finalValue)
+    : image.opacity;
+  if (interpolationState) {
+    if (Math.abs(currentStateTarget - target) <= OPACITY_TARGET_EPSILON) {
+      // Already interpolating toward the desired target.
+      return;
+    }
+  } else if (Math.abs(image.opacity - target) <= OPACITY_TARGET_EPSILON) {
+    // No interpolation state and current opacity already matches the target.
+    image.lodLastCommandOpacity = target;
+    return;
+  }
+  const options = image.opacityInterpolationOptions;
+  if (options && options.durationMs > 0) {
+    const { state, requiresInterpolation } = createDistanceInterpolationState({
+      currentValue: clampOpacity(image.opacity),
+      targetValue: target,
+      previousCommandValue: image.lodLastCommandOpacity,
+      options,
+    });
+    image.lodLastCommandOpacity = target;
+    if (requiresInterpolation) {
+      image.opacityInterpolationState = state;
+      return;
+    }
+  }
+  image.opacity = target;
+  image.opacityInterpolationState = null;
+  image.lodLastCommandOpacity = target;
+};
+
 export const processInterpolationsInternal = <TTag>(
   params: RenderInterpolationParams<TTag>,
   handlers: ProcessInterpolationsEvaluationHandlers = defaultInterpolationEvaluationHandlers
@@ -1573,15 +1688,22 @@ export const processInterpolationsInternal = <TTag>(
 
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
-        const hasDistanceInterpolation =
-          image.offsetMetersInterpolationState !== null ||
-          image.opacityInterpolationState !== null;
-        if (hasDistanceInterpolation) {
+        const hasOffsetMetersInterpolation =
+          image.offsetMetersInterpolationState !== null;
+        if (hasOffsetMetersInterpolation) {
           collectDistanceInterpolationWorkItems(
             image,
-            distanceInterpolationWorkItems
+            distanceInterpolationWorkItems,
+            {
+              includeOpacity: false,
+            }
           );
         }
+
+        ensureOpacityInterpolationTarget(image);
+
+        const hasOpacityInterpolation =
+          image.opacityInterpolationState !== null;
 
         const hasDegreeInterpolation =
           image.rotationInterpolationState !== null ||
@@ -1597,8 +1719,11 @@ export const processInterpolationsInternal = <TTag>(
           Record<ImageInterpolationStepperId, boolean>
         > = {};
         let shouldSkipChannels = false;
-        if (hasDistanceInterpolation) {
+        if (hasOffsetMetersInterpolation) {
           skipChannels.offsetMeters = true;
+          shouldSkipChannels = true;
+        }
+        if (hasOpacityInterpolation) {
           skipChannels.opacity = true;
           shouldSkipChannels = true;
         }
@@ -1762,6 +1887,101 @@ export const processInterpolationsInternal = <TTag>(
   };
 };
 
+export const processOpacityInterpolationsAfterPreparation = <TTag>(
+  params: RenderInterpolationParams<TTag>,
+  preparedItems: readonly PreparedDrawSpriteImageParams<TTag>[],
+  handlers: ProcessInterpolationsEvaluationHandlers = defaultInterpolationEvaluationHandlers
+): RenderInterpolationResult => {
+  void preparedItems;
+  const evaluationHandlers = handlers ?? defaultInterpolationEvaluationHandlers;
+  const { sprites, timestamp } = params;
+  if (!sprites.length) {
+    return {
+      handled: true,
+      hasActiveInterpolation: false,
+    };
+  }
+
+  const opacityWorkItems: DistanceInterpolationWorkItem[] = [];
+
+  for (const sprite of sprites) {
+    sprite.images.forEach((orderMap) => {
+      orderMap.forEach((image) => {
+        ensureOpacityInterpolationTarget(image);
+        if (image.opacityInterpolationState !== null) {
+          collectDistanceInterpolationWorkItems(image, opacityWorkItems, {
+            includeOffsetMeters: false,
+          });
+        }
+      });
+    });
+  }
+
+  if (opacityWorkItems.length === 0) {
+    return {
+      handled: true,
+      hasActiveInterpolation: false,
+    };
+  }
+
+  const presetOpacityWorkItems: DistanceInterpolationWorkItem[] = [];
+  const fallbackOpacityWorkItems: DistanceInterpolationWorkItem[] = [];
+  for (const item of opacityWorkItems) {
+    if (item.state.easingPreset) {
+      presetOpacityWorkItems.push(item);
+    } else {
+      fallbackOpacityWorkItems.push(item);
+    }
+  }
+
+  const opacityRequests =
+    presetOpacityWorkItems.length > 0
+      ? presetOpacityWorkItems.map(({ state }) => ({
+          state,
+          timestamp,
+        }))
+      : [];
+
+  if (opacityRequests.length > 0) {
+    evaluationHandlers.prepare?.({
+      distance: opacityRequests,
+      degree: [],
+      sprite: [],
+    });
+  }
+
+  let hasActiveInterpolation = false;
+
+  if (presetOpacityWorkItems.length > 0) {
+    const evaluations = evaluationHandlers.evaluateDistance(opacityRequests);
+    if (
+      applyDistanceInterpolationEvaluations(
+        presetOpacityWorkItems,
+        evaluations,
+        timestamp
+      )
+    ) {
+      hasActiveInterpolation = true;
+    }
+  }
+
+  if (
+    fallbackOpacityWorkItems.length > 0 &&
+    applyDistanceInterpolationEvaluations(
+      fallbackOpacityWorkItems,
+      [],
+      timestamp
+    )
+  ) {
+    hasActiveInterpolation = true;
+  }
+
+  return {
+    handled: true,
+    hasActiveInterpolation,
+  };
+};
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 const createProjectionBoundCalculationHost = <TTag>(
@@ -1770,12 +1990,28 @@ const createProjectionBoundCalculationHost = <TTag>(
   const processDrawSpriteImagesInternalWithInterpolations = (
     params: ProcessDrawSpriteImagesParams<TTag>
   ): ProcessDrawSpriteImagesResult<TTag> => {
-    const interpolationResult = params.interpolationParams
+    let interpolationResult = params.interpolationParams
       ? processInterpolationsInternal(params.interpolationParams)
       : DEFAULT_RENDER_INTERPOLATION_RESULT;
     const preparedItems = params.prepareParams
       ? prepareDrawSpriteImages(projectionHost, params.prepareParams)
       : [];
+    if (preparedItems.length > 0) {
+      applyVisibilityDistanceLod(preparedItems);
+    }
+    if (params.interpolationParams) {
+      const opacityResult = processOpacityInterpolationsAfterPreparation(
+        params.interpolationParams,
+        preparedItems
+      );
+      interpolationResult = {
+        handled: interpolationResult.handled || opacityResult.handled,
+        hasActiveInterpolation:
+          interpolationResult.hasActiveInterpolation ||
+          opacityResult.hasActiveInterpolation,
+      };
+    }
+    syncPreparedOpacities(preparedItems);
     return {
       interpolationResult,
       preparedItems,
@@ -1825,4 +2061,10 @@ const __createWasmProjectionCalculationTestHost = <TTag>(
 // Only testing purpose, DO NOT USE in production code.
 export const __wasmProjectionCalculationTestInternals = {
   __createWasmProjectionCalculationTestHost,
+};
+
+export const __calculationHostTestInternals = {
+  applyVisibilityDistanceLod,
+  syncPreparedOpacities,
+  processOpacityInterpolationsAfterPreparation,
 };

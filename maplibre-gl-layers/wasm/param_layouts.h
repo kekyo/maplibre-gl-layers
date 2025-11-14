@@ -15,7 +15,7 @@
 // Constants that mirror the TypeScript definitions in src/wasmCalculationHost.ts
 
 constexpr std::size_t INPUT_HEADER_LENGTH = 15;
-constexpr std::size_t INPUT_FRAME_CONSTANT_LENGTH = 24;
+constexpr std::size_t INPUT_FRAME_CONSTANT_LENGTH = 27;
 constexpr std::size_t INPUT_MATRIX_LENGTH = 48;
 constexpr std::size_t RESOURCE_STRIDE = 9;
 constexpr std::size_t SPRITE_STRIDE = 6;
@@ -24,7 +24,7 @@ constexpr std::size_t ITEM_STRIDE = 27;
 constexpr std::size_t RESULT_HEADER_LENGTH = 7;
 constexpr std::size_t RESULT_VERTEX_COMPONENT_LENGTH = 36;
 constexpr std::size_t RESULT_HIT_TEST_COMPONENT_LENGTH = 8;
-constexpr std::size_t RESULT_COMMON_ITEM_LENGTH = 19;
+constexpr std::size_t RESULT_COMMON_ITEM_LENGTH = 20;
 constexpr std::size_t RESULT_SURFACE_BLOCK_LENGTH = 68;
 constexpr std::size_t RESULT_ITEM_STRIDE =
     RESULT_COMMON_ITEM_LENGTH + RESULT_VERTEX_COMPONENT_LENGTH +
@@ -182,6 +182,7 @@ struct ResultItemEntry {
   double billboardAnchorY;
   double billboardSin;
   double billboardCos;
+  double cameraDistance;
   // Followed by RESULT_VERTEX_COMPONENT_LENGTH doubles,
   // RESULT_HIT_TEST_COMPONENT_LENGTH doubles and RESULT_SURFACE_BLOCK_LENGTH doubles.
 };

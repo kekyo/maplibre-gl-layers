@@ -258,6 +258,7 @@ export interface ProjectionHost extends Releasable {
     location: Readonly<SpriteLocation>,
     cachedMercator?: SpriteMercatorCoordinate
   ) => number;
+  readonly getCameraLocation: () => SpriteLocation | null;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -306,7 +307,8 @@ export interface PreparedDrawSpriteImageParams<T> {
   readonly imageEntry: InternalSpriteImageState;
   readonly imageResource: RegisteredImage;
   readonly vertexData: Float32Array;
-  readonly opacity: number;
+  opacity: number;
+  readonly cameraDistanceMeters: number;
   readonly hitTestCorners:
     | readonly [
         Readonly<SpriteScreenPoint>,
@@ -663,11 +665,15 @@ export interface InternalSpriteImageState {
   originLocation?: Readonly<SpriteImageOriginLocation>;
   originReferenceKey: SpriteOriginReferenceKey;
   originRenderTargetIndex: SpriteOriginReferenceIndex;
+  visibilityDistanceMeters?: number;
   rotationInterpolationState: Readonly<DegreeInterpolationState> | null;
   rotationInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
   offsetDegInterpolationState: Readonly<DegreeInterpolationState> | null;
   offsetMetersInterpolationState: Readonly<DistanceInterpolationState> | null;
   opacityInterpolationState: Readonly<DistanceInterpolationState> | null;
+  opacityInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
+  opacityTargetValue: number;
+  lodLastCommandOpacity: number;
   lastCommandRotateDeg: number;
   lastCommandOffsetDeg: number;
   lastCommandOffsetMeters: number;

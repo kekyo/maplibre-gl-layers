@@ -13,6 +13,7 @@ import type {
   ProjectionHost,
   SpriteMercatorCoordinate,
 } from '../internalTypes';
+import { DEG2RAD, TILE_SIZE } from '../const';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -57,6 +58,48 @@ export const createMapLibreProjectionHost = (
       return null;
     }
     return { mercatorMatrix };
+  };
+
+  const getCameraLocation = (): SpriteLocation | null => {
+    const mapInstance = mapLibreMap;
+    const transform = mapInstance?.transform;
+    if (!mapInstance || !transform) {
+      return null;
+    }
+    const center = mapInstance.getCenter();
+    const ensureFiniteNumber = (value: unknown): number | undefined =>
+      typeof value === 'number' && Number.isFinite(value)
+        ? (value as number)
+        : undefined;
+    const zoom = ensureFiniteNumber(transform.zoom) ?? mapInstance.getZoom();
+    const pitchDeg =
+      ensureFiniteNumber(transform.pitch) ?? mapInstance.getPitch();
+    const cameraToCenterDistance = ensureFiniteNumber(
+      transform.cameraToCenterDistance
+    );
+    if (!Number.isFinite(cameraToCenterDistance)) {
+      return null;
+    }
+    const tileSize = ensureFiniteNumber(transform.tileSize) ?? TILE_SIZE;
+    const worldSize = tileSize * Math.pow(2, Number.isFinite(zoom) ? zoom : 0);
+    if (!Number.isFinite(worldSize) || worldSize <= 0) {
+      return null;
+    }
+    const mercator = MercatorCoordinate.fromLngLat(center, 0);
+    const pixelPerMeter = mercator.meterInMercatorCoordinateUnits() * worldSize;
+    if (!Number.isFinite(pixelPerMeter) || pixelPerMeter <= 0) {
+      return null;
+    }
+    const centerElevation = ensureFiniteNumber(transform.elevation) ?? 0;
+    const pitchRad = (Number.isFinite(pitchDeg) ? pitchDeg : 0) * DEG2RAD;
+    const altitude =
+      (Math.cos(pitchRad) * cameraToCenterDistance!) / pixelPerMeter +
+      centerElevation;
+    return {
+      lng: center.lng,
+      lat: center.lat,
+      z: altitude,
+    };
   };
 
   /**
@@ -143,6 +186,7 @@ export const createMapLibreProjectionHost = (
     project,
     unproject,
     calculatePerspectiveRatio,
+    getCameraLocation,
     release,
   };
 };

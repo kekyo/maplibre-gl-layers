@@ -79,6 +79,38 @@ export const spriteLocationsEqual = (
   return a.lng === b.lng && a.lat === b.lat && zA === zB;
 };
 
+const toCartesianMeters = (
+  location: Readonly<SpriteLocation>
+): { x: number; y: number; z: number } => {
+  const latitude = location.lat;
+  const longitude = location.lng;
+  const altitude = location.z ?? 0;
+  const latRad = latitude * DEG2RAD;
+  const lonRad = longitude * DEG2RAD;
+  const cosLat = Math.cos(latRad);
+  const sinLat = Math.sin(latRad);
+  const cosLon = Math.cos(lonRad);
+  const sinLon = Math.sin(lonRad);
+  const radius = EARTH_RADIUS_METERS + altitude;
+  return {
+    x: radius * cosLat * cosLon,
+    y: radius * cosLat * sinLon,
+    z: radius * sinLat,
+  };
+};
+
+export const calculateCartesianDistanceMeters = (
+  a: Readonly<SpriteLocation>,
+  b: Readonly<SpriteLocation>
+): number => {
+  const cartA = toCartesianMeters(a);
+  const cartB = toCartesianMeters(b);
+  const dx = cartA.x - cartB.x;
+  const dy = cartA.y - cartB.y;
+  const dz = cartA.z - cartB.z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+};
+
 /**
  * Normalizes an angle in degrees to the [0, 360) range.
  */

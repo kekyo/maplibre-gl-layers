@@ -121,6 +121,8 @@ export interface SpriteImageDefinitionInit {
   mode?: SpriteMode;
   /** Opacity multiplier. Defaults to 1.0. */
   opacity?: number;
+  /** Pseudo LOD. Distance in meters at which the image becomes invisible. */
+  visibilityDistanceMeters?: number;
   /** Real-world meters represented by one pixel. Defaults to 1.0. */
   scale?: number;
   /** Anchor within the image. Defaults to [0.0, 0.0]. */
@@ -163,6 +165,8 @@ export interface SpriteImageDefinitionUpdate {
   mode?: SpriteMode;
   /** Opacity multiplier. */
   opacity?: number;
+  /** Pseudo LOD. Distance in meters at which the image becomes invisible. */
+  visibilityDistanceMeters?: number;
   /** Real-world meters represented by one pixel. */
   scale?: number;
   /** Anchor within the image. */
@@ -274,6 +278,8 @@ export interface SpriteImageState {
   readonly displayedRotateDeg: number;
   /** Optional reference to another image used for anchoring. */
   readonly originLocation: Readonly<SpriteImageOriginLocation> | undefined;
+  /** Pseudo LOD. Distance in meters at which the image becomes invisible when exceeded. */
+  readonly visibilityDistanceMeters: number | undefined;
 }
 
 /**

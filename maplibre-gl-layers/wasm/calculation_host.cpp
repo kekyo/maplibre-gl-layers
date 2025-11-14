@@ -751,6 +751,9 @@ struct FrameConstants {
   double orderMax = 1.0;
   double epsNdc = 0.0;
   bool enableNdcBiasSurface = false;
+  double cameraLng = 0.0;
+  double cameraLat = 0.0;
+  double cameraAltitude = 0.0;
 };
 
 static inline FrameConstants readFrameConstants(const double* ptr,
@@ -784,6 +787,9 @@ static inline FrameConstants readFrameConstants(const double* ptr,
   constants.orderMax = ptr[21];
   constants.epsNdc = ptr[22];
   constants.enableNdcBiasSurface = toBool(ptr[23]);
+  constants.cameraLng = ptr[24];
+  constants.cameraLat = ptr[25];
+  constants.cameraAltitude = ptr[26];
   return constants;
 }
 
@@ -1051,6 +1057,38 @@ static inline bool calculateMercatorCoordinate(const SpriteLocation& location,
   out.y = buffer[1];
   out.z = buffer[2];
   return true;
+}
+
+static inline void locationToCartesian(const SpriteLocation& location,
+                                       double& x,
+                                       double& y,
+                                       double& z) {
+  const double latRad = location.lat * DEG2RAD;
+  const double lonRad = location.lng * DEG2RAD;
+  const double cosLat = std::cos(latRad);
+  const double sinLat = std::sin(latRad);
+  const double cosLon = std::cos(lonRad);
+  const double sinLon = std::sin(lonRad);
+  const double radius = EARTH_RADIUS_METERS + location.z;
+  x = radius * cosLat * cosLon;
+  y = radius * cosLat * sinLon;
+  z = radius * sinLat;
+}
+
+static inline double calculateDistanceBetweenLocations(
+    const SpriteLocation& a, const SpriteLocation& b) {
+  double ax = 0.0;
+  double ay = 0.0;
+  double az = 0.0;
+  double bx = 0.0;
+  double by = 0.0;
+  double bz = 0.0;
+  locationToCartesian(a, ax, ay, az);
+  locationToCartesian(b, bx, by, bz);
+  const double dx = ax - bx;
+  const double dy = ay - by;
+  const double dz = az - bz;
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
 static inline double calculatePerspectiveRatio(const ProjectionContext& ctx,
@@ -1754,6 +1792,26 @@ static bool prepareDrawSpriteImageInternal(
       }
     }
 
+  SpriteLocation baseLngLat = bucketItem.spriteLocation;
+  if (hasOriginLocation(entry)) {
+    SpriteLocation unprojected{};
+    if (unprojectSpritePoint(projectionContext,
+                             SpritePoint{baseProjected.x, baseProjected.y},
+                             unprojected)) {
+      baseLngLat = unprojected;
+    }
+  }
+  baseLngLat.z = bucketItem.spriteLocation.z;
+
+  double cameraDistance = std::numeric_limits<double>::infinity();
+  if (std::isfinite(frame.cameraLng) && std::isfinite(frame.cameraLat)) {
+    SpriteLocation cameraLocation{frame.cameraLng,
+                                  frame.cameraLat,
+                                  frame.cameraAltitude};
+    cameraDistance =
+        calculateDistanceBetweenLocations(cameraLocation, baseLngLat);
+  }
+
   const SpriteAnchor anchor = resolveAnchor(entry);
   const SpriteImageOffset offset = resolveOffset(entry);
   const double imageScale = resolveImageScale(entry);
@@ -1794,16 +1852,6 @@ static bool prepareDrawSpriteImageInternal(
   if (isSurface) {
     if (!clipContextAvailable || projectionContext.mercatorMatrix == nullptr) {
       return false;
-    }
-
-    SpriteLocation baseLngLat = bucketItem.spriteLocation;
-    if (hasOriginLocation(entry)) {
-      SpriteLocation unprojected{};
-      if (unprojectSpritePoint(projectionContext,
-                               SpritePoint{baseProjected.x, baseProjected.y},
-                               unprojected)) {
-        baseLngLat = unprojected;
-      }
     }
 
     SurfaceCenterParams params{};
@@ -2084,6 +2132,7 @@ static bool prepareDrawSpriteImageInternal(
   itemBase[cursor++] = billboardAnchorY;
   itemBase[cursor++] = billboardSin;
   itemBase[cursor++] = billboardCos;
+  itemBase[cursor++] = cameraDistance;
 
   double* vertexPtr = itemBase + RESULT_COMMON_ITEM_LENGTH;
   std::copy(vertexData.begin(), vertexData.end(), vertexPtr);

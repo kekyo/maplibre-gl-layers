@@ -12,6 +12,7 @@ import {
   collectDepthSortedItemsInternal,
   prepareDrawSpriteImageInternal,
   processInterpolationsInternal,
+  __calculationHostTestInternals,
   type ProcessInterpolationsEvaluationHandlers,
   type ProcessInterpolationPresetRequests,
 } from '../../src/host/calculationHost';
@@ -40,6 +41,7 @@ import type {
   PrepareDrawSpriteImageParamsBefore,
   PrepareDrawSpriteImageParamsAfter,
   PreparedDrawSpriteImageParams,
+  RenderInterpolationParams,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -50,6 +52,7 @@ import type {
   SpriteImageOffset,
   SpriteLocation,
   SpritePoint,
+  SpriteInterpolationOptions,
 } from '../../src/types';
 import {
   EPS_NDC,
@@ -95,6 +98,7 @@ type FakeProjectionHostOptions = {
         location: Readonly<SpriteLocation>,
         cached?: SpriteMercatorCoordinate
       ) => number);
+  readonly cameraLocation?: SpriteLocation;
 };
 
 const createFakeProjectionHost = (
@@ -132,6 +136,8 @@ const createFakeProjectionHost = (
   const zoom = options.zoom ?? 10;
   const perspective = options.perspectiveRatio;
   const defaultRatio = typeof perspective === 'number' ? perspective : 8;
+  const cameraLocation =
+    options.cameraLocation ?? ({ lng: 0, lat: 0, z: 0 } as SpriteLocation);
 
   const calculatePerspectiveRatio: ProjectionHost['calculatePerspectiveRatio'] =
     typeof perspective === 'function' ? perspective : () => defaultRatio;
@@ -145,6 +151,7 @@ const createFakeProjectionHost = (
     project,
     unproject,
     calculatePerspectiveRatio,
+    getCameraLocation: () => ({ ...cameraLocation }),
     release,
   };
 };
@@ -196,6 +203,7 @@ const createImageState = (
     originReferenceKey: overrides.originReferenceKey ?? originReferenceKey,
     originRenderTargetIndex:
       overrides.originRenderTargetIndex ?? SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
+    visibilityDistanceMeters: overrides.visibilityDistanceMeters,
     rotationInterpolationState: overrides.rotationInterpolationState ?? null,
     rotationInterpolationOptions:
       overrides.rotationInterpolationOptions ?? null,
@@ -203,6 +211,9 @@ const createImageState = (
     offsetMetersInterpolationState:
       overrides.offsetMetersInterpolationState ?? null,
     opacityInterpolationState: overrides.opacityInterpolationState ?? null,
+    opacityInterpolationOptions: overrides.opacityInterpolationOptions ?? null,
+    opacityTargetValue: overrides.opacityTargetValue ?? initialOpacity,
+    lodLastCommandOpacity: overrides.lodLastCommandOpacity ?? initialOpacity,
     lastCommandRotateDeg: overrides.lastCommandRotateDeg ?? 0,
     lastCommandOffsetDeg: overrides.lastCommandOffsetDeg ?? 0,
     lastCommandOffsetMeters: overrides.lastCommandOffsetMeters ?? 0,
@@ -744,6 +755,35 @@ describe('prepareDrawSpriteImages', () => {
     expect(image.surfaceShaderInputs).toBeUndefined();
   });
 
+  it('calculates camera distance for prepared sprites', () => {
+    const resource = createImageResource('icon-distance');
+    const image = createImageState({ imageId: 'icon-distance', order: 0 });
+    const sprite = createSpriteState('sprite-distance', [image], {
+      currentLocation: { lng: 10, lat: 10, z: 0 },
+    });
+
+    const context = createCollectContext({
+      bucket: [[sprite, image] as const],
+      images: new Map([['icon-distance', resource]]),
+      projectionHostOptions: {
+        cameraLocation: { lng: 10, lat: 10, z: 750 },
+      },
+    });
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
+
+    const prepared = prepareItems(context, items);
+
+    expect(prepared).toHaveLength(1);
+    const draw = prepared[0]!;
+    expect(draw.cameraDistanceMeters).toBeCloseTo(750, 5);
+  });
+
   it('propagates interpolated opacity into prepared draw params', () => {
     const resource = createImageResource('icon-fade');
     const image = createImageState({ imageId: 'icon-fade', order: 0 });
@@ -770,6 +810,130 @@ describe('prepareDrawSpriteImages', () => {
     expect(prepared).toHaveLength(1);
     const singlePrepared = prepared[0]!;
     expect(singlePrepared.opacity).toBeCloseTo(0.5, 6);
+  });
+
+  it('applies visibility distance gating to opacity', () => {
+    const resource = createImageResource('icon-lod');
+    const image = createImageState({
+      imageId: 'icon-lod',
+      order: 0,
+      visibilityDistanceMeters: 5,
+    });
+    const sprite = createSpriteState('sprite-lod', [image]);
+
+    const context = createCollectContext({
+      bucket: [[sprite, image] as const],
+      images: new Map([['icon-lod', resource]]),
+      projectionHostOptions: {
+        cameraLocation: { lng: 0, lat: 0, z: 100 },
+      },
+    });
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
+
+    const prepared = prepareItems(context, items);
+
+    __calculationHostTestInternals.applyVisibilityDistanceLod(prepared);
+    expect(image.opacityTargetValue).toBe(0);
+    const params: RenderInterpolationParams<null> = {
+      sprites: [sprite],
+      timestamp: 0,
+    };
+    __calculationHostTestInternals.processOpacityInterpolationsAfterPreparation(
+      params,
+      prepared
+    );
+    __calculationHostTestInternals.syncPreparedOpacities(prepared);
+
+    expect(prepared[0]?.opacity).toBe(0);
+  });
+
+  it('uses interpolation when fading due to visibility distance', () => {
+    const resource = createImageResource('icon-lod-fade');
+    const fadeOptions: SpriteInterpolationOptions = {
+      durationMs: 1000,
+      easing: (t) => t,
+      mode: 'feedback',
+    };
+    const image = createImageState({
+      imageId: 'icon-lod-fade',
+      order: 0,
+      visibilityDistanceMeters: 5,
+      opacityInterpolationOptions: fadeOptions,
+    });
+    const sprite = createSpriteState('sprite-lod-fade', [image]);
+
+    const context = createCollectContext({
+      bucket: [[sprite, image] as const],
+      images: new Map([['icon-lod-fade', resource]]),
+      projectionHostOptions: {
+        cameraLocation: { lng: 0, lat: 0, z: 100 },
+      },
+    });
+    const items = collectDepthSortedItemsInternal(
+      context.projectionHost,
+      context.zoom,
+      context.zoomScaleFactor,
+      context.originCenterCache,
+      context.paramsBefore
+    ) as DepthItem<null>[];
+
+    const prepared = prepareItems(context, items);
+
+    __calculationHostTestInternals.applyVisibilityDistanceLod(prepared);
+    const params: RenderInterpolationParams<null> = {
+      sprites: [sprite],
+      timestamp: 0,
+    };
+    const result =
+      __calculationHostTestInternals.processOpacityInterpolationsAfterPreparation(
+        params,
+        prepared
+      );
+    expect(result.hasActiveInterpolation).toBe(true);
+    expect(image.opacityInterpolationState).not.toBeNull();
+  });
+
+  it('advances opacity interpolation when processed after preparation', () => {
+    const fadeOptions: SpriteInterpolationOptions = {
+      durationMs: 500,
+      easing: (t) => t,
+      mode: 'feedback',
+    };
+    const image = createImageState({
+      imageId: 'icon-opacity-step',
+      order: 0,
+      opacityInterpolationOptions: fadeOptions,
+    });
+    applyOpacityUpdate(image, 0, fadeOptions);
+    const sprite = createSpriteState('sprite-opacity-step', [image]);
+
+    const initialParams: RenderInterpolationParams<null> = {
+      sprites: [sprite],
+      timestamp: 0,
+    };
+    __calculationHostTestInternals.processOpacityInterpolationsAfterPreparation(
+      initialParams,
+      []
+    );
+    expect(image.opacityInterpolationState?.startTimestamp).toBe(0);
+    expect(image.opacity).toBeCloseTo(1, 6);
+
+    const nextParams: RenderInterpolationParams<null> = {
+      sprites: [sprite],
+      timestamp: 250,
+    };
+    __calculationHostTestInternals.processOpacityInterpolationsAfterPreparation(
+      nextParams,
+      []
+    );
+    expect(image.opacity).toBeCloseTo(0.5, 6);
+    expect(image.opacityInterpolationState?.startTimestamp).toBe(0);
   });
 
   it('uses billboard shader geometry when enabled', () => {

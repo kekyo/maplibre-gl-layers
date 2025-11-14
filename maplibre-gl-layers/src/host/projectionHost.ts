@@ -60,6 +60,7 @@ export interface PreparedProjectionState {
   readonly pixelPerMeter: number;
   readonly cameraToCenterDistance: number;
   readonly clipContext: ClipContext | null;
+  readonly cameraLocation: SpriteLocation | null;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -258,6 +259,7 @@ export const prepareProjectionState = (
       pixelPerMeter: 0,
       cameraToCenterDistance: 0,
       clipContext: null,
+      cameraLocation: null,
     };
   }
 
@@ -372,6 +374,16 @@ export const prepareProjectionState = (
     ? { mercatorMatrix }
     : null;
 
+  const pixelPerMeterSafe = pixelPerMeter || 1;
+  const cameraAltitude =
+    (Math.cos(pitchRad) * (cameraToCenterDistance || 1)) / pixelPerMeterSafe +
+    centerElevation;
+  const cameraLocation: SpriteLocation = {
+    lng: centerLng,
+    lat: centerLat,
+    z: cameraAltitude,
+  };
+
   return {
     zoom,
     mercatorMatrix,
@@ -381,6 +393,7 @@ export const prepareProjectionState = (
     pixelPerMeter,
     cameraToCenterDistance,
     clipContext,
+    cameraLocation,
   };
 };
 
@@ -407,6 +420,20 @@ export const createProjectionHost = (
    * @returns {ClipContext | null} Clip context or `null` when the transform is not ready.
    */
   const getClipContext = (): ClipContext | null => state.clipContext;
+  const getCameraLocation = (): SpriteLocation | null => {
+    const location = state.cameraLocation;
+    if (!location) {
+      return null;
+    }
+    const result: SpriteLocation = {
+      lng: location.lng,
+      lat: location.lat,
+    };
+    if (location.z !== undefined) {
+      result.z = location.z;
+    }
+    return result;
+  };
 
   /**
    * Get mercator coordinate from the location
@@ -572,6 +599,7 @@ export const createProjectionHost = (
     project,
     unproject,
     calculatePerspectiveRatio,
+    getCameraLocation,
     release,
   };
 };

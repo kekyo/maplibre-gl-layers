@@ -62,6 +62,9 @@ import {
 import {
   createCalculationHost,
   DEFAULT_RENDER_INTERPOLATION_RESULT,
+  processOpacityInterpolationsAfterPreparation,
+  applyVisibilityDistanceLod,
+  syncPreparedOpacities,
   type ProcessInterpolationPresetRequests,
 } from './calculationHost';
 import {
@@ -435,15 +438,20 @@ const processInterpolationsWithWasm = <TTag>(
           return;
         }
 
-        const hasDistanceInterpolation =
-          image.offsetMetersInterpolationState !== null ||
-          image.opacityInterpolationState !== null;
-        if (hasDistanceInterpolation) {
+        const hasOffsetMetersInterpolation =
+          image.offsetMetersInterpolationState !== null;
+        if (hasOffsetMetersInterpolation) {
           collectDistanceInterpolationWorkItems(
             image,
-            distanceInterpolationWorkItems
+            distanceInterpolationWorkItems,
+            {
+              includeOpacity: false,
+            }
           );
         }
+
+        const hasOpacityInterpolation =
+          image.opacityInterpolationState !== null;
 
         const hasDegreeInterpolation =
           image.rotationInterpolationState !== null ||
@@ -459,8 +467,11 @@ const processInterpolationsWithWasm = <TTag>(
           Record<ImageInterpolationStepperId, boolean>
         > = {};
         let shouldSkipChannels = false;
-        if (hasDistanceInterpolation) {
+        if (hasOffsetMetersInterpolation) {
           skipChannels.offsetMeters = true;
+          shouldSkipChannels = true;
+        }
+        if (hasOpacityInterpolation) {
           skipChannels.opacity = true;
           shouldSkipChannels = true;
         }
@@ -794,7 +805,7 @@ export const createWasmCalculateSurfaceDepthKey = (
  */
 
 const INPUT_HEADER_LENGTH = 15;
-const INPUT_FRAME_CONSTANT_LENGTH = 24;
+const INPUT_FRAME_CONSTANT_LENGTH = 27;
 const INPUT_MATRIX_LENGTH = 48;
 const RESOURCE_STRIDE = 9;
 const SPRITE_STRIDE = 6;
@@ -831,7 +842,8 @@ const RESULT_COMMON_ITEM_LENGTH =
   4 + // spriteIndex,imageIndex,resourceIndex,opacity
   4 + // screenToClip scale/offset
   3 + // useShaderSurface, surfaceClipEnabled, useShaderBillboard
-  RESULT_BILLBOARD_UNIFORM_LENGTH;
+  RESULT_BILLBOARD_UNIFORM_LENGTH +
+  1; // cameraDistanceMeters
 const RESULT_ITEM_STRIDE =
   RESULT_COMMON_ITEM_LENGTH +
   RESULT_VERTEX_COMPONENT_LENGTH +
@@ -1020,6 +1032,7 @@ const converToPreparedDrawImageParams = <TTag>(
     };
     const billboardSin = buffer[cursor++] ?? 0;
     const billboardCos = buffer[cursor++] ?? 0;
+    const cameraDistance = buffer[cursor++] ?? Number.POSITIVE_INFINITY;
 
     const vertexStart = base + RESULT_COMMON_ITEM_LENGTH;
     const vertexEnd = vertexStart + RESULT_VERTEX_COMPONENT_LENGTH;
@@ -1183,6 +1196,7 @@ const converToPreparedDrawImageParams = <TTag>(
       imageResource,
       vertexData,
       opacity,
+      cameraDistanceMeters: cameraDistance,
       hitTestCorners,
       screenToClip,
       useShaderSurface,
@@ -1383,6 +1397,10 @@ const convertToWasmProjectionState = <TTag>(
     frameConstView[fcCursor++] = ORDER_MAX;
     frameConstView[fcCursor++] = EPS_NDC;
     frameConstView[fcCursor++] = boolToNumber(ENABLE_NDC_BIAS_SURFACE);
+    const cameraLocation = preparedProjection.cameraLocation;
+    frameConstView[fcCursor++] = cameraLocation?.lng ?? 0;
+    frameConstView[fcCursor++] = cameraLocation?.lat ?? 0;
+    frameConstView[fcCursor++] = cameraLocation?.z ?? 0;
 
     writeMatrix(
       parameterBuffer,
@@ -1577,7 +1595,7 @@ export const createWasmCalculationHost = <TTag>(
     ): ProcessDrawSpriteImagesResult<TTag> =>
       runWithFallback(
         () => {
-          const interpolationResult = params.interpolationParams
+          let interpolationResult = params.interpolationParams
             ? processInterpolationsWithWasm(wasm, params.interpolationParams)
             : DEFAULT_RENDER_INTERPOLATION_RESULT;
           const preparedItems = params.prepareParams
@@ -1588,6 +1606,22 @@ export const createWasmCalculationHost = <TTag>(
                 params.prepareParams
               )
             : [];
+          if (preparedItems.length > 0) {
+            applyVisibilityDistanceLod(preparedItems);
+          }
+          if (params.interpolationParams) {
+            const opacityResult = processOpacityInterpolationsAfterPreparation(
+              params.interpolationParams,
+              preparedItems
+            );
+            interpolationResult = {
+              handled: interpolationResult.handled || opacityResult.handled,
+              hasActiveInterpolation:
+                interpolationResult.hasActiveInterpolation ||
+                opacityResult.hasActiveInterpolation,
+            };
+          }
+          syncPreparedOpacities(preparedItems);
           return {
             interpolationResult,
             preparedItems,
