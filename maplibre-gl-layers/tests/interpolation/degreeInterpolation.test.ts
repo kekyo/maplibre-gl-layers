@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createDegreeInterpolationState,
   evaluateDegreeInterpolation,
-} from '../src/interpolation/degreeInterpolation';
+} from '../../src/interpolation/degreeInterpolation';
 
 describe('createDegreeInterpolationState', () => {
   it('requires interpolation for non-zero angular delta', () => {

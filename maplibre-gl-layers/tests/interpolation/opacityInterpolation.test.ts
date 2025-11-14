@@ -8,9 +8,9 @@ import { describe, expect, it } from 'vitest';
 import {
   applyOpacityUpdate,
   stepSpriteImageInterpolations,
-} from '../src/interpolation/interpolationChannels';
-import type { InternalSpriteImageState } from '../src/internalTypes';
-import type { SpriteInterpolationOptions } from '../src/types';
+} from '../../src/interpolation/interpolationChannels';
+import type { InternalSpriteImageState } from '../../src/internalTypes';
+import type { SpriteInterpolationOptions } from '../../src/types';
 
 const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   subLayer: 0,

@@ -7,29 +7,29 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MercatorCoordinate, type Map as MapLibreMap } from 'maplibre-gl';
 
-import { createMapLibreProjectionHost } from '../src/host/mapLibreProjectionHost';
+import { createMapLibreProjectionHost } from '../../src/host/mapLibreProjectionHost';
 import {
   collectDepthSortedItemsInternal,
   prepareDrawSpriteImageInternal,
   processInterpolationsInternal,
   type ProcessInterpolationsEvaluationHandlers,
   type ProcessInterpolationPresetRequests,
-} from '../src/host/calculationHost';
+} from '../../src/host/calculationHost';
 import {
   createImageHandleBufferController,
   createRenderTargetBucketBuffers,
   createSpriteOriginReference,
-} from '../src/utils/utils';
+} from '../../src/utils/utils';
 import {
   applyOpacityUpdate,
   stepSpriteImageInterpolations,
-} from '../src/interpolation/interpolationChannels';
+} from '../../src/interpolation/interpolationChannels';
 import {
   calculateBillboardAnchorShiftPixels,
   calculateZoomScaleFactor,
   resolveScalingOptions,
   type ResolvedSpriteScalingOptions,
-} from '../src/utils/math';
+} from '../../src/utils/math';
 import type {
   ClipContext,
   InternalSpriteCurrentState,
@@ -40,26 +40,29 @@ import type {
   PrepareDrawSpriteImageParamsBefore,
   PrepareDrawSpriteImageParamsAfter,
   PreparedDrawSpriteImageParams,
-} from '../src/internalTypes';
+} from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
-} from '../src/internalTypes';
+} from '../../src/internalTypes';
 import type {
   SpriteAnchor,
   SpriteImageOffset,
   SpriteLocation,
   SpritePoint,
-} from '../src/types';
+} from '../../src/types';
 import {
   EPS_NDC,
   ORDER_BUCKET,
   ORDER_MAX,
   TRIANGLE_INDICES,
-} from '../src/const';
-import { BILLBOARD_BASE_CORNERS, SURFACE_BASE_CORNERS } from '../src/gl/shader';
-import { createDistanceInterpolationState } from '../src/interpolation/distanceInterpolation';
-import { createInterpolationState } from '../src/interpolation/interpolation';
+} from '../../src/const';
+import {
+  BILLBOARD_BASE_CORNERS,
+  SURFACE_BASE_CORNERS,
+} from '../../src/gl/shader';
+import { createDistanceInterpolationState } from '../../src/interpolation/distanceInterpolation';
+import { createInterpolationState } from '../../src/interpolation/interpolation';
 
 const SCALE = 256;
 const IDENTITY_MATRIX = new Float64Array([

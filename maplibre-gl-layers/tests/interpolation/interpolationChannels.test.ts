@@ -5,17 +5,17 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import { describe, expect, it } from 'vitest';
-import type { InternalSpriteImageState } from '../src/internalTypes';
+import type { InternalSpriteImageState } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
-} from '../src/internalTypes';
+} from '../../src/internalTypes';
 import {
   applyOffsetUpdate,
   clearOffsetDegInterpolation,
   clearOffsetMetersInterpolation,
   stepSpriteImageInterpolations,
-} from '../src/interpolation/interpolationChannels';
+} from '../../src/interpolation/interpolationChannels';
 
 const createImageState = (): InternalSpriteImageState => ({
   subLayer: 0,

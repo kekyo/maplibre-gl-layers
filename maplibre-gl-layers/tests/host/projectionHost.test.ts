@@ -11,13 +11,13 @@ import {
   createProjectionHost,
   createProjectionHostParamsFromMapLibre,
   type ProjectionHostParams,
-} from '../src/host/projectionHost';
-import { createWasmProjectionHost } from '../src/host/wasmProjectionHost';
-import { initializeWasmHost } from '../src/host/wasmHost';
-import { createMapLibreProjectionHost } from '../src/host/mapLibreProjectionHost';
-import type { ProjectionHost } from '../src/internalTypes';
-import type { SpriteLocation } from '../src/types';
-import { DEG2RAD, TILE_SIZE } from '../src/const';
+} from '../../src/host/projectionHost';
+import { createWasmProjectionHost } from '../../src/host/wasmProjectionHost';
+import { initializeWasmHost } from '../../src/host/wasmHost';
+import { createMapLibreProjectionHost } from '../../src/host/mapLibreProjectionHost';
+import type { ProjectionHost } from '../../src/internalTypes';
+import type { SpriteLocation } from '../../src/types';
+import { DEG2RAD, TILE_SIZE } from '../../src/const';
 
 //////////////////////////////////////////////////////////////////////////////////////
 

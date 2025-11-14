@@ -4,7 +4,7 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { Releaseable } from '../internalTypes';
+import type { Releasable } from '../internalTypes';
 import type { SpriteLayerCalculationVariant } from '../types';
 import wasmConfig from '../wasm/config.json' assert { type: 'json' };
 
@@ -465,7 +465,7 @@ const instantiateThreadedProjectionWasm =
  */
 const instantiateProjectionWasm = async (
   variant: WasmBinaryVariant
-): Promise<WasmHost & Releaseable> => {
+): Promise<WasmHost & Releasable> => {
   if (variant === 'simd-mt') {
     const threadedExports = await instantiateThreadedProjectionWasm();
     return createWasmHostFromExports(threadedExports);
@@ -483,7 +483,7 @@ const instantiateProjectionWasm = async (
 
 const createWasmHostFromExports = (
   exports: RawProjectionWasmExports
-): WasmHost & Releaseable => {
+): WasmHost & Releasable => {
   if (typeof exports.__wasm_call_ctors === 'function') {
     exports.__wasm_call_ctors();
   }
@@ -850,7 +850,7 @@ const createWasmHostFromExports = (
 
 const initializeWasmHostInternal = async (
   preferredVariant: WasmVariant
-): Promise<[WasmVariant, (WasmHost & Releaseable) | undefined]> => {
+): Promise<[WasmVariant, (WasmHost & Releasable) | undefined]> => {
   if (preferredVariant === 'disabled') {
     console.log(
       'maplibre-gl-layers: Wasm execution disabled by configuration.'
@@ -893,7 +893,7 @@ const initializeWasmHostInternal = async (
 };
 
 let currentVariant: WasmVariant = 'disabled';
-let currentWasmHost: (WasmHost & Releaseable) | undefined;
+let currentWasmHost: (WasmHost & Releasable) | undefined;
 
 /**
  * Wasm initialization options.

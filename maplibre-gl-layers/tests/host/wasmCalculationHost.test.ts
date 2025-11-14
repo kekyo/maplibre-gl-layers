@@ -9,15 +9,15 @@ import { describe, expect, it } from 'vitest';
 import {
   __wasmCalculationTestInternals,
   type WasmCalculationInteropDependencies,
-} from '../src/host/wasmCalculationHost';
+} from '../../src/host/wasmCalculationHost';
 import {
   type BufferHolder,
   type TypedArrayBufferView,
   type TypedArrayConstructor,
   type TypedArrayElement,
   type WasmHost,
-} from '../src/host/wasmHost';
-import { createIdHandler } from '../src/utils/utils';
+} from '../../src/host/wasmHost';
+import { createIdHandler } from '../../src/utils/utils';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
@@ -30,19 +30,19 @@ import type {
   DistanceInterpolationEvaluationResult,
   DegreeInterpolationEvaluationResult,
   SpriteInterpolationEvaluationResult,
-} from '../src/internalTypes';
-import { ORDER_BUCKET } from '../src/const';
+} from '../../src/internalTypes';
+import { ORDER_BUCKET } from '../../src/const';
 import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
-} from '../src/internalTypes';
+} from '../../src/internalTypes';
 import type {
   SpriteAnchor,
   SpriteImageOffset,
   SpriteLocation,
-} from '../src/types';
-import type { ResolvedSpriteScalingOptions } from '../src/utils/math';
-import type { ProjectionHostParams } from '../src/host/projectionHost';
+} from '../../src/types';
+import type { ResolvedSpriteScalingOptions } from '../../src/utils/math';
+import type { ProjectionHostParams } from '../../src/host/projectionHost';
 
 const RESULT_HEADER_LENGTH = 7;
 const RESULT_VERTEX_COMPONENT_LENGTH = 36;

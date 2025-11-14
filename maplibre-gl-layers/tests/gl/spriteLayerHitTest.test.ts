@@ -6,19 +6,19 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { MercatorCoordinate } from 'maplibre-gl';
-import type { ProjectionHostParams } from '../src/host/projectionHost';
+import type { ProjectionHostParams } from '../../src/host/projectionHost';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
-} from '../src/internalTypes';
+} from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
-} from '../src/internalTypes';
+} from '../../src/internalTypes';
 
-vi.mock('../src/host/projectionHost', async (importOriginal) => {
+vi.mock('../../src/host/projectionHost', async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import('../src/host/projectionHost')>();
+    await importOriginal<typeof import('../../src/host/projectionHost')>();
   const paramsToMap = new WeakMap<ProjectionHostParams, FakeMap>();
 
   return {
@@ -70,8 +70,8 @@ vi.mock('../src/host/projectionHost', async (importOriginal) => {
   };
 });
 
-import { createSpriteLayer } from '../src/SpriteLayer';
-import type { SpriteLayerClickEvent } from '../src/types';
+import { createSpriteLayer } from '../../src/SpriteLayer';
+import type { SpriteLayerClickEvent } from '../../src/types';
 
 class FakeCanvas {
   readonly width: number;

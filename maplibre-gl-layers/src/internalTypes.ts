@@ -210,14 +210,14 @@ export interface SpriteMercatorCoordinate {
   readonly z: number;
 }
 
-export interface Releaseable {
+export interface Releasable {
   readonly release: () => void;
 }
 
 /**
  * Abstraction that exposes projection-related helpers.
  */
-export interface ProjectionHost extends Releaseable {
+export interface ProjectionHost extends Releasable {
   /**
    * Get current zoom level.
    * @returns Zoom level.
@@ -366,7 +366,7 @@ export interface RenderInterpolationResult {
  * Abstraction that render calculations.
  * @param TTag Tag type.
  */
-export interface RenderCalculationHost<TTag> extends Releaseable {
+export interface RenderCalculationHost<TTag> extends Releasable {
   readonly prepareDrawSpriteImages: (
     params: PrepareDrawSpriteImageParams<TTag>
   ) => PreparedDrawSpriteImageParams<TTag>[];

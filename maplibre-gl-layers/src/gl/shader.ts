@@ -14,7 +14,7 @@
 import type { SpriteAnchor, SpriteScreenPoint } from '../types';
 import type {
   PreparedDrawSpriteImageParams,
-  Releaseable,
+  Releasable,
   SurfaceShaderInputs,
 } from '../internalTypes';
 import { DEG2RAD, UV_CORNERS } from '../const';
@@ -281,7 +281,7 @@ const SURFACE_CLIP_MATRIX_IDENTITY = new Float32Array([
 const FLOATS_PER_VERTEX = VERTEX_COMPONENT_COUNT;
 const FLOATS_PER_SPRITE = QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT;
 
-export interface SpriteDrawProgram<TTag> extends Releaseable {
+export interface SpriteDrawProgram<TTag> extends Releasable {
   beginFrame(): void;
   uploadVertexBatch(items: PreparedDrawSpriteImageParams<TTag>[]): void;
   draw(prepared: PreparedDrawSpriteImageParams<TTag>): boolean;
@@ -757,7 +757,7 @@ export const createSpriteDrawProgram = <TTag>(
   };
 };
 
-export interface DebugOutlineRenderer extends Releaseable {
+export interface DebugOutlineRenderer extends Releasable {
   begin(
     screenToClipScaleX: number,
     screenToClipScaleY: number,

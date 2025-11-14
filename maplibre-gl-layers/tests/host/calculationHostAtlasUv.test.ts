@@ -7,14 +7,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MercatorCoordinate } from 'maplibre-gl';
 
-import { createCalculationHost } from '../src/host/calculationHost';
-import { createWasmCalculationHost } from '../src/host/wasmCalculationHost';
+import { createCalculationHost } from '../../src/host/calculationHost';
+import { createWasmCalculationHost } from '../../src/host/wasmCalculationHost';
 import {
   createImageHandleBufferController,
   createIdHandler,
   createRenderTargetBucketBuffers,
   createSpriteOriginReference,
-} from '../src/utils/utils';
+} from '../../src/utils/utils';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
@@ -22,27 +22,27 @@ import type {
   RegisteredImage,
   RenderCalculationHost,
   RenderTargetEntryLike,
-} from '../src/internalTypes';
+} from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
-} from '../src/internalTypes';
+} from '../../src/internalTypes';
 import type {
   SpriteAnchor,
   SpriteImageOffset,
   SpriteLocation,
-} from '../src/types';
+} from '../../src/types';
 import {
   createProjectionHost,
   type ProjectionHostParams,
-} from '../src/host/projectionHost';
-import type { WasmCalculationInteropDependencies } from '../src/host/wasmCalculationHost';
-import { DEFAULT_ANCHOR, DEFAULT_IMAGE_OFFSET } from '../src/const';
+} from '../../src/host/projectionHost';
+import type { WasmCalculationInteropDependencies } from '../../src/host/wasmCalculationHost';
+import { DEFAULT_ANCHOR, DEFAULT_IMAGE_OFFSET } from '../../src/const';
 import {
   POSITION_COMPONENT_COUNT,
   VERTEX_COMPONENT_COUNT,
-} from '../src/gl/shader';
-import { initializeWasmHost, releaseWasmHost } from '../src/host/wasmHost';
+} from '../../src/gl/shader';
+import { initializeWasmHost, releaseWasmHost } from '../../src/host/wasmHost';
 
 const PROJECTION_PARAMS: ProjectionHostParams = {
   zoom: 12,

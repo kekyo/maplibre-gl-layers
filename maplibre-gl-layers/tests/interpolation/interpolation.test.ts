@@ -8,13 +8,13 @@ import { describe, expect, it } from 'vitest';
 import {
   createInterpolationState,
   evaluateInterpolation,
-} from '../src/interpolation/interpolation';
-import { linearEasing } from '../src/interpolation/easing';
+} from '../../src/interpolation/interpolation';
+import { linearEasing } from '../../src/interpolation/easing';
 import {
   cloneSpriteLocation,
   lerpSpriteLocation,
   spriteLocationsEqual,
-} from '../src/utils/math';
+} from '../../src/utils/math';
 
 describe('createInterpolationState', () => {
   it('creates feedback interpolation state when locations differ', () => {

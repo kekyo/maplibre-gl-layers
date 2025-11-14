@@ -16,7 +16,7 @@ import type {
   MutableSpriteScreenPoint,
   PreparedDrawSpriteImageParams,
   PrepareDrawSpriteImageParams,
-  Releaseable,
+  Releasable,
   RegisteredImage,
   RenderCalculationHost,
   RenderInterpolationParams,
@@ -914,7 +914,7 @@ const ensureHitTestCorners = (
   return imageEntry.hitTestCorners;
 };
 
-interface PreparedInputBuffer extends Releaseable {
+interface PreparedInputBuffer extends Releasable {
   readonly parameterHolder: BufferHolder<Float64Array>;
   readonly resultItemCount: number;
 }
