@@ -6,12 +6,6 @@
 
 import { type Map as MapLibreMap } from 'maplibre-gl';
 
-import {
-  DEFAULT_ANCHOR,
-  DEFAULT_IMAGE_OFFSET,
-  HIT_TEST_EPSILON,
-  HIT_TEST_WORLD_BOUNDS,
-} from '../const';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
@@ -36,11 +30,16 @@ import {
 import { normalizeAngleDeg } from '../interpolation/rotationInterpolation';
 import {
   createLooseQuadTree,
-  type LooseQuadTree,
   type Item as LooseQuadTreeItem,
   type Rect as LooseQuadTreeRect,
 } from '../utils/looseQuadTree';
 import { DEBUG_OUTLINE_CORNER_ORDER } from './shader';
+import {
+  DEFAULT_ANCHOR,
+  DEFAULT_IMAGE_OFFSET,
+  HIT_TEST_EPSILON,
+  HIT_TEST_WORLD_BOUNDS,
+} from '../const';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -121,7 +120,7 @@ export const createHitTestController = <T>({
   images,
   getResolvedScaling,
 }: HitTestControllerParams): HitTestController<T> => {
-  const hitTestTree: LooseQuadTree<HitTestTreeState<T>> = createLooseQuadTree({
+  const hitTestTree = createLooseQuadTree<HitTestTreeState<T>>({
     bounds: HIT_TEST_WORLD_BOUNDS,
   });
 

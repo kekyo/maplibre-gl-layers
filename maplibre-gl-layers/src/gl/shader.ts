@@ -19,6 +19,8 @@ import type {
 } from '../internalTypes';
 import { DEG2RAD, UV_CORNERS } from '../const';
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 /** Number of components per vertex (clipPosition.xyzw + uv.xy). */
 export const VERTEX_COMPONENT_COUNT = 6;
 /** Component count for clip-space position attributes. */
@@ -33,6 +35,8 @@ export const VERTEX_STRIDE = VERTEX_COMPONENT_COUNT * FLOAT_SIZE;
 export const UV_OFFSET = POSITION_COMPONENT_COUNT * FLOAT_SIZE;
 /** Vertex count required to draw one sprite as two triangles. */
 export const QUAD_VERTEX_COUNT = 6;
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 /** Shared vertex shader that converts screen-space vertices when requested. */
 export const VERTEX_SHADER_SOURCE = `
@@ -166,6 +170,8 @@ export const SURFACE_BASE_CORNERS: ReadonlyArray<readonly [number, number]> = [
   [-1, -1],
   [1, -1],
 ] as const;
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 export const computeBillboardCornersShaderModel = ({
   center,
