@@ -345,7 +345,7 @@ export interface RenderInterpolationFrameContext {
 }
 
 /**
- * Parameters passed into RenderCalculationHost.processInterpolations.
+ * Parameters consumed when processing sprite interpolations.
  */
 export interface RenderInterpolationParams<TTag> {
   readonly sprites: readonly InternalSpriteCurrentState<TTag>[];
@@ -354,11 +354,27 @@ export interface RenderInterpolationParams<TTag> {
 }
 
 /**
- * Result returned from RenderCalculationHost.processInterpolations.
+ * Result produced by sprite interpolation processing.
  */
 export interface RenderInterpolationResult {
   readonly handled: boolean;
   readonly hasActiveInterpolation: boolean;
+}
+
+/**
+ * Parameters passed into RenderCalculationHost.processDrawSpriteImages.
+ */
+export interface ProcessDrawSpriteImagesParams<TTag> {
+  readonly interpolationParams?: RenderInterpolationParams<TTag>;
+  readonly prepareParams?: PrepareDrawSpriteImageParams<TTag>;
+}
+
+/**
+ * Result returned from RenderCalculationHost.processDrawSpriteImages.
+ */
+export interface ProcessDrawSpriteImagesResult<TTag> {
+  readonly preparedItems: PreparedDrawSpriteImageParams<TTag>[];
+  readonly interpolationResult: RenderInterpolationResult;
 }
 
 /**
@@ -367,12 +383,9 @@ export interface RenderInterpolationResult {
  * @param TTag Tag type.
  */
 export interface RenderCalculationHost<TTag> extends Releasable {
-  readonly prepareDrawSpriteImages: (
-    params: PrepareDrawSpriteImageParams<TTag>
-  ) => PreparedDrawSpriteImageParams<TTag>[];
-  readonly processInterpolations: (
-    params: RenderInterpolationParams<TTag>
-  ) => RenderInterpolationResult;
+  readonly processDrawSpriteImages: (
+    params: ProcessDrawSpriteImagesParams<TTag>
+  ) => ProcessDrawSpriteImagesResult<TTag>;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////

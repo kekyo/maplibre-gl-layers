@@ -58,6 +58,8 @@ import type {
   RenderTargetEntryLike,
   RenderInterpolationParams,
   RenderInterpolationResult,
+  ProcessDrawSpriteImagesParams,
+  ProcessDrawSpriteImagesResult,
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
@@ -137,6 +139,11 @@ type OriginImageResolver<T> = (
   sprite: Readonly<InternalSpriteCurrentState<T>>,
   image: Readonly<InternalSpriteImageState>
 ) => InternalSpriteImageState | null;
+
+export const DEFAULT_RENDER_INTERPOLATION_RESULT: RenderInterpolationResult = {
+  handled: false,
+  hasActiveInterpolation: false,
+};
 
 interface DepthSortedItem<T> {
   readonly sprite: InternalSpriteCurrentState<T>;
@@ -1760,11 +1767,24 @@ export const processInterpolationsInternal = <TTag>(
 const createProjectionBoundCalculationHost = <TTag>(
   projectionHost: ProjectionHost
 ): RenderCalculationHost<TTag> => {
+  const processDrawSpriteImagesInternalWithInterpolations = (
+    params: ProcessDrawSpriteImagesParams<TTag>
+  ): ProcessDrawSpriteImagesResult<TTag> => {
+    const interpolationResult = params.interpolationParams
+      ? processInterpolationsInternal(params.interpolationParams)
+      : DEFAULT_RENDER_INTERPOLATION_RESULT;
+    const preparedItems = params.prepareParams
+      ? prepareDrawSpriteImages(projectionHost, params.prepareParams)
+      : [];
+    return {
+      interpolationResult,
+      preparedItems,
+    };
+  };
+
   return {
-    prepareDrawSpriteImages: (params) =>
-      prepareDrawSpriteImages(projectionHost, params),
-    processInterpolations: (interpolationParams) =>
-      processInterpolationsInternal(interpolationParams),
+    processDrawSpriteImages: (params) =>
+      processDrawSpriteImagesInternalWithInterpolations(params),
     release: projectionHost.release,
   };
 };

@@ -1712,26 +1712,19 @@ export const createSpriteLayer = <T = any>(
       frameCalculationHost = null;
     };
 
+    const interpolationParams: RenderInterpolationParams<T> | null =
+      spriteStateArray.length > 0
+        ? {
+            sprites: spriteStateArray,
+            timestamp,
+            frameContext: {
+              baseMetersPerPixel: resolvedScaling.metersPerPixel,
+              spriteMinPixel: resolvedScaling.spriteMinPixel,
+              spriteMaxPixel: resolvedScaling.spriteMaxPixel,
+            },
+          }
+        : null;
     let hasActiveInterpolation = false;
-    if (spriteStateArray.length > 0) {
-      const interpolationParams: RenderInterpolationParams<T> = {
-        sprites: spriteStateArray,
-        timestamp,
-        frameContext: {
-          baseMetersPerPixel: resolvedScaling.metersPerPixel,
-          spriteMinPixel: resolvedScaling.spriteMinPixel,
-          spriteMaxPixel: resolvedScaling.spriteMaxPixel,
-        },
-      };
-      const calculationHost = ensureCalculationHost();
-      const hostResult =
-        calculationHost.processInterpolations(interpolationParams);
-      hasActiveInterpolation = hostResult.hasActiveInterpolation;
-    }
-
-    if (hasActiveInterpolation) {
-      scheduleRender();
-    }
 
     const canvas = glContext.canvas as HTMLCanvasElement;
     const cssWidth = canvas.clientWidth;
@@ -1831,29 +1824,35 @@ export const createSpriteLayer = <T = any>(
             originReference,
           }
         );
-        const preparedItems = calculationHost.prepareDrawSpriteImages({
-          bucket: renderTargetEntries,
-          bucketBuffers,
-          imageResources,
-          imageHandleBuffers,
-          resolvedScaling,
-          clipContext,
-          baseMetersPerPixel,
-          spriteMinPixel,
-          spriteMaxPixel,
-          drawingBufferWidth,
-          drawingBufferHeight,
-          pixelRatio,
-          zoomScaleFactor,
-          identityScaleX,
-          identityScaleY,
-          identityOffsetX,
-          identityOffsetY,
-          screenToClipScaleX,
-          screenToClipScaleY,
-          screenToClipOffsetX,
-          screenToClipOffsetY,
+        const processResult = calculationHost.processDrawSpriteImages({
+          interpolationParams: interpolationParams ?? undefined,
+          prepareParams: {
+            bucket: renderTargetEntries,
+            bucketBuffers,
+            imageResources,
+            imageHandleBuffers,
+            resolvedScaling,
+            clipContext,
+            baseMetersPerPixel,
+            spriteMinPixel,
+            spriteMaxPixel,
+            drawingBufferWidth,
+            drawingBufferHeight,
+            pixelRatio,
+            zoomScaleFactor,
+            identityScaleX,
+            identityScaleY,
+            identityOffsetX,
+            identityOffsetY,
+            screenToClipScaleX,
+            screenToClipScaleY,
+            screenToClipOffsetX,
+            screenToClipOffsetY,
+          },
         });
+        hasActiveInterpolation =
+          processResult.interpolationResult.hasActiveInterpolation;
+        const preparedItems = processResult.preparedItems;
 
         drawProgram.uploadVertexBatch(preparedItems);
 
@@ -1888,6 +1887,17 @@ export const createSpriteLayer = <T = any>(
             drawPreparedSprite(prepared);
           }
         }
+      } else if (interpolationParams) {
+        const calculationHost = ensureCalculationHost();
+        const processResult = calculationHost.processDrawSpriteImages({
+          interpolationParams,
+        });
+        hasActiveInterpolation =
+          processResult.interpolationResult.hasActiveInterpolation;
+      }
+
+      if (hasActiveInterpolation) {
+        scheduleRender();
       }
 
       if (showDebugBounds && debugOutlineRenderer) {

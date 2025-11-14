@@ -21,6 +21,8 @@ import type {
   RenderCalculationHost,
   RenderInterpolationParams,
   RenderInterpolationResult,
+  ProcessDrawSpriteImagesParams,
+  ProcessDrawSpriteImagesResult,
   SurfaceShaderCornerState,
   SurfaceShaderInputs,
   SpriteOriginReference,
@@ -59,6 +61,7 @@ import {
 } from '../interpolation/interpolationChannels';
 import {
   createCalculationHost,
+  DEFAULT_RENDER_INTERPOLATION_RESULT,
   type ProcessInterpolationPresetRequests,
 } from './calculationHost';
 import {
@@ -1569,16 +1572,28 @@ export const createWasmCalculationHost = <TTag>(
   };
 
   return {
-    prepareDrawSpriteImages: (params) =>
+    processDrawSpriteImages: (
+      params: ProcessDrawSpriteImagesParams<TTag>
+    ): ProcessDrawSpriteImagesResult<TTag> =>
       runWithFallback(
-        () =>
-          prepareDrawSpriteImagesInternal<TTag>(wasm, wasmState, deps, params),
-        () => ensureFallbackHost().prepareDrawSpriteImages(params)
-      ),
-    processInterpolations: (params) =>
-      runWithFallback(
-        () => processInterpolationsWithWasm(wasm, params),
-        () => ensureFallbackHost().processInterpolations(params)
+        () => {
+          const interpolationResult = params.interpolationParams
+            ? processInterpolationsWithWasm(wasm, params.interpolationParams)
+            : DEFAULT_RENDER_INTERPOLATION_RESULT;
+          const preparedItems = params.prepareParams
+            ? prepareDrawSpriteImagesInternal<TTag>(
+                wasm,
+                wasmState,
+                deps,
+                params.prepareParams
+              )
+            : [];
+          return {
+            interpolationResult,
+            preparedItems,
+          };
+        },
+        () => ensureFallbackHost().processDrawSpriteImages(params)
       ),
     release: () => {
       releaseFallbackHost();

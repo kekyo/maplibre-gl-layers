@@ -19,6 +19,7 @@ import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
   PrepareDrawSpriteImageParams,
+  PreparedDrawSpriteImageParams,
   RegisteredImage,
   RenderCalculationHost,
   RenderTargetEntryLike,
@@ -310,9 +311,7 @@ const MULTI_REGION_SET: readonly AtlasRegion[] = [
 ];
 
 const assertPreparedUvs = (
-  preparedItems: ReturnType<
-    RenderCalculationHost<null>['prepareDrawSpriteImages']
-  >,
+  preparedItems: PreparedDrawSpriteImageParams<null>[],
   regions: readonly AtlasRegion[]
 ): void => {
   expect(preparedItems).toHaveLength(regions.length);
@@ -354,7 +353,9 @@ describe.each(HOST_FACTORIES)('calculation hosts atlas UVs (%s)', (factory) => {
     const { params, deps } = buildParams([SINGLE_REGION]);
     const host = factory.create(deps);
     try {
-      const prepared = host.prepareDrawSpriteImages(params);
+      const { preparedItems: prepared } = host.processDrawSpriteImages({
+        prepareParams: params,
+      });
       assertPreparedUvs(prepared, [SINGLE_REGION]);
     } finally {
       host.release();
@@ -365,7 +366,9 @@ describe.each(HOST_FACTORIES)('calculation hosts atlas UVs (%s)', (factory) => {
     const { params, deps } = buildParams(MULTI_REGION_SET);
     const host = factory.create(deps);
     try {
-      const prepared = host.prepareDrawSpriteImages(params);
+      const { preparedItems: prepared } = host.processDrawSpriteImages({
+        prepareParams: params,
+      });
       assertPreparedUvs(prepared, MULTI_REGION_SET);
     } finally {
       host.release();
