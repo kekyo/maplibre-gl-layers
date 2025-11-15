@@ -11,7 +11,6 @@
 import type {
   SpriteMode,
   SpriteAnchor,
-  SpriteImageOffset,
   SpriteInterpolationOptions,
   SpriteImageOriginLocation,
   SpriteLocation,
@@ -22,8 +21,9 @@ import type {
   EasingFunction,
   SpriteScreenPoint,
   SpritePoint,
+  SpriteEasingPresetName,
 } from './types';
-import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './math';
+import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -209,14 +209,29 @@ export interface SpriteMercatorCoordinate {
   readonly z: number;
 }
 
-export interface Releaseable {
+/**
+ * Mutable counterpart to {@link InterpolatedValues}, used internally so SpriteLayer
+ * can reuse object references while still exposing readonly snapshots publicly.
+ */
+export interface MutableInterpolatedValues<T> {
+  current: T;
+  from: T | undefined;
+  to: T | undefined;
+}
+
+export interface MutableSpriteImageInterpolatedOffset {
+  offsetMeters: MutableInterpolatedValues<number>;
+  offsetDeg: MutableInterpolatedValues<number>;
+}
+
+export interface Releasable {
   readonly release: () => void;
 }
 
 /**
  * Abstraction that exposes projection-related helpers.
  */
-export interface ProjectionHost extends Releaseable {
+export interface ProjectionHost extends Releasable {
   /**
    * Get current zoom level.
    * @returns Zoom level.
@@ -257,6 +272,7 @@ export interface ProjectionHost extends Releaseable {
     location: Readonly<SpriteLocation>,
     cachedMercator?: SpriteMercatorCoordinate
   ) => number;
+  readonly getCameraLocation: () => SpriteLocation | null;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -305,7 +321,8 @@ export interface PreparedDrawSpriteImageParams<T> {
   readonly imageEntry: InternalSpriteImageState;
   readonly imageResource: RegisteredImage;
   readonly vertexData: Float32Array;
-  readonly opacity: number;
+  opacity: number;
+  readonly cameraDistanceMeters: number;
   readonly hitTestCorners:
     | readonly [
         Readonly<SpriteScreenPoint>,
@@ -335,14 +352,56 @@ export interface PreparedDrawSpriteImageParams<T> {
 }
 
 /**
+ * Common frame parameters shared with interpolation processing.
+ */
+export interface RenderInterpolationFrameContext {
+  readonly baseMetersPerPixel: number;
+  readonly spriteMinPixel: number;
+  readonly spriteMaxPixel: number;
+}
+
+/**
+ * Parameters consumed when processing sprite interpolations.
+ */
+export interface RenderInterpolationParams<TTag> {
+  readonly sprites: readonly InternalSpriteCurrentState<TTag>[];
+  readonly timestamp: number;
+  readonly frameContext?: RenderInterpolationFrameContext;
+}
+
+/**
+ * Result produced by sprite interpolation processing.
+ */
+export interface RenderInterpolationResult {
+  readonly handled: boolean;
+  readonly hasActiveInterpolation: boolean;
+}
+
+/**
+ * Parameters passed into RenderCalculationHost.processDrawSpriteImages.
+ */
+export interface ProcessDrawSpriteImagesParams<TTag> {
+  readonly interpolationParams?: RenderInterpolationParams<TTag>;
+  readonly prepareParams?: PrepareDrawSpriteImageParams<TTag>;
+}
+
+/**
+ * Result returned from RenderCalculationHost.processDrawSpriteImages.
+ */
+export interface ProcessDrawSpriteImagesResult<TTag> {
+  readonly preparedItems: PreparedDrawSpriteImageParams<TTag>[];
+  readonly interpolationResult: RenderInterpolationResult;
+}
+
+/**
  * The render calculation host.
  * Abstraction that render calculations.
  * @param TTag Tag type.
  */
-export interface RenderCalculationHost<TTag> extends Releaseable {
-  readonly prepareDrawSpriteImages: (
-    params: PrepareDrawSpriteImageParams<TTag>
-  ) => PreparedDrawSpriteImageParams<TTag>[];
+export interface RenderCalculationHost<TTag> extends Releasable {
+  readonly processDrawSpriteImages: (
+    params: ProcessDrawSpriteImagesParams<TTag>
+  ) => ProcessDrawSpriteImagesResult<TTag>;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -418,6 +477,7 @@ export interface SpriteInterpolationState {
   readonly mode: SpriteInterpolationMode;
   readonly durationMs: number;
   readonly easing: EasingFunction;
+  readonly easingPreset: SpriteEasingPresetName | null;
   startTimestamp: number;
   readonly from: SpriteLocation;
   readonly to: SpriteLocation;
@@ -435,6 +495,7 @@ export interface SpriteInterpolationState {
 export interface DegreeInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
+  readonly easingPreset: SpriteEasingPresetName | null;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;
@@ -444,10 +505,44 @@ export interface DegreeInterpolationState {
 export interface DistanceInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
+  readonly easingPreset: SpriteEasingPresetName | null;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;
   startTimestamp: number;
+}
+
+export interface DistanceInterpolationEvaluationParams {
+  readonly state: DistanceInterpolationState;
+  readonly timestamp: number;
+}
+
+export interface DistanceInterpolationEvaluationResult {
+  readonly value: number;
+  readonly completed: boolean;
+  readonly effectiveStartTimestamp: number;
+}
+
+export interface DegreeInterpolationEvaluationParams {
+  readonly state: DegreeInterpolationState;
+  readonly timestamp: number;
+}
+
+export interface DegreeInterpolationEvaluationResult {
+  readonly value: number;
+  readonly completed: boolean;
+  readonly effectiveStartTimestamp: number;
+}
+
+export interface SpriteInterpolationEvaluationParams {
+  readonly state: SpriteInterpolationState;
+  readonly timestamp: number;
+}
+
+export interface SpriteInterpolationEvaluationResult {
+  readonly location: SpriteLocation;
+  readonly completed: boolean;
+  readonly effectiveStartTimestamp: number;
 }
 
 /**
@@ -572,11 +667,12 @@ export interface InternalSpriteImageState {
   imageId: string;
   imageHandle: number;
   mode: SpriteMode;
-  opacity: number;
+  opacity: MutableInterpolatedValues<number>;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
-  offset: SpriteImageOffset;
-  rotateDeg: number;
+  offset: MutableSpriteImageInterpolatedOffset;
+  rotateDeg: MutableInterpolatedValues<number>;
+  rotationCommandDeg: number;
   displayedRotateDeg: number;
   autoRotation: boolean;
   autoRotationMinDistanceMeters: number;
@@ -588,9 +684,15 @@ export interface InternalSpriteImageState {
   rotationInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
   offsetDegInterpolationState: Readonly<DegreeInterpolationState> | null;
   offsetMetersInterpolationState: Readonly<DistanceInterpolationState> | null;
+  opacityInterpolationState: Readonly<DistanceInterpolationState> | null;
+  opacityInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
+  opacityTargetValue: number;
+  lodLastCommandOpacity: number;
   lastCommandRotateDeg: number;
   lastCommandOffsetDeg: number;
   lastCommandOffsetMeters: number;
+  lastCommandOpacity: number;
+  interpolationDirty: boolean;
   surfaceShaderInputs?: Readonly<SurfaceShaderInputs>;
   hitTestCorners?: [
     MutableSpriteScreenPoint,
@@ -607,9 +709,8 @@ export interface InternalSpriteCurrentState<TTag> {
   spriteId: string;
   handle: IdHandle;
   isEnabled: boolean;
-  currentLocation: Readonly<SpriteLocation>;
-  fromLocation?: Readonly<SpriteLocation>;
-  toLocation?: Readonly<SpriteLocation>;
+  visibilityDistanceMeters?: number;
+  location: MutableInterpolatedValues<Readonly<SpriteLocation>>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
   interpolationState: InternalSpriteInterpolationState | null;
@@ -617,6 +718,7 @@ export interface InternalSpriteCurrentState<TTag> {
   lastCommandLocation: Readonly<SpriteLocation>;
   lastAutoRotationLocation: Readonly<SpriteLocation>;
   lastAutoRotationAngleDeg: number;
+  interpolationDirty: boolean;
   cachedMercator: Readonly<SpriteMercatorCoordinate>;
   cachedMercatorLng: number;
   cachedMercatorLat: number;

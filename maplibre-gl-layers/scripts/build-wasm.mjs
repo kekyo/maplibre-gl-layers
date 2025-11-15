@@ -210,7 +210,7 @@ const createEmccArgs = (variant) => {
     '-s',
     'ENVIRONMENT=web,webview,worker,node',
     '-s',
-    'EXPORTED_FUNCTIONS=["_malloc","_free","_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_projectLngLatToClipSpace","_calculateBillboardDepthKey","_calculateSurfaceDepthKey","_prepareDrawSpriteImages","_setThreadPoolSize"]',
+    'EXPORTED_FUNCTIONS=["_malloc","_free","_fromLngLat","_project","_calculatePerspectiveRatio","_unproject","_projectLngLatToClipSpace","_calculateBillboardDepthKey","_calculateSurfaceDepthKey","_prepareDrawSpriteImages","_evaluateDistanceInterpolations","_evaluateDegreeInterpolations","_evaluateSpriteInterpolations","_processInterpolations","_setThreadPoolSize"]',
     '-s',
     'ERROR_ON_UNDEFINED_SYMBOLS=0',
     '-mbulk-memory',

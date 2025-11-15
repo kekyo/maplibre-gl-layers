@@ -33,7 +33,6 @@
     "build": "node ./scripts/build-wasm.mjs && vite build",
     "dev": "npm run build",
     "test": "npm run build && vitest run",
-    "test:e2e": "npm run build && playwright test",
     "pack": "npm run build && screw-up pack --pack-destination ../artifacts"
   },
   "dependencies": {
@@ -41,7 +40,6 @@
     "maplibre-gl": ">=5.0.0"
   },
   "devDependencies": {
-    "@playwright/test": ">=1.56.0",
     "@types/node": ">=24.9.0",
     "prettier-max": ">=1.11.0",
     "screw-up": ">=1.13.0",

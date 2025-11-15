@@ -47,6 +47,13 @@ const INITIAL_NUMBER_OF_SPRITES = 1000;
  */
 const MOVEMENT_INTERVAL_MS = 500;
 
+const PRIMARY_OPACITY_SEQUENCE = [0.6, 0.3, 0.6, 1.0] as const;
+
+/** Minimum pseudo LOD distance in meters applied when enabled. */
+const PSEUDO_LOD_DISTANCE_MIN_METERS = 5000;
+/** Maximum pseudo LOD distance in meters applied when enabled. */
+const PSEUDO_LOD_DISTANCE_MAX_METERS = 20000;
+
 /** Identifier assigned to the sprite layer instance registered with MapLibre. */
 const SPRITE_LAYER_ID = 'demo-sprite';
 
@@ -433,6 +440,14 @@ const createSecondaryMarkerBitmap = async (
   return await createImageBitmap(canvas);
 };
 
+const generatePseudoLodDistanceMeters = (): number => {
+  const span = Math.max(
+    0,
+    PSEUDO_LOD_DISTANCE_MAX_METERS - PSEUDO_LOD_DISTANCE_MIN_METERS
+  );
+  return PSEUDO_LOD_DISTANCE_MIN_METERS + Math.random() * (span || 0);
+};
+
 /////////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -483,6 +498,8 @@ interface DemoSpriteTag {
  */
 type AnimationMode = 'random' | 'linear';
 
+type PrimaryOpacityMode = 'show' | 'wave';
+
 /** Identifiers for the base maps available in the demo. */
 type BasemapId = 'osm' | 'carto';
 
@@ -509,6 +526,16 @@ let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 let isRotateInterpolationEnabled = true;
 /** Interpolation mode applied to primary image rotation. */
 let rotateInterpolationMode: SpriteInterpolationMode = 'feedback';
+/** Whether opacity interpolation is active for primary images. */
+let isOpacityInterpolationEnabled = true;
+/** Opacity mode applied to primary images. */
+let primaryOpacityMode: PrimaryOpacityMode = 'show';
+/** Current index within the opacity wave sequence. */
+let primaryOpacityWaveIndex = 0;
+/** Last applied opacity value for the primary image. */
+let primaryOpacityCurrentValue = 1.0;
+/** Whether pseudo LOD is active for all sprite images. */
+let isPseudoLodEnabled = false;
 /** Height mode used for arrow icons. */
 let currentArrowShapeMode: IconHeightMode = 'elongated';
 /** Global multiplier applied to sprite movement speed. */
@@ -539,6 +566,12 @@ let updateSecondaryImageButtons: (() => void) | undefined;
 let updateSecondaryImageTypeButtons: (() => void) | undefined;
 /** UI updater for the rotate-interpolation toggle. */
 let updateRotateInterpolationButton: (() => void) | undefined;
+/** UI updater for the primary opacity buttons. */
+let updatePrimaryOpacityButtons: (() => void) | undefined;
+/** UI updater for the opacity interpolation toggle. */
+let updateOpacityInterpolationButton: (() => void) | undefined;
+/** UI updater for the pseudo LOD toggle. */
+let updatePseudoLodButton: (() => void) | undefined;
 /** UI updater for the orbit degree interpolation toggle. */
 let updateOrbitDegInterpolationButton: (() => void) | undefined;
 /** UI updater for the orbit meters interpolation toggle. */
@@ -812,8 +845,8 @@ const createHud = () => {
               data-selected-field="tag"
               data-testid="selected-tag"
             >--</span>
-          </div>
-        </div>
+      </div>
+    </div>
       </section>
     </aside>
     <aside id="controls" data-testid="panel-controls">
@@ -1026,6 +1059,63 @@ const createHud = () => {
             data-testid="toggle-rotate-feedforward"
           >
             Feedforward
+          </button>
+      </div>
+    </div>
+      <div class="control-group" data-testid="group-opacity">
+        <h1>Opacity</h1>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${primaryOpacityMode === 'show' ? ' active' : ''}"
+            data-control="primary-opacity-mode"
+            data-option="show"
+            data-label="Show"
+            aria-pressed="${primaryOpacityMode === 'show'}"
+            data-testid="toggle-opacity-show"
+          >
+            Show
+          </button>
+          <button
+            type="button"
+            class="toggle-button${primaryOpacityMode === 'wave' ? ' active' : ''}"
+            data-control="primary-opacity-mode"
+            data-option="wave"
+            data-label="Wave"
+            aria-pressed="${primaryOpacityMode === 'wave'}"
+            data-testid="toggle-opacity-wave"
+          >
+            Wave
+          </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${isOpacityInterpolationEnabled ? ' active' : ''}"
+            data-control="opacity-interpolation-toggle"
+            data-label="Opacity Interpolation"
+            data-active-text="On"
+            data-inactive-text="Off"
+            aria-pressed="${isOpacityInterpolationEnabled}"
+            data-testid="toggle-opacity-interpolation"
+          >
+            Opacity Interpolation: ${
+              isOpacityInterpolationEnabled ? 'On' : 'Off'
+            }
+          </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${isPseudoLodEnabled ? ' active' : ''}"
+            data-control="pseudo-lod-toggle"
+            data-label="Pseudo LOD"
+            data-active-text="On"
+            data-inactive-text="Off"
+            aria-pressed="${isPseudoLodEnabled}"
+            data-testid="toggle-pseudo-lod"
+          >
+            Pseudo LOD: ${isPseudoLodEnabled ? 'On' : 'Off'}
           </button>
         </div>
       </div>
@@ -1549,13 +1639,13 @@ const main = async () => {
     if (selectedFieldEls.visible) {
       // Reflect whether the sprite image was visible (non-zero opacity) at the time of the click.
       selectedFieldEls.visible.textContent =
-        imageState.opacity !== 0.0 ? 'Visible' : 'Hidden';
+        imageState.opacity.current !== 0.0 ? 'Visible' : 'Hidden';
     }
     if (selectedFieldEls.lnglat) {
       // Show the geographic coordinates for the sprite's current location.
       selectedFieldEls.lnglat.textContent = formatLngLat(
-        spriteState.currentLocation.lng,
-        spriteState.currentLocation.lat
+        spriteState.location.current.lng,
+        spriteState.location.current.lat
       );
     }
     if (selectedFieldEls.screen) {
@@ -1674,8 +1764,8 @@ const main = async () => {
       dy: -currentTag.dy,
       lastStepLng: -currentTag.lastStepLng,
       lastStepLat: -currentTag.lastStepLat,
-      worldLng: spriteState.currentLocation.lng,
-      worldLat: spriteState.currentLocation.lat,
+      worldLng: spriteState.location.current.lng,
+      worldLat: spriteState.location.current.lat,
     };
 
     if (currentTag.path) {
@@ -1688,9 +1778,9 @@ const main = async () => {
         pathVectorLng * pathVectorLng + pathVectorLat * pathVectorLat;
       if (pathLengthSq > 0) {
         const originToCurrentLng =
-          spriteState.currentLocation.lng - path.startLng;
+          spriteState.location.current.lng - path.startLng;
         const originToCurrentLat =
-          spriteState.currentLocation.lat - path.startLat;
+          spriteState.location.current.lat - path.startLat;
         progress =
           (originToCurrentLng * pathVectorLng +
             originToCurrentLat * pathVectorLat) /
@@ -2163,6 +2253,131 @@ const main = async () => {
         });
         return true;
       });
+    };
+
+    const applyOpacityInterpolationOptionsToAll = (): void => {
+      if (!spriteLayer) {
+        return;
+      }
+      const interpolation: SpriteImageInterpolationOptions = {
+        opacity: {
+          durationMs: MOVEMENT_INTERVAL_MS,
+        },
+      };
+      const clearInterpolation: SpriteImageInterpolationOptions = {
+        opacity: null,
+      };
+      const targetInterpolation = isOpacityInterpolationEnabled
+        ? interpolation
+        : clearInterpolation;
+      spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        sprite.images.forEach((orderMap) => {
+          orderMap.forEach((image) => {
+            spriteUpdate.updateImage(image.subLayer, image.order, {
+              interpolation: targetInterpolation,
+            });
+          });
+        });
+        return true;
+      });
+    };
+
+    const applyPrimaryOpacityValue = (
+      opacity: number,
+      preferInterpolation: boolean
+    ): void => {
+      primaryOpacityCurrentValue = opacity;
+      const shouldInterpolate =
+        preferInterpolation && isOpacityInterpolationEnabled;
+      spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        sprite.images.forEach((orderMap) => {
+          orderMap.forEach((image) => {
+            if (image.subLayer !== PRIMARY_SUB_LAYER) {
+              return;
+            }
+            const imageUpdate: SpriteImageDefinitionUpdate = {
+              opacity,
+            };
+            if (isOpacityInterpolationEnabled) {
+              if (shouldInterpolate) {
+                imageUpdate.interpolation = {
+                  opacity: {
+                    durationMs: MOVEMENT_INTERVAL_MS,
+                  },
+                };
+              }
+            } else {
+              imageUpdate.interpolation = { opacity: null };
+            }
+            spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
+          });
+        });
+        return true;
+      });
+      if (isOpacityInterpolationEnabled && !shouldInterpolate) {
+        applyOpacityInterpolationOptionsToAll();
+      }
+    };
+
+    const advancePrimaryOpacityWave = (forceImmediate = false): void => {
+      if (!forceImmediate && primaryOpacityMode !== 'wave') {
+        return;
+      }
+      const value =
+        PRIMARY_OPACITY_SEQUENCE[primaryOpacityWaveIndex] ??
+        PRIMARY_OPACITY_SEQUENCE[0];
+      primaryOpacityWaveIndex =
+        (primaryOpacityWaveIndex + 1) % PRIMARY_OPACITY_SEQUENCE.length;
+      applyPrimaryOpacityValue(value, true);
+    };
+
+    const setPrimaryOpacityMode = (mode: PrimaryOpacityMode): void => {
+      if (primaryOpacityMode === mode) {
+        return;
+      }
+      primaryOpacityMode = mode;
+      primaryOpacityWaveIndex = 0;
+      if (mode === 'show') {
+        applyPrimaryOpacityValue(1.0, true);
+      } else {
+        advancePrimaryOpacityWave(true);
+      }
+      updatePrimaryOpacityButtons?.();
+    };
+
+    const setOpacityInterpolationEnabled = (enabled: boolean): void => {
+      if (isOpacityInterpolationEnabled === enabled) {
+        return;
+      }
+      isOpacityInterpolationEnabled = enabled;
+      updateOpacityInterpolationButton?.();
+      applyOpacityInterpolationOptionsToAll();
+      applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
+    };
+
+    /**
+     * Applies the pseudo LOD distance to every sprite.
+     */
+    const applyPseudoLodVisibility = (): void => {
+      if (!spriteLayer) {
+        return;
+      }
+      spriteLayer.updateForEach((_sprite, spriteUpdate) => {
+        spriteUpdate.visibilityDistanceMeters = isPseudoLodEnabled
+          ? generatePseudoLodDistanceMeters()
+          : null; // Null clears the threshold when pseudo LOD is disabled.
+        return true;
+      });
+    };
+
+    const setPseudoLodEnabled = (enabled: boolean): void => {
+      if (isPseudoLodEnabled === enabled) {
+        updatePseudoLodButton?.();
+        return;
+      }
+      isPseudoLodEnabled = enabled;
+      applyPseudoLodVisibility();
+      updatePseudoLodButton?.();
     };
 
     /**
@@ -3467,6 +3682,66 @@ const main = async () => {
           applyRotateInterpolationToAll(isRotateInterpolationEnabled);
         });
       }
+
+      const primaryOpacityButtons = Array.from(
+        queryAll<HTMLButtonElement>('[data-control="primary-opacity-mode"]')
+      );
+      if (primaryOpacityButtons.length > 0) {
+        updatePrimaryOpacityButtons = () => {
+          primaryOpacityButtons.forEach((button) => {
+            const mode = button.dataset.option as
+              | PrimaryOpacityMode
+              | undefined;
+            if (!mode) {
+              return;
+            }
+            setToggleButtonState(button, primaryOpacityMode === mode, 'select');
+          });
+        };
+        updatePrimaryOpacityButtons();
+        primaryOpacityButtons.forEach((button) => {
+          const mode = button.dataset.option as PrimaryOpacityMode | undefined;
+          if (!mode) {
+            return;
+          }
+          button.addEventListener('click', () => {
+            if (primaryOpacityMode === mode) {
+              return;
+            }
+            setPrimaryOpacityMode(mode);
+          });
+        });
+      }
+
+      const opacityInterpolationButton = queryFirst<HTMLButtonElement>(
+        '[data-control="opacity-interpolation-toggle"]'
+      );
+      if (opacityInterpolationButton) {
+        updateOpacityInterpolationButton = () => {
+          setToggleButtonState(
+            opacityInterpolationButton,
+            isOpacityInterpolationEnabled,
+            'binary'
+          );
+        };
+        updateOpacityInterpolationButton();
+        opacityInterpolationButton.addEventListener('click', () => {
+          setOpacityInterpolationEnabled(!isOpacityInterpolationEnabled);
+        });
+      }
+
+      const pseudoLodButton = queryFirst<HTMLButtonElement>(
+        '[data-control="pseudo-lod-toggle"]'
+      );
+      if (pseudoLodButton) {
+        updatePseudoLodButton = () => {
+          setToggleButtonState(pseudoLodButton, isPseudoLodEnabled, 'binary');
+        };
+        updatePseudoLodButton();
+        pseudoLodButton.addEventListener('click', () => {
+          setPseudoLodEnabled(!isPseudoLodEnabled);
+        });
+      }
     };
 
     initializeControlPanel();
@@ -3540,12 +3815,16 @@ const main = async () => {
         currentAnimationMode,
         newTag
       );
+      const spriteVisibilityDistance = isPseudoLodEnabled
+        ? generatePseudoLodDistanceMeters()
+        : undefined;
       return {
         spriteId: id,
         location: {
           lng: location.lng,
           lat: location.lat,
         },
+        visibilityDistanceMeters: spriteVisibilityDistance,
         tag: newTag,
         // Assign images to the sprite.
         images: [
@@ -3622,6 +3901,9 @@ const main = async () => {
         if (newEntries.length > 0) {
           spriteLayer.addSprites(newEntries);
           added = newEntries.length;
+          if (isOpacityInterpolationEnabled) {
+            applyOpacityInterpolationOptionsToAll();
+          }
         }
       } else if (targetSize < currentSize) {
         const removedIds = allSpriteIds.splice(targetSize);
@@ -3693,6 +3975,8 @@ const main = async () => {
         applyLocationInterpolationToAll();
         applyRotateInterpolationToAll(isRotateInterpolationEnabled);
         applyOrbitInterpolationToAll();
+        applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
+        applyPseudoLodVisibility();
         applyLayerVisibility(isActive);
         reconcileSpriteVisibility();
 
@@ -3829,6 +4113,7 @@ const main = async () => {
 
         return true;
       });
+      advancePrimaryOpacityWave();
       advanceSecondaryOrbitRotation();
     };
 
