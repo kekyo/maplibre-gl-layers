@@ -630,4 +630,66 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
 
     layer.onRemove?.(map as unknown as any, gl);
   });
+
+  const expectSpriteOpacity = (
+    layer: ReturnType<typeof createSpriteLayer>,
+    spriteId: string
+  ): number => {
+    const state = layer.getSpriteState(spriteId);
+    const image = state?.images.get(0)?.get(0);
+    expect(image).toBeDefined();
+    return image?.opacity.current ?? -1;
+  };
+
+  const hideSpriteViaPseudoLod = (
+    layer: ReturnType<typeof createSpriteLayer>,
+    map: FakeMap,
+    gl: WebGLRenderingContext,
+    spriteId: string,
+    threshold: number
+  ): void => {
+    layer.updateSprite(spriteId, { visibilityDistanceMeters: threshold });
+    map.transform.cameraToCenterDistance = threshold * 10;
+    layer.render?.(gl, {} as any);
+  };
+
+  it('restores opacity when pseudo LOD is disabled after sprites were hidden', async () => {
+    const { layer, map, gl } = await setupLayer();
+    const spriteId = 'pseudo-lod-restore';
+    layer.addSprite(spriteId, {
+      location: { lng: 0, lat: 0 },
+      images: [makeSpriteImage('marker')],
+    });
+
+    hideSpriteViaPseudoLod(layer, map, gl, spriteId, 100);
+    expect(expectSpriteOpacity(layer, spriteId)).toBeCloseTo(0);
+
+    layer.updateSprite(spriteId, { visibilityDistanceMeters: null });
+
+    expect(expectSpriteOpacity(layer, spriteId)).toBeCloseTo(1);
+
+    layer.onRemove?.(map as unknown as any, gl);
+  });
+
+  it('restores custom opacities when pseudo LOD is disabled', async () => {
+    const { layer, map, gl } = await setupLayer();
+    const spriteId = 'pseudo-lod-custom-opacity';
+    layer.addSprite(spriteId, {
+      location: { lng: 2, lat: 3 },
+      images: [makeSpriteImage('marker')],
+    });
+
+    const customOpacity = 0.42;
+    layer.updateSpriteImage(spriteId, 0, 0, { opacity: customOpacity });
+    layer.render?.(gl, {} as any);
+
+    hideSpriteViaPseudoLod(layer, map, gl, spriteId, 50);
+    expect(expectSpriteOpacity(layer, spriteId)).toBeCloseTo(0);
+
+    layer.updateSprite(spriteId, { visibilityDistanceMeters: null });
+
+    expect(expectSpriteOpacity(layer, spriteId)).toBeCloseTo(customOpacity);
+
+    layer.onRemove?.(map as unknown as any, gl);
+  });
 });

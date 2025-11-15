@@ -466,11 +466,11 @@ const cloneInterpolationOptions = (
  */
 const sanitizeVisibilityDistanceMeters = (
   value: number | null | undefined
-): number | undefined => {
+): number | null | undefined => {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return value;
   }
-  return undefined;
+  return value;
 };
 
 /**
@@ -2307,7 +2307,7 @@ export const createSpriteLayer = <T = any>(
       handle: spriteHandle,
       // Sprites default to enabled unless explicitly disabled in the init payload.
       isEnabled: init.isEnabled ?? true,
-      visibilityDistanceMeters: spriteVisibilityDistanceMeters,
+      visibilityDistanceMeters: spriteVisibilityDistanceMeters ?? undefined,
       location: {
         current: currentLocation,
         from: undefined,
@@ -2993,10 +2993,36 @@ export const createSpriteLayer = <T = any>(
       const resolved = sanitizeVisibilityDistanceMeters(
         update.visibilityDistanceMeters
       );
-      if (sprite.visibilityDistanceMeters !== resolved) {
-        sprite.visibilityDistanceMeters = resolved;
+      const previousVisibilityDistance = sprite.visibilityDistanceMeters;
+      if (previousVisibilityDistance !== resolved) {
+        sprite.visibilityDistanceMeters = resolved ?? undefined;
         updated = true;
         isRequiredRender = true;
+        if (
+          previousVisibilityDistance !== undefined &&
+          (resolved === undefined || resolved === null)
+        ) {
+          sprite.images.forEach((orderMap) => {
+            orderMap.forEach((image) => {
+              if (
+                !(
+                  Number.isFinite(image.lastCommandOpacity) &&
+                  image.lastCommandOpacity > 0
+                )
+              ) {
+                return;
+              }
+              if (image.opacity.current > 0) {
+                return;
+              }
+              applyOpacityUpdate(
+                image,
+                image.lastCommandOpacity,
+                image.opacityInterpolationOptions
+              );
+            });
+          });
+        }
       }
     }
 
