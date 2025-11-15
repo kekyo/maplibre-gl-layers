@@ -66,6 +66,7 @@ import {
   processOpacityInterpolationsAfterPreparation,
   applyVisibilityDistanceLod,
   syncPreparedOpacities,
+  filterVisiblePreparedItems,
   type ProcessInterpolationPresetRequests,
 } from './calculationHost';
 import {
@@ -1636,9 +1637,11 @@ export const createWasmCalculationHost = <TTag>(
             };
           }
           syncPreparedOpacities(preparedItems);
+          const visiblePreparedItems =
+            filterVisiblePreparedItems(preparedItems);
           return {
             interpolationResult,
-            preparedItems,
+            preparedItems: visiblePreparedItems,
           };
         },
         () => ensureFallbackHost().processDrawSpriteImages(params)

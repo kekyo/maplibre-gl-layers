@@ -1520,6 +1520,21 @@ export const syncPreparedOpacities = <TTag>(
   }
 };
 
+export const filterVisiblePreparedItems = <TTag>(
+  preparedItems: readonly PreparedDrawSpriteImageParams<TTag>[]
+): PreparedDrawSpriteImageParams<TTag>[] => {
+  if (!preparedItems.length) {
+    return [];
+  }
+  const visibleItems: PreparedDrawSpriteImageParams<TTag>[] = [];
+  for (const prepared of preparedItems) {
+    if (prepared.opacity > OPACITY_TARGET_EPSILON) {
+      visibleItems.push(prepared);
+    }
+  }
+  return visibleItems;
+};
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 const evaluateDistanceInterpolationsBatch = (
@@ -2034,9 +2049,10 @@ const createProjectionBoundCalculationHost = <TTag>(
       };
     }
     syncPreparedOpacities(preparedItems);
+    const visiblePreparedItems = filterVisiblePreparedItems(preparedItems);
     return {
       interpolationResult,
-      preparedItems,
+      preparedItems: visiblePreparedItems,
     };
   };
 

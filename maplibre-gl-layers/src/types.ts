@@ -165,8 +165,11 @@ export interface SpriteImageDefinitionUpdate {
   mode?: SpriteMode;
   /** Opacity multiplier. */
   opacity?: number;
-  /** Pseudo LOD. Distance in meters at which the image becomes invisible. */
-  visibilityDistanceMeters?: number;
+  /**
+   * Pseudo LOD. Distance in meters at which the image becomes invisible.
+   * Specify `null` to clear the current threshold.
+   */
+  visibilityDistanceMeters?: number | null;
   /** Real-world meters represented by one pixel. */
   scale?: number;
   /** Anchor within the image. */

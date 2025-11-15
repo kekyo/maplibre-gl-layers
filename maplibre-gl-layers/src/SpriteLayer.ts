@@ -1475,8 +1475,11 @@ export const createSpriteLayer = <T = any>(
       sprite.images.forEach((orderMap) => {
         // Inspect each ordered image entry to update rotation/offset animations.
         orderMap.forEach((image) => {
-          // Fully transparent images contribute nothing and can be ignored.
-          if (image.opacity.current <= 0) {
+          const shouldForceVisibilityCheck =
+            image.visibilityDistanceMeters !== undefined &&
+            image.lastCommandOpacity > 0;
+          // Fully transparent images contribute nothing and can be ignored unless pseudo LOD controls their visibility.
+          if (image.opacity.current <= 0 && !shouldForceVisibilityCheck) {
             image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
             image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
@@ -2721,12 +2724,16 @@ export const createSpriteLayer = <T = any>(
     }
     if (imageUpdate.visibilityDistanceMeters !== undefined) {
       const visibility = imageUpdate.visibilityDistanceMeters;
-      state.visibilityDistanceMeters =
-        typeof visibility === 'number' &&
-        Number.isFinite(visibility) &&
-        visibility > 0
-          ? visibility
-          : undefined;
+      if (visibility === null) {
+        state.visibilityDistanceMeters = undefined;
+      } else {
+        state.visibilityDistanceMeters =
+          typeof visibility === 'number' &&
+          Number.isFinite(visibility) &&
+          visibility > 0
+            ? visibility
+            : undefined;
+      }
     }
     const prevAutoRotation = state.autoRotation;
     const prevMinDistance = state.autoRotationMinDistanceMeters;
