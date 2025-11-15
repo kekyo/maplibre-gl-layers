@@ -236,9 +236,11 @@ const createSprite = (
     spriteId,
     handle: spriteHandle,
     isEnabled: true,
-    currentLocation: location,
-    fromLocation: undefined,
-    toLocation: undefined,
+    location: {
+      current: location,
+      from: undefined,
+      to: undefined,
+    },
     images: new Map(),
     tag: null,
     interpolationState: null,
@@ -264,11 +266,27 @@ const createImage = (): InternalSpriteImageState =>
     imageId: 'image-1',
     imageHandle: 1,
     mode: 'surface',
-    opacity: 1,
+    opacity: {
+      current: 1,
+      from: undefined,
+      to: undefined,
+    },
     scale: 1,
     anchor: DEFAULT_ANCHOR,
-    offset: DEFAULT_OFFSET,
-    rotateDeg: 0,
+    offset: {
+      offsetMeters: {
+        current: DEFAULT_OFFSET.offsetMeters,
+        from: undefined,
+        to: undefined,
+      },
+      offsetDeg: {
+        current: DEFAULT_OFFSET.offsetDeg,
+        from: undefined,
+        to: undefined,
+      },
+    },
+    rotateDeg: { current: 0, from: undefined, to: undefined },
+    rotationCommandDeg: 0,
     displayedRotateDeg: 0,
     autoRotation: false,
     autoRotationMinDistanceMeters: 0,
@@ -423,7 +441,7 @@ describe('convertToWasmProjectionState', () => {
       expect(buffer[5]).toBe(1); // sprite count
       expect(buffer[7]).toBe(1); // item count
       const spriteOffset = buffer[6] ?? 0;
-      expect(buffer[spriteOffset]).toBeCloseTo(sprite.currentLocation.lng);
+      expect(buffer[spriteOffset]).toBeCloseTo(sprite.location.current.lng);
       expect(buffer[spriteOffset + 3]).toBeCloseTo(sprite.cachedMercator.x);
       const resourceOffset = buffer[4] ?? 0;
       const handleOffset = resourceOffset + resource.handle * RESOURCE_STRIDE;

@@ -23,11 +23,19 @@ const createImageState = (): InternalSpriteImageState => ({
   imageId: 'test',
   imageHandle: 0,
   mode: 'surface',
-  opacity: 1,
+  opacity: {
+    current: 1,
+    from: undefined,
+    to: undefined,
+  },
   scale: 1,
   anchor: { x: 0, y: 0 },
-  offset: { offsetMeters: 0, offsetDeg: 0 },
-  rotateDeg: 0,
+  offset: {
+    offsetMeters: { current: 0, from: undefined, to: undefined },
+    offsetDeg: { current: 0, from: undefined, to: undefined },
+  },
+  rotateDeg: { current: 0, from: undefined, to: undefined },
+  rotationCommandDeg: 0,
   displayedRotateDeg: 0,
   autoRotation: false,
   autoRotationMinDistanceMeters: 0,
@@ -39,6 +47,9 @@ const createImageState = (): InternalSpriteImageState => ({
   offsetDegInterpolationState: null,
   offsetMetersInterpolationState: null,
   opacityInterpolationState: null,
+  opacityInterpolationOptions: null,
+  opacityTargetValue: 1,
+  lodLastCommandOpacity: 1,
   originLocation: undefined,
   lastCommandRotateDeg: 0,
   lastCommandOffsetDeg: 0,
@@ -57,8 +68,8 @@ describe('applyOffsetUpdate', () => {
       { deg: null, meters: null }
     );
 
-    expect(state.offset.offsetDeg).toBe(45);
-    expect(state.offset.offsetMeters).toBe(12);
+    expect(state.offset.offsetDeg.current).toBe(45);
+    expect(state.offset.offsetMeters.current).toBe(12);
     expect(state.offsetDegInterpolationState).toBeNull();
     expect(state.offsetMetersInterpolationState).toBeNull();
     expect(state.lastCommandOffsetDeg).toBe(45);
@@ -79,21 +90,21 @@ describe('applyOffsetUpdate', () => {
 
     expect(state.offsetDegInterpolationState).not.toBeNull();
     expect(state.offsetMetersInterpolationState).not.toBeNull();
-    expect(state.offset.offsetDeg).toBe(0);
-    expect(state.offset.offsetMeters).toBe(0);
+    expect(state.offset.offsetDeg.current).toBe(0);
+    expect(state.offset.offsetMeters.current).toBe(0);
 
     const firstStepActive = stepSpriteImageInterpolations(state, 0);
     expect(firstStepActive).toBe(true);
 
     const midStepActive = stepSpriteImageInterpolations(state, 500);
     expect(midStepActive).toBe(true);
-    expect(state.offset.offsetDeg).toBeCloseTo(45, 5);
-    expect(state.offset.offsetMeters).toBeCloseTo(10, 5);
+    expect(state.offset.offsetDeg.current).toBeCloseTo(45, 5);
+    expect(state.offset.offsetMeters.current).toBeCloseTo(10, 5);
 
     const finalStepActive = stepSpriteImageInterpolations(state, 2000);
     expect(finalStepActive).toBe(false);
-    expect(state.offset.offsetDeg).toBeCloseTo(90, 5);
-    expect(state.offset.offsetMeters).toBeCloseTo(20, 5);
+    expect(state.offset.offsetDeg.current).toBeCloseTo(90, 5);
+    expect(state.offset.offsetMeters.current).toBeCloseTo(20, 5);
     expect(state.offsetDegInterpolationState).toBeNull();
     expect(state.offsetMetersInterpolationState).toBeNull();
   });

@@ -51,6 +51,7 @@ import type {
   RegisteredImage,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
+  MutableSpriteImageInterpolatedOffset,
   ProjectionHost,
   PreparedDrawSpriteImageParams,
   RenderCalculationHost,
@@ -427,6 +428,24 @@ const cloneOffset = (offset?: SpriteImageOffset): SpriteImageOffset => {
   };
 };
 
+const createInterpolatedOffsetState = (
+  offset?: SpriteImageOffset
+): MutableSpriteImageInterpolatedOffset => {
+  const base = offset ? cloneOffset(offset) : { ...DEFAULT_IMAGE_OFFSET };
+  return {
+    offsetMeters: {
+      current: base.offsetMeters,
+      from: undefined,
+      to: undefined,
+    },
+    offsetDeg: {
+      current: base.offsetDeg,
+      from: undefined,
+      to: undefined,
+    },
+  };
+};
+
 /**
  * Deep-clones interpolation options to prevent shared references between sprites.
  * @param {SpriteInterpolationOptions} options - Options provided by the user.
@@ -478,11 +497,20 @@ export const createImageStateFromInit = (
     imageId: imageInit.imageId,
     imageHandle: 0,
     mode,
-    opacity: initialOpacity,
+    opacity: {
+      current: initialOpacity,
+      from: undefined,
+      to: undefined,
+    },
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
-    offset: initialOffset,
-    rotateDeg: imageInit.rotateDeg ?? 0,
+    offset: createInterpolatedOffsetState(initialOffset),
+    rotateDeg: {
+      current: initialRotateDeg,
+      from: undefined,
+      to: undefined,
+    },
+    rotationCommandDeg: initialRotateDeg,
     displayedRotateDeg: initialRotateDeg,
     autoRotation: imageInit.autoRotation ?? autoRotationDefault,
     autoRotationMinDistanceMeters:
@@ -1448,7 +1476,7 @@ export const createSpriteLayer = <T = any>(
         // Inspect each ordered image entry to update rotation/offset animations.
         orderMap.forEach((image) => {
           // Fully transparent images contribute nothing and can be ignored.
-          if (image.opacity <= 0) {
+          if (image.opacity.current <= 0) {
             image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
             image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
@@ -2267,9 +2295,11 @@ export const createSpriteLayer = <T = any>(
       handle: spriteHandle,
       // Sprites default to enabled unless explicitly disabled in the init payload.
       isEnabled: init.isEnabled ?? true,
-      currentLocation,
-      fromLocation: undefined,
-      toLocation: undefined,
+      location: {
+        current: currentLocation,
+        from: undefined,
+        to: undefined,
+      },
       images,
       // Tags default to null to simplify downstream comparisons.
       tag: init.tag ?? null,
@@ -2744,7 +2774,10 @@ export const createSpriteLayer = <T = any>(
     }
     let requireRotationSync = false;
     if (imageUpdate.rotateDeg !== undefined) {
-      state.rotateDeg = imageUpdate.rotateDeg;
+      const nextRotation = normalizeAngleDeg(imageUpdate.rotateDeg);
+      state.rotateDeg.from = state.rotateDeg.current;
+      state.rotateDeg.to = nextRotation;
+      state.rotationCommandDeg = nextRotation;
       requireRotationSync = true;
     } else if (hasRotationOverride) {
       requireRotationSync = true;
@@ -2777,7 +2810,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     if (shouldReapplyAutoRotation) {
-      const applied = applyAutoRotation(sprite, sprite.currentLocation);
+      const applied = applyAutoRotation(sprite, sprite.location.current);
       if (!applied && state.autoRotation) {
         state.resolvedBaseRotateDeg = sprite.lastAutoRotationAngleDeg;
         requireRotationSync = true;
@@ -2962,16 +2995,17 @@ export const createSpriteLayer = <T = any>(
       interpolationExplicitlySpecified = true;
       if (update.interpolation === null) {
         // Explicit null clears any pending animations so the sprite snaps instantly.
+        const locationState = sprite.location;
         if (
           sprite.pendingInterpolationOptions !== null ||
           sprite.interpolationState !== null ||
-          sprite.fromLocation !== undefined ||
-          sprite.toLocation !== undefined
+          locationState.from !== undefined ||
+          locationState.to !== undefined
         ) {
           sprite.pendingInterpolationOptions = null;
           sprite.interpolationState = null;
-          sprite.fromLocation = undefined;
-          sprite.toLocation = undefined;
+          locationState.from = undefined;
+          locationState.to = undefined;
           updated = true;
         }
         interpolationOptionsForLocation = null;
@@ -3014,7 +3048,7 @@ export const createSpriteLayer = <T = any>(
       if (effectiveOptions && effectiveOptions.durationMs > 0) {
         // Create a fresh interpolation whenever a timed move is requested.
         const { state, requiresInterpolation } = createInterpolationState({
-          currentLocation: sprite.currentLocation,
+          currentLocation: sprite.location.current,
           lastCommandLocation: sprite.lastCommandLocation,
           nextCommandLocation: newCommandLocation,
           options: effectiveOptions,
@@ -3026,9 +3060,9 @@ export const createSpriteLayer = <T = any>(
         if (requiresInterpolation) {
           // Store the interpolation so the render loop can advance it over time.
           sprite.interpolationState = state;
-          sprite.fromLocation = cloneSpriteLocation(state.from);
-          sprite.toLocation = cloneSpriteLocation(state.to);
-          sprite.currentLocation = cloneSpriteLocation(state.from);
+          sprite.location.from = cloneSpriteLocation(state.from);
+          sprite.location.to = cloneSpriteLocation(state.to);
+          sprite.location.current = cloneSpriteLocation(state.from);
           handledByInterpolation = true;
           updated = true;
           isRequiredRender = true;
@@ -3041,17 +3075,17 @@ export const createSpriteLayer = <T = any>(
         // Interpolation will animate towards the destination; the current location already set to start.
       } else if (locationChanged) {
         // Without interpolation, move immediately to the requested location and mark for redraw.
-        sprite.currentLocation = cloneSpriteLocation(newCommandLocation);
-        sprite.fromLocation = undefined;
-        sprite.toLocation = undefined;
+        sprite.location.current = cloneSpriteLocation(newCommandLocation);
+        sprite.location.from = undefined;
+        sprite.location.to = undefined;
         sprite.interpolationState = null;
         updated = true;
         isRequiredRender = true;
       } else {
         // Location unchanged: clear transient interpolation state so future updates start cleanly.
         sprite.interpolationState = null;
-        sprite.fromLocation = undefined;
-        sprite.toLocation = undefined;
+        sprite.location.from = undefined;
+        sprite.location.to = undefined;
       }
 
       sprite.pendingInterpolationOptions = null;

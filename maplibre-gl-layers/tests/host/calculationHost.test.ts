@@ -42,6 +42,7 @@ import type {
   PrepareDrawSpriteImageParamsAfter,
   PreparedDrawSpriteImageParams,
   RenderInterpolationParams,
+  MutableSpriteImageInterpolatedOffset,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -174,6 +175,56 @@ const createImageResource = (id: string): RegisteredImage => ({
 
 const originReference = createSpriteOriginReference();
 
+const resolveMutableOffset = (
+  offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset | undefined
+): MutableSpriteImageInterpolatedOffset => {
+  if (
+    offset &&
+    'offsetMeters' in offset &&
+    typeof offset.offsetMeters === 'object' &&
+    'current' in (offset.offsetMeters as Record<string, unknown>)
+  ) {
+    return offset as MutableSpriteImageInterpolatedOffset;
+  }
+  const base = offset ?? DEFAULT_OFFSET;
+  return {
+    offsetMeters: {
+      current: base.offsetMeters,
+      from: undefined,
+      to: undefined,
+    },
+    offsetDeg: {
+      current: base.offsetDeg,
+      from: undefined,
+      to: undefined,
+    },
+  };
+};
+
+const resolveOpacityState = (
+  value?: MutableInterpolatedValues<number> | number
+): MutableInterpolatedValues<number> => {
+  if (
+    value &&
+    typeof value === 'object' &&
+    'current' in value &&
+    typeof (value as MutableInterpolatedValues<number>).current === 'number'
+  ) {
+    const candidate = value as MutableInterpolatedValues<number>;
+    return {
+      current: candidate.current,
+      from: candidate.from,
+      to: candidate.to,
+    };
+  }
+  const base = typeof value === 'number' ? value : 1;
+  return {
+    current: base,
+    from: undefined,
+    to: undefined,
+  };
+};
+
 const createImageState = (
   overrides: Partial<InternalSpriteImageState> = {}
 ): InternalSpriteImageState => {
@@ -182,20 +233,32 @@ const createImageState = (
     originLocation !== undefined
       ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
       : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
-  const initialOpacity = overrides.opacity ?? 1;
+  const resolvedOpacity = resolveOpacityState(overrides.opacity);
+  const initialOpacity = resolvedOpacity.current;
+  const resolvedOffset = resolveMutableOffset(overrides.offset);
+  const rotationCommandDeg =
+    overrides.rotationCommandDeg ??
+    overrides.rotateDeg?.current ??
+    overrides.displayedRotateDeg ??
+    0;
+  const rotateDeg = overrides.rotateDeg ?? {
+    current: rotationCommandDeg,
+    from: undefined,
+    to: undefined,
+  };
   return {
     subLayer: overrides.subLayer ?? 0,
     order: overrides.order ?? 0,
     imageId: overrides.imageId ?? 'image',
     imageHandle: overrides.imageHandle ?? 0,
     mode: overrides.mode ?? 'billboard',
-    opacity: initialOpacity,
+    opacity: resolvedOpacity,
     scale: overrides.scale ?? 1,
     anchor: overrides.anchor ?? DEFAULT_ANCHOR,
-    offset: overrides.offset ?? DEFAULT_OFFSET,
-    rotateDeg: overrides.rotateDeg ?? 0,
-    displayedRotateDeg:
-      overrides.displayedRotateDeg ?? overrides.rotateDeg ?? 0,
+    offset: resolvedOffset,
+    rotateDeg,
+    rotationCommandDeg,
+    displayedRotateDeg: overrides.displayedRotateDeg ?? rotationCommandDeg,
     autoRotation: overrides.autoRotation ?? false,
     autoRotationMinDistanceMeters: overrides.autoRotationMinDistanceMeters ?? 0,
     resolvedBaseRotateDeg: overrides.resolvedBaseRotateDeg ?? 0,
@@ -215,8 +278,10 @@ const createImageState = (
     opacityTargetValue: overrides.opacityTargetValue ?? initialOpacity,
     lodLastCommandOpacity: overrides.lodLastCommandOpacity ?? initialOpacity,
     lastCommandRotateDeg: overrides.lastCommandRotateDeg ?? 0,
-    lastCommandOffsetDeg: overrides.lastCommandOffsetDeg ?? 0,
-    lastCommandOffsetMeters: overrides.lastCommandOffsetMeters ?? 0,
+    lastCommandOffsetDeg:
+      overrides.lastCommandOffsetDeg ?? resolvedOffset.offsetDeg.current,
+    lastCommandOffsetMeters:
+      overrides.lastCommandOffsetMeters ?? resolvedOffset.offsetMeters.current,
     lastCommandOpacity: overrides.lastCommandOpacity ?? initialOpacity,
     interpolationDirty: overrides.interpolationDirty ?? false,
     surfaceShaderInputs: overrides.surfaceShaderInputs,
@@ -238,18 +303,21 @@ const createSpriteState = (
   });
 
   const currentLocation =
-    overrides.currentLocation ?? ({ lng: 0, lat: 0, z: 0 } as SpriteLocation);
+    overrides.location?.current ?? ({ lng: 0, lat: 0, z: 0 } as SpriteLocation);
   const cachedMercator =
     overrides.cachedMercator ??
     MercatorCoordinate.fromLngLat(currentLocation, currentLocation.z ?? 0);
+  const location: InternalSpriteCurrentState<null>['location'] = {
+    current: currentLocation,
+    from: overrides.location?.from,
+    to: overrides.location?.to,
+  };
 
   return {
     spriteId,
     handle: overrides.handle ?? 0,
     isEnabled: overrides.isEnabled ?? true,
-    currentLocation,
-    fromLocation: overrides.fromLocation,
-    toLocation: overrides.toLocation,
+    location,
     images: layers,
     tag: overrides.tag ?? null,
     interpolationState: overrides.interpolationState ?? null,
@@ -589,12 +657,12 @@ describe('collectDepthSortedItems', () => {
 
     const imageFirst = createImageState({ imageId: 'lex-a', order: 0 });
     const spriteFirst = createSpriteState('sprite-1', [imageFirst], {
-      currentLocation: sharedLocation,
+      location: { current: sharedLocation, from: undefined, to: undefined },
     });
 
     const imageSecond = createImageState({ imageId: 'lex-b', order: 0 });
     const spriteSecond = createSpriteState('sprite-2', [imageSecond], {
-      currentLocation: sharedLocation,
+      location: { current: sharedLocation, from: undefined, to: undefined },
     });
 
     const images = new Map<string, RegisteredImage>([
@@ -759,7 +827,11 @@ describe('prepareDrawSpriteImages', () => {
     const resource = createImageResource('icon-distance');
     const image = createImageState({ imageId: 'icon-distance', order: 0 });
     const sprite = createSpriteState('sprite-distance', [image], {
-      currentLocation: { lng: 10, lat: 10, z: 0 },
+      location: {
+        current: { lng: 10, lat: 10, z: 0 },
+        from: undefined,
+        to: undefined,
+      },
     });
 
     const context = createCollectContext({
@@ -922,7 +994,7 @@ describe('prepareDrawSpriteImages', () => {
       []
     );
     expect(image.opacityInterpolationState?.startTimestamp).toBe(0);
-    expect(image.opacity).toBeCloseTo(1, 6);
+    expect(image.opacity.current).toBeCloseTo(1, 6);
 
     const nextParams: RenderInterpolationParams<null> = {
       sprites: [sprite],
@@ -932,7 +1004,7 @@ describe('prepareDrawSpriteImages', () => {
       nextParams,
       []
     );
-    expect(image.opacity).toBeCloseTo(0.5, 6);
+    expect(image.opacity.current).toBeCloseTo(0.5, 6);
     expect(image.opacityInterpolationState?.startTimestamp).toBe(0);
   });
 
@@ -1450,7 +1522,7 @@ describe('processInterpolationsInternal', () => {
       options: { durationMs: 1000, easing: 'linear' },
     });
     const sprite = createSpriteState('sprite-1', [image], {
-      currentLocation,
+      location: { current: currentLocation, from: undefined, to: undefined },
       interpolationState: spriteState,
     });
 
@@ -1487,8 +1559,8 @@ describe('processInterpolationsInternal', () => {
     expect(recorded[0]?.distance).toHaveLength(1);
     expect(handlers.evaluateDistance).toHaveBeenCalledTimes(1);
     expect(handlers.evaluateSprite).toHaveBeenCalledTimes(1);
-    expect(image.offset.offsetMeters).toBeCloseTo(4);
-    expect(sprite.currentLocation.lng).toBeCloseTo(3);
+    expect(image.offset.offsetMeters.current).toBeCloseTo(4);
+    expect(sprite.location.current.lng).toBeCloseTo(3);
     expect(sprite.interpolationState).not.toBeNull();
   });
 
@@ -1526,7 +1598,7 @@ describe('processInterpolationsInternal', () => {
     expect(result.hasActiveInterpolation).toBe(false);
     expect(handlers.prepare).not.toHaveBeenCalled();
     expect(handlers.evaluateDistance).not.toHaveBeenCalled();
-    expect(image.offset.offsetMeters).toBe(6);
+    expect(image.offset.offsetMeters.current).toBe(6);
     expect(image.offsetMetersInterpolationState).toBeNull();
   });
 });

@@ -12,7 +12,11 @@ import type {
   ProjectionHost,
   RegisteredImage,
 } from '../internalTypes';
-import type { SpriteLocation, SpriteScreenPoint } from '../types';
+import type {
+  SpriteLocation,
+  SpriteScreenPoint,
+  SpriteImageOffset,
+} from '../types';
 import {
   applySurfaceDisplacement,
   calculateBillboardAnchorShiftPixels,
@@ -44,6 +48,19 @@ import {
 //////////////////////////////////////////////////////////////////////////////////////
 
 const HIT_TEST_QUERY_RADIUS_PIXELS = 32;
+
+const resolveImageOffset = (
+  image: Readonly<InternalSpriteImageState>
+): SpriteImageOffset => {
+  const offset = image.offset;
+  if (!offset) {
+    return { ...DEFAULT_IMAGE_OFFSET };
+  }
+  return {
+    offsetMeters: offset.offsetMeters.current,
+    offsetDeg: offset.offsetDeg.current,
+  };
+};
 
 interface HitTestTreeState<T> {
   readonly sprite: Readonly<InternalSpriteCurrentState<T>>;
@@ -223,7 +240,7 @@ export const createHitTestController = <T>({
     }
 
     const scaling = getResolvedScaling();
-    const baseLocation = sprite.currentLocation;
+    const baseLocation = sprite.location.current;
     const zoom = projectionHost.getZoom();
     const zoomScaleFactor = calculateZoomScaleFactor(zoom, scaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
@@ -272,7 +289,7 @@ export const createHitTestController = <T>({
     }
 
     const anchor = image.anchor ?? DEFAULT_ANCHOR;
-    const offsetDef = image.offset ?? DEFAULT_IMAGE_OFFSET;
+    const offsetDef = resolveImageOffset(image);
     const offsetMetersVec = calculateSurfaceOffsetMeters(
       offsetDef,
       imageScale,
@@ -283,7 +300,7 @@ export const createHitTestController = <T>({
     const totalRotateDeg = Number.isFinite(image.displayedRotateDeg)
       ? image.displayedRotateDeg
       : normalizeAngleDeg(
-          (image.resolvedBaseRotateDeg ?? 0) + (image.rotateDeg ?? 0)
+          (image.resolvedBaseRotateDeg ?? 0) + image.rotationCommandDeg
         );
 
     const cornerDisplacements = calculateSurfaceCornerDisplacements({
@@ -311,7 +328,7 @@ export const createHitTestController = <T>({
     }
 
     const scaling = getResolvedScaling();
-    const baseLocation = sprite.currentLocation;
+    const baseLocation = sprite.location.current;
     const zoom = projectionHost.getZoom();
     const zoomScaleFactor = calculateZoomScaleFactor(zoom, scaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
@@ -345,7 +362,7 @@ export const createHitTestController = <T>({
     const totalRotateDeg = Number.isFinite(image.displayedRotateDeg)
       ? image.displayedRotateDeg
       : normalizeAngleDeg(
-          (image.resolvedBaseRotateDeg ?? 0) + (image.rotateDeg ?? 0)
+          (image.resolvedBaseRotateDeg ?? 0) + image.rotationCommandDeg
         );
 
     const pixelDims = calculateBillboardPixelDimensions(
@@ -370,7 +387,7 @@ export const createHitTestController = <T>({
     );
 
     const offsetShift = calculateBillboardOffsetPixels(
-      image.offset ?? DEFAULT_IMAGE_OFFSET,
+      resolveImageOffset(image),
       imageScale,
       zoomScaleFactor,
       effectivePixelsPerMeter
@@ -393,7 +410,7 @@ export const createHitTestController = <T>({
     sprite: Readonly<InternalSpriteCurrentState<T>>,
     image: Readonly<InternalSpriteImageState>
   ): LooseQuadTreeRect | null => {
-    if (image.opacity <= 0 || !sprite.isEnabled) {
+    if (image.opacity.current <= 0 || !sprite.isEnabled) {
       return null;
     }
     if (image.mode === 'surface') {

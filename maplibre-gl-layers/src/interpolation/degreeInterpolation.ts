@@ -258,7 +258,12 @@ const DEGREE_INTERPOLATION_CHANNELS: Record<
   offsetDeg: {
     stateKey: 'offsetDegInterpolationState',
     applyValue: (image, value) => {
-      image.offset.offsetDeg = value;
+      image.offset.offsetDeg.current = value;
+    },
+    applyFinalValue: (image, value) => {
+      image.offset.offsetDeg.current = value;
+      image.offset.offsetDeg.from = undefined;
+      image.offset.offsetDeg.to = undefined;
     },
   },
 };

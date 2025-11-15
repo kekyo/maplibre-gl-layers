@@ -1566,7 +1566,7 @@ export const resolveSpriteMercator = <T>(
   projectionHost: ProjectionHost,
   sprite: InternalSpriteCurrentState<T>
 ): SpriteMercatorCoordinate => {
-  const location = sprite.currentLocation;
+  const location = sprite.location.current;
   if (
     sprite.cachedMercator &&
     sprite.cachedMercatorLng === location.lng &&

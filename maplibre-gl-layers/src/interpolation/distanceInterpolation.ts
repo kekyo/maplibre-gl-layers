@@ -161,14 +161,24 @@ const DISTANCE_INTERPOLATION_CHANNELS: Record<
   offsetMeters: {
     stateKey: 'offsetMetersInterpolationState',
     applyValue: (image: InternalSpriteImageState, value: number) => {
-      image.offset.offsetMeters = value;
+      image.offset.offsetMeters.current = value;
+    },
+    applyFinalValue: (image: InternalSpriteImageState, value: number) => {
+      image.offset.offsetMeters.current = value;
+      image.offset.offsetMeters.from = undefined;
+      image.offset.offsetMeters.to = undefined;
     },
   },
   opacity: {
     stateKey: 'opacityInterpolationState',
     normalize: clampOpacity,
     applyValue: (image: InternalSpriteImageState, value: number) => {
-      image.opacity = value;
+      image.opacity.current = value;
+    },
+    applyFinalValue: (image, value) => {
+      image.opacity.current = value;
+      image.opacity.from = undefined;
+      image.opacity.to = undefined;
     },
   },
 };

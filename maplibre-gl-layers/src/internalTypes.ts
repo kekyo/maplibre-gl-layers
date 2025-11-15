@@ -11,7 +11,6 @@
 import type {
   SpriteMode,
   SpriteAnchor,
-  SpriteImageOffset,
   SpriteInterpolationOptions,
   SpriteImageOriginLocation,
   SpriteLocation,
@@ -208,6 +207,21 @@ export interface SpriteMercatorCoordinate {
   readonly x: number;
   readonly y: number;
   readonly z: number;
+}
+
+/**
+ * Mutable counterpart to {@link InterpolatedValues}, used internally so SpriteLayer
+ * can reuse object references while still exposing readonly snapshots publicly.
+ */
+export interface MutableInterpolatedValues<T> {
+  current: T;
+  from: T | undefined;
+  to: T | undefined;
+}
+
+export interface MutableSpriteImageInterpolatedOffset {
+  offsetMeters: MutableInterpolatedValues<number>;
+  offsetDeg: MutableInterpolatedValues<number>;
 }
 
 export interface Releasable {
@@ -653,11 +667,12 @@ export interface InternalSpriteImageState {
   imageId: string;
   imageHandle: number;
   mode: SpriteMode;
-  opacity: number;
+  opacity: MutableInterpolatedValues<number>;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
-  offset: SpriteImageOffset;
-  rotateDeg: number;
+  offset: MutableSpriteImageInterpolatedOffset;
+  rotateDeg: MutableInterpolatedValues<number>;
+  rotationCommandDeg: number;
   displayedRotateDeg: number;
   autoRotation: boolean;
   autoRotationMinDistanceMeters: number;
@@ -695,9 +710,7 @@ export interface InternalSpriteCurrentState<TTag> {
   spriteId: string;
   handle: IdHandle;
   isEnabled: boolean;
-  currentLocation: Readonly<SpriteLocation>;
-  fromLocation?: Readonly<SpriteLocation>;
-  toLocation?: Readonly<SpriteLocation>;
+  location: MutableInterpolatedValues<Readonly<SpriteLocation>>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
   interpolationState: InternalSpriteInterpolationState | null;

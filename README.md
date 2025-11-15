@@ -272,7 +272,7 @@ spriteLayer.addSprite('vehicle-anchor', {
 
 ## Offset
 
-The `offset` option displaces an image from its anchor. `offset.offsetMeters` specifies the distance in meters, and `offset.offsetDeg` specifies the heading. Surface mode interprets the heading as clockwise degrees from geographic north, while billboard mode uses clockwise degrees from the top of the screen.
+The `offset` option displaces an image from its anchor. `offset.offsetMeters.current` specifies the distance in meters, and `offset.offsetDeg.current` specifies the heading. Surface mode interprets the heading as clockwise degrees from geographic north, while billboard mode uses clockwise degrees from the top of the screen.
 
 Distances are converted to pixels according to the SpriteLayer scaling options, so zooming or pitching the map keeps the relative placement intact. Without an offset, the image renders directly at the anchor.
 
@@ -318,7 +318,7 @@ spriteLayer.addSprite('vehicle-rotated', {
 
 ## Image Scale
 
-`scale` multiplies the width and height of the image and also affects `offset.offsetMeters`.
+`scale` multiplies the width and height of the image and also affects `offset.offsetMeters.current`.
 
 First, the `scale` and zoom factor are multiplied by the original image size. Based on this result, the anchor position and rotation center are determined. Furthermore, the offset distance is also scaled by the `scale`, ensuring the overall relative balance of the sprite is maintained.
 
@@ -562,8 +562,8 @@ spriteLayer.on('spriteclick', ({ sprite }) => {
     // Calculating the next coordinates based on the click position
     // and moving them over 500ms
     const nextLocation = {
-      lng: sprite.currentLocation.lng + 0.002,
-      lat: sprite.currentLocation.lat,
+      lng: sprite.location.current.lng + 0.002,
+      lat: sprite.location.current.lat,
     };
     spriteLayer.updateSprite(spriteId, {
       location: nextLocation,
@@ -572,6 +572,8 @@ spriteLayer.on('spriteclick', ({ sprite }) => {
   }
 });
 ```
+
+When inspecting `sprite.images` you can use `image.rotateDeg.current` (and optional `from`/`to`) to see the manual rotation interpolation state, mirroring how `sprite.location` behaves.
 
 You can also surface hover highlights or tooltips:
 

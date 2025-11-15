@@ -72,6 +72,7 @@ import type {
   SpriteLocation,
   SpritePoint,
   SpriteScreenPoint,
+  SpriteImageOffset,
 } from '../types';
 import { createMapLibreProjectionHost } from './mapLibreProjectionHost';
 import {
@@ -115,6 +116,19 @@ import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
 } from '../interpolation/interpolationChannels';
+
+const resolveImageOffset = (
+  image: Readonly<InternalSpriteImageState>
+): SpriteImageOffset => {
+  const offset = image.offset;
+  if (!offset) {
+    return { ...DEFAULT_IMAGE_OFFSET };
+  }
+  return {
+    offsetMeters: offset.offsetMeters.current,
+    offsetDeg: offset.offsetDeg.current,
+  };
+};
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -266,7 +280,7 @@ export const collectDepthSortedItemsInternal = <T>(
       continue;
     }
 
-    const projected = projectionHost.project(spriteEntry.currentLocation);
+    const projected = projectionHost.project(spriteEntry.location.current);
     if (!projected) {
       continue;
     }
@@ -274,14 +288,14 @@ export const collectDepthSortedItemsInternal = <T>(
     const spriteMercator = resolveSpriteMercator(projectionHost, spriteEntry);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
-      spriteEntry.currentLocation.lat
+      spriteEntry.location.current.lat
     );
     if (!Number.isFinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0) {
       continue;
     }
 
     const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
-      spriteEntry.currentLocation,
+      spriteEntry.location.current,
       spriteMercator
     );
     const effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
@@ -310,7 +324,7 @@ export const collectDepthSortedItemsInternal = <T>(
     };
 
     const anchorResolved = imageEntry.anchor ?? DEFAULT_ANCHOR;
-    const offsetResolved = imageEntry.offset ?? DEFAULT_IMAGE_OFFSET;
+    const offsetResolved = resolveImageOffset(imageEntry);
 
     const depthCenter = computeImageCenterXY(
       spriteEntry,
@@ -339,7 +353,7 @@ export const collectDepthSortedItemsInternal = <T>(
         ? imageEntry.displayedRotateDeg
         : normalizeAngleDeg(
             (imageEntry.resolvedBaseRotateDeg ?? 0) +
-              (imageEntry.rotateDeg ?? 0)
+              imageEntry.rotationCommandDeg
           );
       const offsetMeters = calculateSurfaceOffsetMeters(
         offsetResolved,
@@ -371,7 +385,7 @@ export const collectDepthSortedItemsInternal = <T>(
             }
           }
         }
-        return spriteEntry.currentLocation;
+        return spriteEntry.location.current;
       })();
 
       const surfaceDepth = calculateSurfaceDepthKey(
@@ -559,7 +573,7 @@ const computeImageCenterXY = <T>(
   const totalRotDeg = Number.isFinite(image.displayedRotateDeg)
     ? image.displayedRotateDeg
     : normalizeAngleDeg(
-        (image.resolvedBaseRotateDeg ?? 0) + (image.rotateDeg ?? 0)
+        (image.resolvedBaseRotateDeg ?? 0) + image.rotationCommandDeg
       );
   const imageScaleLocal = image.scale ?? 1;
   const imageResourceRef = imageResources[image.imageHandle];
@@ -577,7 +591,7 @@ const computeImageCenterXY = <T>(
       spriteMaxPixel,
       totalRotateDeg: totalRotDeg,
       anchor: image.anchor,
-      offset: image.offset,
+      offset: resolveImageOffset(image),
     });
     // Center used when the anchor is resolved to the provided anchor point.
     const anchorApplied: SpritePoint = placement.center;
@@ -595,9 +609,9 @@ const computeImageCenterXY = <T>(
   const baseLngLat: SpriteLocation =
     image.originLocation !== undefined
       ? // When anchored to another image, reproject the 2D reference point back to geographic space.
-        (projectionHost.unproject(base) ?? sprite.currentLocation)
+        (projectionHost.unproject(base) ?? sprite.location.current)
       : // Otherwise use the sprite's own interpolated geographic location.
-        sprite.currentLocation;
+        sprite.location.current;
 
   const projectToClipSpace: ProjectToClipSpaceFn | undefined = clipContext
     ? (location) =>
@@ -613,7 +627,7 @@ const computeImageCenterXY = <T>(
     zoomScaleFactor,
     totalRotateDeg: totalRotDeg,
     anchor: image.anchor,
-    offset: image.offset,
+    offset: resolveImageOffset(image),
     effectivePixelsPerMeter,
     spriteMinPixel,
     spriteMaxPixel,
@@ -835,16 +849,16 @@ export const prepareDrawSpriteImageInternal = <TTag>(
 
   // Use per-image anchor/offset when provided; otherwise fall back to defaults.
   const anchor = imageEntry.anchor ?? DEFAULT_ANCHOR;
-  const offsetDef = imageEntry.offset ?? DEFAULT_IMAGE_OFFSET;
+  const offsetDef = resolveImageOffset(imageEntry);
 
   // Prefer the dynamically interpolated rotation when available; otherwise synthesize it from base + manual rotations.
   const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
     ? imageEntry.displayedRotateDeg
     : normalizeAngleDeg(
-        (imageEntry.resolvedBaseRotateDeg ?? 0) + (imageEntry.rotateDeg ?? 0)
+        (imageEntry.resolvedBaseRotateDeg ?? 0) + imageEntry.rotationCommandDeg
       );
 
-  const projected = projectionHost.project(spriteEntry.currentLocation);
+  const projected = projectionHost.project(spriteEntry.location.current);
   if (!projected) {
     // Projection may fail when the coordinate exits the viewport.
     return null;
@@ -852,14 +866,14 @@ export const prepareDrawSpriteImageInternal = <TTag>(
 
   const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
     zoom,
-    spriteEntry.currentLocation.lat
+    spriteEntry.location.current.lat
   );
   if (!Number.isFinite(metersPerPixelAtLat) || metersPerPixelAtLat <= 0) {
     return null;
   }
 
   const perspectiveRatio = projectionHost.calculatePerspectiveRatio(
-    spriteEntry.currentLocation,
+    spriteEntry.location.current,
     spriteMercator
   );
 
@@ -909,7 +923,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   }
 
   const resolveBaseLocation = (): SpriteLocation => {
-    const fallback = spriteEntry.currentLocation;
+    const fallback = spriteEntry.location.current;
     if (imageEntry.originLocation !== undefined) {
       const unprojected = projectionHost.unproject(baseProjected);
       if (unprojected) {
@@ -1392,7 +1406,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     imageEntry,
     imageResource,
     vertexData: new Float32Array(QUAD_VERTEX_SCRATCH),
-    opacity: imageEntry.opacity,
+    opacity: imageEntry.opacity.current,
     hitTestCorners,
     screenToClip: screenToClipUniforms,
     useShaderSurface,
@@ -1502,7 +1516,7 @@ export const syncPreparedOpacities = <TTag>(
     return;
   }
   for (const prepared of preparedItems) {
-    prepared.opacity = prepared.imageEntry.opacity;
+    prepared.opacity = prepared.imageEntry.opacity.current;
   }
 };
 
@@ -1589,12 +1603,12 @@ const applySpriteInterpolationEvaluations = <TTag>(
       state.startTimestamp = evaluation.effectiveStartTimestamp;
     }
 
-    sprite.currentLocation = evaluation.location;
+    sprite.location.current = evaluation.location;
 
     if (evaluation.completed) {
-      sprite.currentLocation = cloneSpriteLocation(state.to);
-      sprite.fromLocation = undefined;
-      sprite.toLocation = undefined;
+      sprite.location.current = cloneSpriteLocation(state.to);
+      sprite.location.from = undefined;
+      sprite.location.to = undefined;
       sprite.interpolationState = null;
     } else {
       active = true;
@@ -1607,18 +1621,22 @@ const ensureOpacityInterpolationTarget = (
   image: InternalSpriteImageState
 ): void => {
   const target = clampOpacity(
-    image.opacityTargetValue ?? image.lastCommandOpacity ?? image.opacity
+    image.opacityTargetValue ??
+      image.lastCommandOpacity ??
+      image.opacity.current
   );
   const interpolationState = image.opacityInterpolationState;
   const currentStateTarget = interpolationState
     ? clampOpacity(interpolationState.finalValue)
-    : image.opacity;
+    : image.opacity.current;
   if (interpolationState) {
     if (Math.abs(currentStateTarget - target) <= OPACITY_TARGET_EPSILON) {
       // Already interpolating toward the desired target.
       return;
     }
-  } else if (Math.abs(image.opacity - target) <= OPACITY_TARGET_EPSILON) {
+  } else if (
+    Math.abs(image.opacity.current - target) <= OPACITY_TARGET_EPSILON
+  ) {
     // No interpolation state and current opacity already matches the target.
     image.lodLastCommandOpacity = target;
     return;
@@ -1626,7 +1644,7 @@ const ensureOpacityInterpolationTarget = (
   const options = image.opacityInterpolationOptions;
   if (options && options.durationMs > 0) {
     const { state, requiresInterpolation } = createDistanceInterpolationState({
-      currentValue: clampOpacity(image.opacity),
+      currentValue: clampOpacity(image.opacity.current),
       targetValue: target,
       previousCommandValue: image.lodLastCommandOpacity,
       options,
@@ -1634,10 +1652,14 @@ const ensureOpacityInterpolationTarget = (
     image.lodLastCommandOpacity = target;
     if (requiresInterpolation) {
       image.opacityInterpolationState = state;
+      image.opacity.from = image.opacity.current;
+      image.opacity.to = target;
       return;
     }
   }
-  image.opacity = target;
+  image.opacity.current = target;
+  image.opacity.from = undefined;
+  image.opacity.to = undefined;
   image.opacityInterpolationState = null;
   image.lodLastCommandOpacity = target;
 };
@@ -1674,11 +1696,11 @@ export const processInterpolationsInternal = <TTag>(
         if (state.startTimestamp < 0) {
           state.startTimestamp = evaluation.effectiveStartTimestamp;
         }
-        sprite.currentLocation = evaluation.location;
+        sprite.location.current = evaluation.location;
         if (evaluation.completed) {
-          sprite.currentLocation = cloneSpriteLocation(state.to);
-          sprite.fromLocation = undefined;
-          sprite.toLocation = undefined;
+          sprite.location.current = cloneSpriteLocation(state.to);
+          sprite.location.from = undefined;
+          sprite.location.to = undefined;
           sprite.interpolationState = null;
         } else {
           hasActiveInterpolation = true;

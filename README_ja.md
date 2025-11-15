@@ -293,7 +293,7 @@ spriteLayer.addSprite('vehicle-anchor', {
 
 ## オフセット
 
-`offset`ではアンカーから一定距離だけ画像を離して配置できます。`offset.offsetMeters`はメートル単位の距離、`offset.offsetDeg`は方向を表し、サーフェイスモードでは地図上の真北を0度とした時計回り、ビルボードモードでは画面上方向を0度とした時計回りで解釈されます。
+`offset`ではアンカーから一定距離だけ画像を離して配置できます。`offset.offsetMeters.current`はメートル単位の距離、`offset.offsetDeg.current`は方向を表し、サーフェイスモードでは地図上の真北を0度とした時計回り、ビルボードモードでは画面上方向を0度とした時計回りで解釈されます。
 
 距離はSpriteLayerが管理する縮尺に基づいてピクセルへ換算されるため、ズームやピッチが変わっても相対位置が維持されます。設定しなければアンカー位置にそのまま描画されます。
 
@@ -339,7 +339,7 @@ spriteLayer.addSprite('vehicle-anchor', {
 
 ## 画像のスケール
 
-`scale`は画像の幅・高さを倍率で拡大縮小し、同時に`offset.offsetMeters`で指定した距離にも掛かります。
+`scale`は画像の幅・高さを倍率で拡大縮小し、同時に`offset.offsetMeters.current`で指定した距離にも掛かります。
 
 まず元の画像サイズに`scale`とズーム倍率が掛け合わされ、その結果を基にアンカーの位置と回転の中心が決まります。
 さらに、オフセット距離も`scale`で伸縮されるため、スプライト全体の相対的なバランスが保たれます。
@@ -587,8 +587,8 @@ spriteLayer.on('spriteclick', ({ sprite, screenPoint }) => {
     const { spriteId } = sprite;
     // クリック位置を基準にした次の座標を計算し、500msで移動させる
     const nextLocation = {
-      lng: sprite.currentLocation.lng + 0.002,
-      lat: sprite.currentLocation.lat,
+      lng: sprite.location.current.lng + 0.002,
+      lat: sprite.location.current.lat,
     };
     spriteLayer.updateSprite(spriteId, {
       location: nextLocation,
@@ -597,6 +597,8 @@ spriteLayer.on('spriteclick', ({ sprite, screenPoint }) => {
   }
 });
 ```
+
+`sprite.images` を参照すると、`image.rotateDeg.current`（および必要に応じて `from`/`to`）で回転補間の状態を `sprite.location` と同じように確認できます。
 
 ホバーイベントを使えば、ツールチップやハイライトも実現できます。
 

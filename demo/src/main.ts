@@ -1607,13 +1607,13 @@ const main = async () => {
     if (selectedFieldEls.visible) {
       // Reflect whether the sprite image was visible (non-zero opacity) at the time of the click.
       selectedFieldEls.visible.textContent =
-        imageState.opacity !== 0.0 ? 'Visible' : 'Hidden';
+        imageState.opacity.current !== 0.0 ? 'Visible' : 'Hidden';
     }
     if (selectedFieldEls.lnglat) {
       // Show the geographic coordinates for the sprite's current location.
       selectedFieldEls.lnglat.textContent = formatLngLat(
-        spriteState.currentLocation.lng,
-        spriteState.currentLocation.lat
+        spriteState.location.current.lng,
+        spriteState.location.current.lat
       );
     }
     if (selectedFieldEls.screen) {
@@ -1732,8 +1732,8 @@ const main = async () => {
       dy: -currentTag.dy,
       lastStepLng: -currentTag.lastStepLng,
       lastStepLat: -currentTag.lastStepLat,
-      worldLng: spriteState.currentLocation.lng,
-      worldLat: spriteState.currentLocation.lat,
+      worldLng: spriteState.location.current.lng,
+      worldLat: spriteState.location.current.lat,
     };
 
     if (currentTag.path) {
@@ -1746,9 +1746,9 @@ const main = async () => {
         pathVectorLng * pathVectorLng + pathVectorLat * pathVectorLat;
       if (pathLengthSq > 0) {
         const originToCurrentLng =
-          spriteState.currentLocation.lng - path.startLng;
+          spriteState.location.current.lng - path.startLng;
         const originToCurrentLat =
-          spriteState.currentLocation.lat - path.startLat;
+          spriteState.location.current.lat - path.startLat;
         progress =
           (originToCurrentLng * pathVectorLng +
             originToCurrentLat * pathVectorLat) /

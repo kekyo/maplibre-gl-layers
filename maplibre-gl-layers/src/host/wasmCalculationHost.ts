@@ -41,6 +41,7 @@ import type {
   SpritePoint,
   SpriteMode,
   SpriteEasingPresetName,
+  SpriteImageOffset,
 } from '../types';
 import { prepareWasmHost, type BufferHolder, type WasmHost } from './wasmHost';
 import {
@@ -107,6 +108,19 @@ const WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
 const EASING_PRESET_IDS: Record<SpriteEasingPresetName, number> = {
   linear: 0,
+};
+
+const resolveImageOffset = (
+  image: Readonly<InternalSpriteImageState>
+): SpriteImageOffset => {
+  const offset = image.offset;
+  if (!offset) {
+    return { offsetMeters: 0, offsetDeg: 0 };
+  }
+  return {
+    offsetMeters: offset.offsetMeters.current,
+    offsetDeg: offset.offsetDeg.current,
+  };
 };
 
 const encodeEasingPresetId = (
@@ -358,12 +372,12 @@ const applySpriteInterpolationEvaluations = <TTag>(
       state.startTimestamp = evaluation.effectiveStartTimestamp;
     }
 
-    sprite.currentLocation = evaluation.location;
+    sprite.location.current = evaluation.location;
 
     if (evaluation.completed) {
-      sprite.currentLocation = cloneSpriteLocation(state.to);
-      sprite.fromLocation = undefined;
-      sprite.toLocation = undefined;
+      sprite.location.current = cloneSpriteLocation(state.to);
+      sprite.location.from = undefined;
+      sprite.location.to = undefined;
       sprite.interpolationState = null;
     } else {
       active = true;
@@ -411,11 +425,11 @@ const processInterpolationsWithWasm = <TTag>(
         if (state.startTimestamp < 0) {
           state.startTimestamp = evaluation.effectiveStartTimestamp;
         }
-        sprite.currentLocation = evaluation.location;
+        sprite.location.current = evaluation.location;
         if (evaluation.completed) {
-          sprite.currentLocation = cloneSpriteLocation(state.to);
-          sprite.fromLocation = undefined;
-          sprite.toLocation = undefined;
+          sprite.location.current = cloneSpriteLocation(state.to);
+          sprite.location.from = undefined;
+          sprite.location.to = undefined;
           sprite.interpolationState = null;
         } else {
           hasActiveInterpolation = true;
@@ -791,7 +805,7 @@ export const createWasmCalculateSurfaceDepthKey = (
  * - Frame constants (`INPUT_FRAME_CONSTANT_LENGTH`): A constant scalar between frames, such as zoom, meters-per-pixel, and screen-to-clip conversion.
  * - Matrices (`INPUT_MATRIX_LENGTH`): mercator/pixel/pixelInverse (16 items ×3).
  * - Resource table (`RESOURCE_STRIDE`× count): Size and texture state of each image handles
- * - Sprite table (`SPRITE_STRIDE`× count): `handle`, `currentLocation`, `cachedMercator`.
+ * - Sprite table (`SPRITE_STRIDE`× count): `handle`, `location`, `cachedMercator`.
  * - Item table (`ITEM_STRIDE`× bucket length): Drawing attributes of each sprite images
  *
  * ## Result buffer layout (Float64Array)
@@ -1456,7 +1470,7 @@ const convertToWasmProjectionState = <TTag>(
       if (!sprite) {
         return;
       }
-      const location = sprite.currentLocation;
+      const location = sprite.location.current;
       const mercator = sprite.cachedMercator;
       parameterBuffer[cursor++] = location.lng;
       parameterBuffer[cursor++] = location.lat;
@@ -1485,7 +1499,7 @@ const convertToWasmProjectionState = <TTag>(
       const originIndex =
         originTargetIndices?.[index] ?? image.originRenderTargetIndex;
       const originLocation = image.originLocation;
-      const currentLocation = sprite.currentLocation;
+      const currentLocation = sprite.location.current;
       parameterBuffer[cursor++] = spriteHandle;
       parameterBuffer[cursor++] = imageHandle;
       parameterBuffer[cursor++] =
@@ -1495,16 +1509,16 @@ const convertToWasmProjectionState = <TTag>(
       );
       parameterBuffer[cursor++] = modeToNumber(image.mode);
       parameterBuffer[cursor++] = image.scale ?? 1;
-      parameterBuffer[cursor++] = image.opacity;
+      parameterBuffer[cursor++] = image.opacity.current;
       const anchor = image.anchor ?? { x: 0, y: 0 };
       parameterBuffer[cursor++] = anchor.x;
       parameterBuffer[cursor++] = anchor.y;
-      const offset = image.offset ?? { offsetDeg: 0, offsetMeters: 0 };
+      const offset = resolveImageOffset(image);
       parameterBuffer[cursor++] = offset.offsetMeters;
       parameterBuffer[cursor++] = offset.offsetDeg;
       parameterBuffer[cursor++] = toFiniteOr(image.displayedRotateDeg, 0);
       parameterBuffer[cursor++] = toFiniteOr(image.resolvedBaseRotateDeg, 0);
-      parameterBuffer[cursor++] = toFiniteOr(image.rotateDeg, 0);
+      parameterBuffer[cursor++] = toFiniteOr(image.rotationCommandDeg, 0);
       parameterBuffer[cursor++] = image.order;
       parameterBuffer[cursor++] = image.subLayer;
       parameterBuffer[cursor++] = originKey ?? SPRITE_ORIGIN_REFERENCE_KEY_NONE;

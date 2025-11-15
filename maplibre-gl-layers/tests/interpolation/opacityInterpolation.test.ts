@@ -18,11 +18,15 @@ const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   imageId: 'image',
   imageHandle: 1,
   mode: 'surface',
-  opacity,
+  opacity: { current: opacity, from: undefined, to: undefined },
   scale: 1,
   anchor: { x: 0, y: 0 },
-  offset: { offsetMeters: 0, offsetDeg: 0 },
-  rotateDeg: 0,
+  offset: {
+    offsetMeters: { current: 0, from: undefined, to: undefined },
+    offsetDeg: { current: 0, from: undefined, to: undefined },
+  },
+  rotateDeg: { current: 0, from: undefined, to: undefined },
+  rotationCommandDeg: 0,
   displayedRotateDeg: 0,
   autoRotation: false,
   autoRotationMinDistanceMeters: 0,
@@ -35,6 +39,9 @@ const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   offsetDegInterpolationState: null,
   offsetMetersInterpolationState: null,
   opacityInterpolationState: null,
+  opacityInterpolationOptions: null,
+  opacityTargetValue: opacity,
+  lodLastCommandOpacity: opacity,
   lastCommandRotateDeg: 0,
   lastCommandOffsetDeg: 0,
   lastCommandOffsetMeters: 0,
@@ -48,7 +55,7 @@ describe('applyOpacityUpdate', () => {
 
     applyOpacityUpdate(image, 5);
 
-    expect(image.opacity).toBe(1);
+    expect(image.opacity.current).toBe(1);
     expect(image.opacityInterpolationState).toBeNull();
     expect(image.lastCommandOpacity).toBe(1);
   });
@@ -67,7 +74,7 @@ describe('applyOpacityUpdate', () => {
     expect(stepSpriteImageInterpolations(image, startTimestamp + 200)).toBe(
       false
     );
-    expect(image.opacity).toBe(0);
+    expect(image.opacity.current).toBe(0);
   });
 
   it('supports feedforward opacity interpolation without exceeding 1.0', () => {
@@ -84,6 +91,6 @@ describe('applyOpacityUpdate', () => {
     stepSpriteImageInterpolations(image, 0);
     stepSpriteImageInterpolations(image, 200);
 
-    expect(image.opacity).toBe(1);
+    expect(image.opacity.current).toBe(1);
   });
 });
