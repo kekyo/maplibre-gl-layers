@@ -4,7 +4,7 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { Rect } from './looseQuadTree';
+import type { Rect } from './utils/looseQuadTree';
 import type {
   SpriteAnchor,
   SpriteImageOffset,
