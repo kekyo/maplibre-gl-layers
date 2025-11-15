@@ -680,7 +680,6 @@ export interface InternalSpriteImageState {
   originLocation?: Readonly<SpriteImageOriginLocation>;
   originReferenceKey: SpriteOriginReferenceKey;
   originRenderTargetIndex: SpriteOriginReferenceIndex;
-  visibilityDistanceMeters?: number;
   rotationInterpolationState: Readonly<DegreeInterpolationState> | null;
   rotationInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
   offsetDegInterpolationState: Readonly<DegreeInterpolationState> | null;
@@ -710,6 +709,7 @@ export interface InternalSpriteCurrentState<TTag> {
   spriteId: string;
   handle: IdHandle;
   isEnabled: boolean;
+  visibilityDistanceMeters?: number;
   location: MutableInterpolatedValues<Readonly<SpriteLocation>>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;

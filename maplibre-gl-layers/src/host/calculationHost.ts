@@ -943,9 +943,15 @@ export const prepareDrawSpriteImageInternal = <TTag>(
 
   const baseLocation = resolveBaseLocation();
   const cameraLocation = projectionHost.getCameraLocation();
+  const spriteBaseLocation = spriteEntry.location.current;
+  const spriteDistanceLocation: SpriteLocation = {
+    lng: spriteBaseLocation.lng,
+    lat: spriteBaseLocation.lat,
+    z: spriteBaseLocation.z ?? 0,
+  };
   const cameraDistanceMeters =
     cameraLocation !== null
-      ? calculateCartesianDistanceMeters(cameraLocation, baseLocation)
+      ? calculateCartesianDistanceMeters(cameraLocation, spriteDistanceLocation)
       : Number.POSITIVE_INFINITY;
 
   if (imageEntry.mode === 'surface') {
@@ -1470,12 +1476,13 @@ const prepareDrawSpriteImages = <TTag>(
   return preparedItems;
 };
 
-const resolveVisibilityTargetOpacity = (
+const resolveVisibilityTargetOpacity = <TTag>(
+  sprite: InternalSpriteCurrentState<TTag>,
   image: InternalSpriteImageState,
   cameraDistanceMeters: number
 ): number => {
   const baseOpacity = clampOpacity(image.lastCommandOpacity);
-  const threshold = image.visibilityDistanceMeters;
+  const threshold = sprite.visibilityDistanceMeters;
   if (
     threshold === undefined ||
     !Number.isFinite(threshold) ||
@@ -1495,7 +1502,9 @@ export const applyVisibilityDistanceLod = <TTag>(
   }
   for (const prepared of preparedItems) {
     const image = prepared.imageEntry;
+    const sprite = prepared.spriteEntry;
     const targetOpacity = resolveVisibilityTargetOpacity(
+      sprite,
       image,
       prepared.cameraDistanceMeters
     );

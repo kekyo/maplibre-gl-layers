@@ -2356,23 +2356,16 @@ const main = async () => {
     };
 
     /**
-     * Applies the pseudo LOD distance to every sprite image.
+     * Applies the pseudo LOD distance to every sprite.
      */
     const applyPseudoLodVisibility = (): void => {
       if (!spriteLayer) {
         return;
       }
-      spriteLayer.updateForEach((sprite, spriteUpdate) => {
-        sprite.images.forEach((orderMap) => {
-          orderMap.forEach((image) => {
-            const visibilityDistance = isPseudoLodEnabled
-              ? generatePseudoLodDistanceMeters()
-              : null; // Null clears the threshold when pseudo LOD is disabled.
-            spriteUpdate.updateImage(image.subLayer, image.order, {
-              visibilityDistanceMeters: visibilityDistance,
-            });
-          });
-        });
+      spriteLayer.updateForEach((_sprite, spriteUpdate) => {
+        spriteUpdate.visibilityDistanceMeters = isPseudoLodEnabled
+          ? generatePseudoLodDistanceMeters()
+          : null; // Null clears the threshold when pseudo LOD is disabled.
         return true;
       });
     };
@@ -3822,12 +3815,16 @@ const main = async () => {
         currentAnimationMode,
         newTag
       );
+      const spriteVisibilityDistance = isPseudoLodEnabled
+        ? generatePseudoLodDistanceMeters()
+        : undefined;
       return {
         spriteId: id,
         location: {
           lng: location.lng,
           lat: location.lat,
         },
+        visibilityDistanceMeters: spriteVisibilityDistance,
         tag: newTag,
         // Assign images to the sprite.
         images: [
@@ -3840,9 +3837,6 @@ const main = async () => {
             autoRotation: isAutoRotationEnabled,
             rotateDeg: primaryPlacement.rotateDeg,
             anchor: primaryPlacement.anchor,
-            visibilityDistanceMeters: isPseudoLodEnabled
-              ? generatePseudoLodDistanceMeters()
-              : undefined,
             interpolation: isRotateInterpolationEnabled
               ? {
                   rotateDeg: {
@@ -3862,9 +3856,6 @@ const main = async () => {
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
             scale: SECONDARY_IMAGE_SCALE,
             opacity: secondaryOpacity,
-            visibilityDistanceMeters: isPseudoLodEnabled
-              ? generatePseudoLodDistanceMeters()
-              : undefined,
             ...(secondaryOffset
               ? {
                   offset: secondaryOffset,

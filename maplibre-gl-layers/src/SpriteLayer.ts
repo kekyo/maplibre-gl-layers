@@ -462,6 +462,18 @@ const cloneInterpolationOptions = (
 };
 
 /**
+ * Normalizes visibility distance thresholds, returning `undefined` when the input is not a positive finite number.
+ */
+const sanitizeVisibilityDistanceMeters = (
+  value: number | null | undefined
+): number | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  return undefined;
+};
+
+/**
  * Creates internal sprite image state from initialization data and layer bookkeeping fields.
  * @param {SpriteImageDefinitionInit} imageInit - Caller-provided image definition.
  * @param {number} subLayer - Sub-layer index the image belongs to.
@@ -485,12 +497,6 @@ export const createImageStateFromInit = (
     originLocation !== undefined
       ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
       : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
-  const visibilityDistanceMeters =
-    typeof imageInit.visibilityDistanceMeters === 'number' &&
-    Number.isFinite(imageInit.visibilityDistanceMeters) &&
-    imageInit.visibilityDistanceMeters > 0
-      ? imageInit.visibilityDistanceMeters
-      : undefined;
   const state: InternalSpriteImageState = {
     subLayer,
     order,
@@ -520,7 +526,6 @@ export const createImageStateFromInit = (
     originLocation,
     originReferenceKey,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
-    visibilityDistanceMeters,
     rotationInterpolationState: null,
     rotationInterpolationOptions: null,
     offsetDegInterpolationState: null,
@@ -1476,7 +1481,7 @@ export const createSpriteLayer = <T = any>(
         // Inspect each ordered image entry to update rotation/offset animations.
         orderMap.forEach((image) => {
           const shouldForceVisibilityCheck =
-            image.visibilityDistanceMeters !== undefined &&
+            sprite.visibilityDistanceMeters !== undefined &&
             image.lastCommandOpacity > 0;
           // Fully transparent images contribute nothing and can be ignored unless pseudo LOD controls their visibility.
           if (image.opacity.current <= 0 && !shouldForceVisibilityCheck) {
@@ -2293,11 +2298,16 @@ export const createSpriteLayer = <T = any>(
     const initialMercator = projectionHost.fromLngLat(currentLocation);
     const spriteHandle = spriteIdHandler.allocate(spriteId);
 
+    const spriteVisibilityDistanceMeters = sanitizeVisibilityDistanceMeters(
+      init.visibilityDistanceMeters
+    );
+
     const spriteState: InternalSpriteCurrentState<T> = {
       spriteId,
       handle: spriteHandle,
       // Sprites default to enabled unless explicitly disabled in the init payload.
       isEnabled: init.isEnabled ?? true,
+      visibilityDistanceMeters: spriteVisibilityDistanceMeters,
       location: {
         current: currentLocation,
         from: undefined,
@@ -2722,19 +2732,6 @@ export const createSpriteLayer = <T = any>(
       // Adjust image scaling factor applied to dimensions and offsets.
       state.scale = imageUpdate.scale;
     }
-    if (imageUpdate.visibilityDistanceMeters !== undefined) {
-      const visibility = imageUpdate.visibilityDistanceMeters;
-      if (visibility === null) {
-        state.visibilityDistanceMeters = undefined;
-      } else {
-        state.visibilityDistanceMeters =
-          typeof visibility === 'number' &&
-          Number.isFinite(visibility) &&
-          visibility > 0
-            ? visibility
-            : undefined;
-      }
-    }
     const prevAutoRotation = state.autoRotation;
     const prevMinDistance = state.autoRotationMinDistanceMeters;
 
@@ -2992,6 +2989,17 @@ export const createSpriteLayer = <T = any>(
       }
     }
 
+    if (update.visibilityDistanceMeters !== undefined) {
+      const resolved = sanitizeVisibilityDistanceMeters(
+        update.visibilityDistanceMeters
+      );
+      if (sprite.visibilityDistanceMeters !== resolved) {
+        sprite.visibilityDistanceMeters = resolved;
+        updated = true;
+        isRequiredRender = true;
+      }
+    }
+
     let interpolationOptionsForLocation:
       | SpriteInterpolationOptions
       | null
@@ -3201,6 +3209,7 @@ export const createSpriteLayer = <T = any>(
         location: undefined,
         interpolation: undefined,
         tag: undefined,
+        visibilityDistanceMeters: undefined,
         getImageIndexMap: () => {
           const map = new Map<number, Set<number>>();
           currentSprite.images.forEach((inner, subLayer) => {
@@ -3314,6 +3323,7 @@ export const createSpriteLayer = <T = any>(
         updateObject.location = undefined;
         updateObject.interpolation = undefined;
         updateObject.tag = undefined;
+        updateObject.visibilityDistanceMeters = undefined;
         operationResult.isUpdated = false;
         didMutateImages = false;
       }
@@ -3427,6 +3437,7 @@ export const createSpriteLayer = <T = any>(
         updateObject.location = undefined;
         updateObject.interpolation = undefined;
         updateObject.tag = undefined;
+        updateObject.visibilityDistanceMeters = undefined;
       });
 
       // Request rendering if any sprite or image changed.

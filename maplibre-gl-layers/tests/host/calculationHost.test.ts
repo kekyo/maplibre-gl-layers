@@ -266,7 +266,6 @@ const createImageState = (
     originReferenceKey: overrides.originReferenceKey ?? originReferenceKey,
     originRenderTargetIndex:
       overrides.originRenderTargetIndex ?? SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
-    visibilityDistanceMeters: overrides.visibilityDistanceMeters,
     rotationInterpolationState: overrides.rotationInterpolationState ?? null,
     rotationInterpolationOptions:
       overrides.rotationInterpolationOptions ?? null,
@@ -317,6 +316,7 @@ const createSpriteState = (
     spriteId,
     handle: overrides.handle ?? 0,
     isEnabled: overrides.isEnabled ?? true,
+    visibilityDistanceMeters: overrides.visibilityDistanceMeters,
     location,
     images: layers,
     tag: overrides.tag ?? null,
@@ -889,9 +889,10 @@ describe('prepareDrawSpriteImages', () => {
     const image = createImageState({
       imageId: 'icon-lod',
       order: 0,
+    });
+    const sprite = createSpriteState('sprite-lod', [image], {
       visibilityDistanceMeters: 5,
     });
-    const sprite = createSpriteState('sprite-lod', [image]);
 
     const context = createCollectContext({
       bucket: [[sprite, image] as const],
@@ -935,10 +936,11 @@ describe('prepareDrawSpriteImages', () => {
     const image = createImageState({
       imageId: 'icon-lod-fade',
       order: 0,
-      visibilityDistanceMeters: 5,
       opacityInterpolationOptions: fadeOptions,
     });
-    const sprite = createSpriteState('sprite-lod-fade', [image]);
+    const sprite = createSpriteState('sprite-lod-fade', [image], {
+      visibilityDistanceMeters: 5,
+    });
 
     const context = createCollectContext({
       bucket: [[sprite, image] as const],

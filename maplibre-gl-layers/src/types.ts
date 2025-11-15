@@ -121,8 +121,6 @@ export interface SpriteImageDefinitionInit {
   mode?: SpriteMode;
   /** Opacity multiplier. Defaults to 1.0. */
   opacity?: number;
-  /** Pseudo LOD. Distance in meters at which the image becomes invisible. */
-  visibilityDistanceMeters?: number;
   /** Real-world meters represented by one pixel. Defaults to 1.0. */
   scale?: number;
   /** Anchor within the image. Defaults to [0.0, 0.0]. */
@@ -165,11 +163,6 @@ export interface SpriteImageDefinitionUpdate {
   mode?: SpriteMode;
   /** Opacity multiplier. */
   opacity?: number;
-  /**
-   * Pseudo LOD. Distance in meters at which the image becomes invisible.
-   * Specify `null` to clear the current threshold.
-   */
-  visibilityDistanceMeters?: number | null;
   /** Real-world meters represented by one pixel. */
   scale?: number;
   /** Anchor within the image. */
@@ -209,6 +202,11 @@ export interface SpriteInit<TTag> {
   isEnabled?: boolean;
   /** Initial location. */
   location: SpriteLocation;
+  /**
+   * Pseudo LOD threshold for the sprite. When the camera distance exceeds this value,
+   * all images attached to the sprite become invisible.
+   */
+  visibilityDistanceMeters?: number;
   /** Array of zero or more images. */
   images: SpriteImageDefinitionInitEntry[];
   /** Optional tag value; null or omission means no tag. */
@@ -307,8 +305,6 @@ export interface SpriteImageState {
   readonly displayedRotateDeg: number;
   /** Optional reference to another image used for anchoring. */
   readonly originLocation: Readonly<SpriteImageOriginLocation> | undefined;
-  /** Pseudo LOD. Distance in meters at which the image becomes invisible when exceeded. */
-  readonly visibilityDistanceMeters: number | undefined;
 }
 
 /**
@@ -321,6 +317,11 @@ export interface SpriteCurrentState<TTag> {
   readonly spriteId: string;
   /** Indicates whether the sprite is enabled. */
   readonly isEnabled: boolean;
+  /**
+   * Pseudo LOD threshold for the sprite. When the camera distance exceeds this value,
+   * the sprite's images become invisible.
+   */
+  readonly visibilityDistanceMeters: number | undefined;
   /**
    * Location information including current, source, and destination coordinates.
    * `from`/`to` are `undefined` when interpolation is inactive.
@@ -350,6 +351,11 @@ export interface SpriteUpdateEntryBase<TTag> {
   interpolation?: SpriteInterpolationOptions | null;
   /** Optional tag value to replace the current one; `null` clears the tag. */
   tag?: TTag | null;
+  /**
+   * Pseudo LOD threshold for the sprite. Specify a positive finite value to enable the check,
+   * `null` to clear the current threshold, or leave `undefined` to keep the existing value.
+   */
+  visibilityDistanceMeters?: number | null;
 }
 
 /**
