@@ -568,6 +568,37 @@ spriteLayer.addSprite('vehicle-group', {
 - 参照する画像は、同一のスプライト内の画像に限られます。
 - 循環参照や存在しない画像を指すとエラーになるため、チェーンはループしないように構成して下さい。
 
+## 疑似LOD
+
+疑似LODは、カメラからスプライトまでの距離によって、描画するかどうかを決定する機能です。
+
+これは `visibilityDistanceMeters` にカメラからスプライト（の基準座標点）までの距離を指定すると機能し、
+その距離以上離れるとそのスプライトの画像群は全て非表示となります。
+指定していない場合は疑似LOD機能は無効となり、`opacity`が0.0を超えていれば描画されます。
+
+以下は疑似LODを使用する例です:
+
+```typescript
+// 1.5km以内にカメラが近づいた時だけ描画するスプライト
+spriteLayer.addSprite('vehicle-lod', {
+  location: { lng: 136.8852, lat: 35.17 },
+  visibilityDistanceMeters: 1500, // この距離を超えると自動的に非表示
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      autoRotation: true,
+    },
+  ],
+});
+
+// しきい値を変更する
+spriteLayer.updateSprite('vehicle-lod', {
+  visibilityDistanceMeters: null, // nullで疑似LODを無効化
+});
+```
+
 ## イベントハンドラ
 
 SpriteLayerは次のインタラクションイベントを提供しています:

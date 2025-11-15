@@ -542,6 +542,34 @@ Keep in mind:
 - The referenced image must belong to the same sprite.
 - Circular references or references to missing images produce errors, so design chains carefully.
 
+## Pseudo LOD
+
+Pseudo LOD lets you toggle sprite visibility based on the camera distance to the sprite’s anchor point.
+
+Set `visibilityDistanceMeters` to the desired threshold and every image attached to that sprite disappears when the camera is farther away.
+If you omit the property, pseudo LOD is disabled and the usual `opacity` rules apply.
+
+```typescript
+// Render the sprite only when the camera is within roughly 1.5 km
+spriteLayer.addSprite('vehicle-lod', {
+  location: { lng: 136.8852, lat: 35.17 },
+  visibilityDistanceMeters: 1500, // Hide automatically farther away
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      autoRotation: true,
+    },
+  ],
+});
+
+// Adjust at runtime with updateSprite
+spriteLayer.updateSprite('vehicle-lod', {
+  visibilityDistanceMeters: null, // null disables pseudo LOD
+});
+```
+
 ## Event Handlers
 
 SpriteLayer exposes interaction events so your application can react to clicks and hovers:
