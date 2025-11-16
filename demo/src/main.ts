@@ -4,6 +4,11 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
+/**
+ * URL: http://localhost:5173/maplibre-gl-layers/?test=1
+ * `test=n`: Show testable automation page, `n` is initial progression directive [1:up, 2:right, 3:down, 4:left].
+ */
+
 import './style.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -37,10 +42,60 @@ import { version, repository_url } from './generated/packageMetadata';
  */
 const MAX_NUMBER_OF_SPRITES = 10000;
 
+type TestScenarioDirection = 'up' | 'right' | 'down' | 'left';
+
+type TestScenario = {
+  id: number | null;
+  direction: TestScenarioDirection | null;
+};
+
+const resolveTestScenario = (): TestScenario => {
+  if (typeof window === 'undefined') {
+    // Running outside the browser—no query string to inspect.
+    return { id: null, direction: null };
+  }
+
+  const rawValue = new URL(window.location.href).searchParams.get('test');
+  if (!rawValue) {
+    // No test parameter supplied.
+    return { id: null, direction: null };
+  }
+
+  const parsedValue = Number(rawValue);
+  if (!Number.isFinite(parsedValue)) {
+    // Ignore malformed, non-numeric values so the demo behaves normally.
+    return { id: null, direction: null };
+  }
+
+  const testId = Math.trunc(parsedValue);
+  const direction: TestScenarioDirection | null = (() => {
+    switch (testId) {
+      case 1:
+        return 'up';
+      case 2:
+        return 'right';
+      case 3:
+        return 'down';
+      case 4:
+        return 'left';
+      default:
+        return null;
+    }
+  })();
+
+  return {
+    id: testId,
+    direction,
+  };
+};
+
+const testScenario = resolveTestScenario();
+const isTestMode = testScenario.id !== null;
+
 /**
  * Initial number of sprites to display when the demo loads.
  */
-const INITIAL_NUMBER_OF_SPRITES = 1000;
+const INITIAL_NUMBER_OF_SPRITES = isTestMode ? 1 : 1000;
 
 /**
  * Interval in milliseconds between movement updates.
@@ -68,7 +123,7 @@ const STARTUP_CENTER = {
 /** Initial camera state shared between the UI and map creation. */
 const INITIAL_CAMERA_STATE = {
   zoom: 14.5,
-  pitch: 45,
+  pitch: isTestMode ? 0 : 45,
   bearing: 0,
 } as const;
 
@@ -211,7 +266,19 @@ const MOVEMENT_SPEED_SCALE_MAX = 3;
 /** Slider increment for the movement speed control. */
 const MOVEMENT_SPEED_SCALE_STEP = 0.05;
 /** Default movement speed multiplier. */
-const DEFAULT_MOVEMENT_SPEED_SCALE = 1;
+const DEFAULT_MOVEMENT_SPEED_SCALE = isTestMode ? 0 : 1;
+/** Step vector magnitude applied to the deterministic test sprite. */
+const TEST_MOVEMENT_DELTA = 0.00005;
+/** Direction vectors used when the deterministic test sprite is enabled. */
+const TEST_DIRECTION_DELTAS: Record<
+  TestScenarioDirection,
+  { readonly dx: number; readonly dy: number }
+> = {
+  up: { dx: 0, dy: TEST_MOVEMENT_DELTA },
+  right: { dx: TEST_MOVEMENT_DELTA, dy: 0 },
+  down: { dx: 0, dy: -TEST_MOVEMENT_DELTA },
+  left: { dx: -TEST_MOVEMENT_DELTA, dy: 0 },
+};
 
 /** Fraction of the icon height occupied by the arrow head near the top edge. */
 const ARROW_HEAD_TOP_FRACTION = 0.085;
@@ -220,6 +287,9 @@ const BILLBOARD_PRIMARY_ANCHOR_Y = 1 - 2 * ARROW_HEAD_TOP_FRACTION;
 
 /** Interaction states that control if and how the secondary image orbits the primary marker. */
 type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
+
+const BORDER_COLOR = '#ff0000';
+const BORDER_WIDTH_PIXEL = 2;
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -506,11 +576,7 @@ type BasemapId = 'osm' | 'carto';
 /** Currently active animation mode, toggled from the control panel. */
 let currentAnimationMode: AnimationMode = 'random';
 /** Currently selected base map. */
-const prefersDarkScheme =
-  typeof window !== 'undefined'
-    ? window.matchMedia?.('(prefers-color-scheme: dark)').matches
-    : false;
-let currentBasemapId: BasemapId = prefersDarkScheme ? 'carto' : 'osm';
+let currentBasemapId: BasemapId = 'carto';
 /** Sprite rendering mode, toggled between billboard and surface. */
 let currentSpriteMode: SpriteMode = 'surface';
 /** Whether the sprite auto-rotates to face the direction of travel. */
@@ -518,8 +584,8 @@ let isAutoRotationEnabled = true;
 /** Enables movement interpolation; when false, updates happen per step only. */
 let isMovementInterpolationEnabled = true;
 let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
-let spriteScalingMode: 'standard' | 'unlimited' = 'standard';
-let showDebugBounds = false;
+let spriteScalingMode: 'standard' | 'unlimited' = 'unlimited';
+let showSpriteBorders = false;
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
@@ -586,7 +652,7 @@ let updateMouseEventsButton: (() => void) | undefined;
 let updateDebugBoundsButton: (() => void) | undefined;
 
 const shouldEnableHitTesting = () =>
-  isMouseEventsMonitoringEnabled || showDebugBounds;
+  isMouseEventsMonitoringEnabled || showSpriteBorders;
 
 /**
  * Template that builds the application HUD.
@@ -760,7 +826,7 @@ const createHud = () => {
         </div>
       </section>
       <section id="selected-sprite" data-testid="section-selected-sprite">
-        <div class="toggle-button-row">
+        <div>
           <button
             type="button"
             class="toggle-button${isMouseEventsMonitoringEnabled ? ' active' : ''}"
@@ -771,16 +837,6 @@ const createHud = () => {
             aria-pressed="${isMouseEventsMonitoringEnabled}"
             data-testid="toggle-mouse-events"
           >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
-          <button
-            type="button"
-            class="toggle-button${showDebugBounds ? ' active' : ''}"
-            data-control="debug-bounds-toggle"
-            data-label="Debug Bounds"
-            data-active-text="ON"
-            data-inactive-text="OFF"
-            aria-pressed="${showDebugBounds}"
-            data-testid="toggle-debug-bounds"
-          >Debug Bounds: ${showDebugBounds ? 'ON' : 'OFF'}</button>
         </div>
         <p
           class="status-placeholder"
@@ -845,8 +901,8 @@ const createHud = () => {
               data-selected-field="tag"
               data-testid="selected-tag"
             >--</span>
-      </div>
-    </div>
+          </div>
+        </div>
       </section>
     </aside>
     <aside id="controls" data-testid="panel-controls">
@@ -888,38 +944,6 @@ const createHud = () => {
           Sprite Layer
         </button>
       </div>
-      <div class="control-group" data-testid="group-movement-loop">
-        <h1>Move Location</h1>
-        <label class="range-label" for="movement-speed-slider">
-          Speed
-          <span
-            class="range-value"
-            data-status="movement-speed"
-            data-testid="status-movement-speed"
-          >${formatMovementSpeedScale(DEFAULT_MOVEMENT_SPEED_SCALE)}</span>
-        </label>
-        <input
-          type="range"
-          id="movement-speed-slider"
-          class="range-input"
-          min="${MOVEMENT_SPEED_SCALE_MIN}"
-          max="${MOVEMENT_SPEED_SCALE_MAX}"
-          step="${MOVEMENT_SPEED_SCALE_STEP}"
-          value="${DEFAULT_MOVEMENT_SPEED_SCALE}"
-          data-control="movement-speed"
-          data-testid="slider-movement-speed"
-          aria-valuemin="${MOVEMENT_SPEED_SCALE_MIN}"
-          aria-valuemax="${MOVEMENT_SPEED_SCALE_MAX}"
-          aria-valuenow="${DEFAULT_MOVEMENT_SPEED_SCALE}"
-          aria-label="Sprite movement speed"
-        />
-        <button type="button" class="toggle-button${currentAnimationMode === 'random' ? ' active' : ''}" data-control="animation-mode" data-option="random" data-label="Random Walk" aria-pressed="${currentAnimationMode === 'random'}" data-testid="toggle-animation-random">
-          Random Walk
-        </button>
-        <button type="button" class="toggle-button${currentAnimationMode === 'linear' ? ' active' : ''}" data-control="animation-mode" data-option="linear" data-label="Linear Loop" aria-pressed="${currentAnimationMode === 'linear'}" data-testid="toggle-animation-linear">
-          Linear Loop
-        </button>
-      </div>
       <div class="control-group" data-testid="group-sprite-count">
         <h1>Sprite</h1>
         <label class="range-label" for="sprite-count-slider">
@@ -951,24 +975,69 @@ const createHud = () => {
           aria-valuenow="${INITIAL_NUMBER_OF_SPRITES}"
           aria-label="Active sprite count limit"
         />
-        <button
-          type="button"
-          class="toggle-button${currentSpriteMode === 'billboard' ? ' active' : ''}"
-          data-control="sprite-mode-toggle"
-          data-label="Sprite Mode"
-          data-active-text="Billboard"
-          data-inactive-text="Surface"
-          aria-pressed="${currentSpriteMode === 'billboard'}"
-          data-testid="toggle-sprite-mode"
-        >
-          Sprite Mode: ${
-            currentSpriteMode === 'billboard' ? 'Billboard' : 'Surface'
-          }
-        </button>
-      </div>
-      <div class="control-group" data-testid="group-location-interpolation">
-        <h1>Location interpolation</h1>
         <div>
+          <button
+            type="button"
+            class="toggle-button${currentSpriteMode === 'billboard' ? ' active' : ''}"
+            data-control="sprite-mode-toggle"
+            data-label="Sprite Mode"
+            data-active-text="Billboard"
+            data-inactive-text="Surface"
+            aria-pressed="${currentSpriteMode === 'billboard'}"
+            data-testid="toggle-sprite-mode"
+          >
+            Sprite Mode: ${
+              currentSpriteMode === 'billboard' ? 'Billboard' : 'Surface'
+            }
+          </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${showSpriteBorders ? ' active' : ''}"
+            data-control="sprite-borders-toggle"
+            data-label="Sprite Borders"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${showSpriteBorders}"
+            data-testid="toggle-sprite-borders"
+          >Sprite Borders: ${showSpriteBorders ? 'ON' : 'OFF'}</button>
+        </div>
+      </div>
+      <div class="control-group" data-testid="group-movement-loop">
+        <h1>Move Location</h1>
+        <label class="range-label" for="movement-speed-slider">
+          Speed
+          <span
+            class="range-value"
+            data-status="movement-speed"
+            data-testid="status-movement-speed"
+          >${formatMovementSpeedScale(DEFAULT_MOVEMENT_SPEED_SCALE)}</span>
+        </label>
+        <input
+          type="range"
+          id="movement-speed-slider"
+          class="range-input"
+          min="${MOVEMENT_SPEED_SCALE_MIN}"
+          max="${MOVEMENT_SPEED_SCALE_MAX}"
+          step="${MOVEMENT_SPEED_SCALE_STEP}"
+          value="${DEFAULT_MOVEMENT_SPEED_SCALE}"
+          data-control="movement-speed"
+          data-testid="slider-movement-speed"
+          aria-valuemin="${MOVEMENT_SPEED_SCALE_MIN}"
+          aria-valuemax="${MOVEMENT_SPEED_SCALE_MAX}"
+          aria-valuenow="${DEFAULT_MOVEMENT_SPEED_SCALE}"
+          aria-label="Sprite movement speed"
+        />
+        <div>
+          <button type="button" class="toggle-button${currentAnimationMode === 'random' ? ' active' : ''}" data-control="animation-mode" data-option="random" data-label="Random Walk" aria-pressed="${currentAnimationMode === 'random'}" data-testid="toggle-animation-random">
+            Random Walk
+          </button>
+          <button type="button" class="toggle-button${currentAnimationMode === 'linear' ? ' active' : ''}" data-control="animation-mode" data-option="linear" data-label="Linear Loop" aria-pressed="${currentAnimationMode === 'linear'}" data-testid="toggle-animation-linear">
+            Linear Loop
+          </button>
+        </div>
+        <div class="button-group">
           <button
             type="button"
             class="toggle-button${isMovementInterpolationEnabled ? ' active' : ''}"
@@ -1191,7 +1260,7 @@ const createHud = () => {
             Orbit
           </button>
         </div>
-        <div class="secondary-interpolation-group">
+        <div class="button-group">
           <button
             type="button"
             class="toggle-button${isOrbitDegInterpolationEnabled ? ' active' : ''}"
@@ -1233,7 +1302,7 @@ const createHud = () => {
           </button>
         </div>
         -->
-        <div class="secondary-interpolation-group">
+        <div class="button-group">
           <button
             type="button"
             class="toggle-button${isOrbitMetersInterpolationEnabled ? ' active' : ''}"
@@ -1929,6 +1998,31 @@ const main = async () => {
     };
     updateMovementExtents(spriteVisibilityLimit);
 
+    const applyTestSpritePreset = (
+      tag: DemoSpriteTag
+    ): { lng: number; lat: number } => {
+      // Keep the deterministic sprite anchored at the center for reliable automated checks.
+      tag.dx = 0;
+      tag.dy = 0;
+      tag.path = undefined;
+      tag.lastStepLng = 0;
+      tag.lastStepLat = 0;
+      tag.worldLng = STARTUP_CENTER.lng;
+      tag.worldLat = STARTUP_CENTER.lat;
+
+      const direction = testScenario.direction
+        ? TEST_DIRECTION_DELTAS[testScenario.direction]
+        : null;
+      if (direction) {
+        tag.dx = direction.dx;
+        tag.dy = direction.dy;
+        tag.lastStepLng = direction.dx * MOVEMENT_STEP_FACTOR;
+        tag.lastStepLat = direction.dy * MOVEMENT_STEP_FACTOR;
+      }
+
+      return { lng: STARTUP_CENTER.lng, lat: STARTUP_CENTER.lat };
+    };
+
     /**
      * Enables or disables sprites so only the desired number render while honoring the current activity flag.
      */
@@ -2358,8 +2452,8 @@ const main = async () => {
       if (!spriteLayer) {
         return;
       }
-      const borderUpdate: SpriteImageDefinitionUpdate = showDebugBounds
-        ? { border: {} }
+      const borderUpdate: SpriteImageDefinitionUpdate = showSpriteBorders
+        ? { border: { color: BORDER_COLOR, widthPixel: BORDER_WIDTH_PIXEL } }
         : { border: null };
       spriteLayer.updateForEach((sprite, spriteUpdate) => {
         sprite.images.forEach((orderMap) => {
@@ -2849,10 +2943,18 @@ const main = async () => {
      */
     const reinitializeMovement = () => {
       spriteLayer.updateForEach((sprite, update) => {
+        const tag = sprite.tag as DemoSpriteTag | undefined;
+        if (!tag) {
+          return true;
+        }
+        if (isTestMode && tag.orderIndex === 0) {
+          update.location = applyTestSpritePreset(tag);
+          return true;
+        }
         update.location = initializeMovementState(
           STARTUP_CENTER,
           currentAnimationMode,
-          sprite.tag!
+          tag
         );
         return true;
       });
@@ -3128,15 +3230,15 @@ const main = async () => {
       }
 
       const debugBoundsButton = queryFirst<HTMLButtonElement>(
-        '[data-control="debug-bounds-toggle"]'
+        '[data-control="sprite-borders-toggle"]'
       );
       if (debugBoundsButton) {
         updateDebugBoundsButton = () => {
-          setToggleButtonState(debugBoundsButton, showDebugBounds, 'binary');
+          setToggleButtonState(debugBoundsButton, showSpriteBorders, 'binary');
         };
         updateDebugBoundsButton();
         debugBoundsButton.addEventListener('click', () => {
-          showDebugBounds = !showDebugBounds;
+          showSpriteBorders = !showSpriteBorders;
           updateDebugBoundsButton?.();
           applyDebugBordersToAll();
         });
@@ -3827,15 +3929,20 @@ const main = async () => {
       const newTag = {} as DemoSpriteTag;
       newTag.orderIndex = index;
       newTag.iconSpecId = imageSpec.id;
-      const location = initializeMovementState(
-        STARTUP_CENTER,
-        currentAnimationMode,
-        newTag
-      );
+      const location =
+        isTestMode && index === 0
+          ? applyTestSpritePreset(newTag)
+          : initializeMovementState(
+              STARTUP_CENTER,
+              currentAnimationMode,
+              newTag
+            );
       const spriteVisibilityDistance = isPseudoLodEnabled
         ? generatePseudoLodDistanceMeters()
         : undefined;
-      const debugBorder = showDebugBounds ? { border: {} } : undefined;
+      const debugBorder = showSpriteBorders
+        ? { border: { color: BORDER_COLOR, widthPixel: BORDER_WIDTH_PIXEL } }
+        : undefined;
       return {
         spriteId: id,
         location: {
