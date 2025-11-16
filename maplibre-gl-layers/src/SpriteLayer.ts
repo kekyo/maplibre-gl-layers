@@ -2301,6 +2301,9 @@ export const createSpriteLayer = <T = any>(
     const spriteVisibilityDistanceMeters = sanitizeVisibilityDistanceMeters(
       init.visibilityDistanceMeters
     );
+    const initialInterpolationOptions = init.interpolation
+      ? cloneInterpolationOptions(init.interpolation)
+      : null;
 
     const spriteState: InternalSpriteCurrentState<T> = {
       spriteId,
@@ -2317,7 +2320,7 @@ export const createSpriteLayer = <T = any>(
       // Tags default to null to simplify downstream comparisons.
       tag: init.tag ?? null,
       interpolationState: null,
-      pendingInterpolationOptions: null,
+      pendingInterpolationOptions: initialInterpolationOptions,
       lastCommandLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationAngleDeg: 0,

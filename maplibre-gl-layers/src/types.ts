@@ -207,6 +207,10 @@ export interface SpriteInit<TTag> {
    * all images attached to the sprite become invisible.
    */
   visibilityDistanceMeters?: number;
+  /**
+   * Default interpolation settings applied to initial location updates until overridden.
+   */
+  interpolation?: SpriteInterpolationOptions;
   /** Array of zero or more images. */
   images: SpriteImageDefinitionInitEntry[];
   /** Optional tag value; null or omission means no tag. */
