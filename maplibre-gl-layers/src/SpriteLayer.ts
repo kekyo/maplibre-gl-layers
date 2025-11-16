@@ -37,6 +37,7 @@ import {
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
   type SpriteImageOffset,
+  type SpriteImageBorder,
   type SpriteInterpolationOptions,
   type SpriteImageOriginLocation,
   type SpriteScreenPoint,
@@ -58,6 +59,7 @@ import type {
   RenderInterpolationParams,
   SpriteOriginReference,
   SpriteOriginReferenceKey,
+  ResolvedSpriteImageBorder,
 } from './internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -75,6 +77,12 @@ import {
   spriteLocationsEqual,
   clampOpacity,
 } from './utils/math';
+import {
+  DEFAULT_BORDER_COLOR,
+  DEFAULT_BORDER_COLOR_RGBA,
+  parseCssColorToRgba,
+  type RgbaColor,
+} from './utils/color';
 import {
   applyOffsetUpdate,
   applyOpacityUpdate,
@@ -166,6 +174,9 @@ import { renderTextGlyphBitmap } from './gl/text';
 
 /** Default threshold in meters for auto-rotation to treat movement as significant. */
 const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
+
+/** Default border width in CSS pixels for sprite image outlines. */
+const DEFAULT_BORDER_WIDTH_PIXEL = 1;
 
 /** Sentinel used when an image has not been placed on any atlas page. */
 const ATLAS_PAGE_INDEX_NONE = -1;
@@ -446,6 +457,34 @@ const createInterpolatedOffsetState = (
   };
 };
 
+const resolveBorderWidthPixel = (width?: number): number => {
+  if (typeof width !== 'number') {
+    return DEFAULT_BORDER_WIDTH_PIXEL;
+  }
+  if (!Number.isFinite(width) || width <= 0) {
+    return DEFAULT_BORDER_WIDTH_PIXEL;
+  }
+  return width;
+};
+
+const resolveSpriteImageBorder = (
+  border?: SpriteImageBorder | null
+): ResolvedSpriteImageBorder | undefined => {
+  if (!border) {
+    return undefined;
+  }
+  const colorString =
+    border.color && border.color.trim().length > 0
+      ? border.color
+      : DEFAULT_BORDER_COLOR;
+  const rgba = parseCssColorToRgba(colorString, DEFAULT_BORDER_COLOR_RGBA);
+  return {
+    color: colorString,
+    widthPixel: resolveBorderWidthPixel(border.widthPixel),
+    rgba,
+  };
+};
+
 /**
  * Deep-clones interpolation options to prevent shared references between sprites.
  * @param {SpriteInterpolationOptions} options - Options provided by the user.
@@ -510,6 +549,7 @@ export const createImageStateFromInit = (
     },
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
+    border: resolveSpriteImageBorder(imageInit.border),
     offset: createInterpolatedOffsetState(initialOffset),
     rotateDeg: {
       current: initialRotateDeg,
@@ -540,12 +580,14 @@ export const createImageStateFromInit = (
     lastCommandOpacity: initialOpacity,
     interpolationDirty: false,
   };
+
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
   const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
   if (rotateInitOption) {
     state.rotationInterpolationOptions =
       cloneInterpolationOptions(rotateInitOption);
   }
+
   const opacityInitOption = imageInit.interpolation?.opacity ?? null;
   if (opacityInitOption) {
     state.opacityInterpolationOptions =
@@ -578,7 +620,6 @@ export const createSpriteLayer = <T = any>(
   const resolvedTextureFiltering = resolveTextureFilteringOptions(
     options?.textureFiltering
   );
-  const showDebugBounds = options?.showDebugBounds === true;
 
   const createProjectionHostForMap = (
     mapInstance: MapLibreMap
@@ -1672,10 +1713,6 @@ export const createSpriteLayer = <T = any>(
 
     spriteDrawProgram = createSpriteDrawProgram<T>(glContext);
 
-    if (showDebugBounds) {
-      debugOutlineRenderer = createDebugOutlineRenderer(glContext);
-    }
-
     // Request a render pass.
     scheduleRender();
   };
@@ -1951,17 +1988,45 @@ export const createSpriteLayer = <T = any>(
         scheduleRender();
       }
 
-      if (showDebugBounds && debugOutlineRenderer) {
-        debugOutlineRenderer.begin(
-          screenToClipScaleX,
-          screenToClipScaleY,
-          screenToClipOffsetX,
-          screenToClipOffsetY
-        );
-        for (const entry of hitTestController.getHitTestEntries()) {
-          debugOutlineRenderer.drawOutline(entry.corners);
+      const borderEntries = hitTestController
+        .getHitTestEntries()
+        .filter((entry) => entry.image.border);
+      if (borderEntries.length > 0) {
+        if (!debugOutlineRenderer) {
+          debugOutlineRenderer = createDebugOutlineRenderer(glContext);
         }
-        debugOutlineRenderer.end();
+        if (debugOutlineRenderer) {
+          debugOutlineRenderer.begin(
+            screenToClipScaleX,
+            screenToClipScaleY,
+            screenToClipOffsetX,
+            screenToClipOffsetY
+          );
+          for (const entry of borderEntries) {
+            const border = entry.image.border;
+            if (!border) {
+              continue;
+            }
+            const effectiveAlpha = clampOpacity(
+              border.rgba[3] * entry.image.opacity.current
+            );
+            if (effectiveAlpha <= 0) {
+              continue;
+            }
+            const borderColor: RgbaColor = [
+              border.rgba[0],
+              border.rgba[1],
+              border.rgba[2],
+              effectiveAlpha,
+            ];
+            const width = border.widthPixel;
+            if (!Number.isFinite(width) || width <= 0) {
+              continue;
+            }
+            debugOutlineRenderer.drawOutline(entry.corners, borderColor, width);
+          }
+          debugOutlineRenderer.end();
+        }
       }
     } finally {
       releaseCalculationHost();
@@ -2734,6 +2799,9 @@ export const createSpriteLayer = <T = any>(
     if (imageUpdate.scale !== undefined) {
       // Adjust image scaling factor applied to dimensions and offsets.
       state.scale = imageUpdate.scale;
+    }
+    if (imageUpdate.border !== undefined) {
+      state.border = resolveSpriteImageBorder(imageUpdate.border);
     }
     const prevAutoRotation = state.autoRotation;
     const prevMinDistance = state.autoRotationMinDistanceMeters;

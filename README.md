@@ -570,6 +570,36 @@ spriteLayer.updateSprite('vehicle-lod', {
 });
 ```
 
+## Borders
+
+Each sprite image can draw its own border.
+This helps emphasize an icon or show selection state without changing the texture itself.
+Additionally, the event handler described later indicates the area used as the criteria for determining the sprite image.
+
+
+![borders](./images/borders1.png)
+
+Example:
+
+```typescript
+// Add a 2px red border to the arrow
+spriteLayer.addSprite('bordered-marker', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      border: { color: '#ff0000', widthPixel: 2 },
+    },
+  ],
+});
+
+// Remove a border later (null clears it)
+spriteLayer.updateSpriteImage(
+  'bordered-marker', 0, 0, { border: null });
+```
+
 ## Event Handlers
 
 SpriteLayer exposes interaction events so your application can react to clicks and hovers:
@@ -806,7 +836,6 @@ const spriteLayer = createSpriteLayer({
     generateMipmaps: true,
     maxAnisotropy: 4,
   },
-  showDebugBounds: false, // Draw red hit-test outlines while debugging
 });
 ```
 
@@ -827,11 +856,6 @@ const spriteLayer = createSpriteLayer({
 - `textureFiltering.minFilter` / `magFilter` - Override the WebGL texture filters used when sprites shrink or expand. The defaults match `linear` filtering in both directions. Setting `minFilter` to a mipmap variant (for example `linear-mipmap-linear`) automatically enables mipmap generation for newly registered images.
 - `textureFiltering.generateMipmaps` - Forces mipmap generation even when the chosen filter does not require it, improving quality for aggressively downscaled sprites on WebGL2 or power-of-two images. When the context cannot build mipmaps (for example WebGL1 with non power-of-two textures) the layer falls back to linear filtering automatically.
 - `textureFiltering.maxAnisotropy` - Requests anisotropic filtering (>= 1) when the runtime exposes `EXT_texture_filter_anisotropic`, helping surface-aligned sprites remain sharp at shallow viewing angles. The requested value is clamped to the GPU limit and only applied when mipmaps are available.
-- `showDebugBounds` - When `true`, the layer overlays red outlines representing sprite hit-test regions.
-
-  ![debug-bounds](./images/debug-bounds.png)
-
-  This is intended for debugging pointer interaction event handler and should remain `false` in production for best performance.
 
 All scaling values and texture filtering values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
 Invalid inputs are normalized and reported via `console.warn` to help catch configuration mistakes during development.

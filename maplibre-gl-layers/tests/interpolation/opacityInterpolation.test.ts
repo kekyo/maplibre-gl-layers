@@ -21,6 +21,7 @@ const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   opacity: { current: opacity, from: undefined, to: undefined },
   scale: 1,
   anchor: { x: 0, y: 0 },
+  border: null,
   offset: {
     offsetMeters: { current: 0, from: undefined, to: undefined },
     offsetDeg: { current: 0, from: undefined, to: undefined },

@@ -255,6 +255,7 @@ const createImageState = (
     opacity: resolvedOpacity,
     scale: overrides.scale ?? 1,
     anchor: overrides.anchor ?? DEFAULT_ANCHOR,
+    border: overrides.border ?? null,
     offset: resolvedOffset,
     rotateDeg,
     rotationCommandDeg,

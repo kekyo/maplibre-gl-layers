@@ -599,6 +599,35 @@ spriteLayer.updateSprite('vehicle-lod', {
 });
 ```
 
+## ボーダー
+
+各スプライト画像には、それぞれボーダー線を描画させることができます。
+これは、そのスプライト画像の視認性を向上させたり、スプライト画像の選択状態を可視化したりする目的に使えます。
+また、後述のイベントハンドラがスプライト画像を判定する基準となる領域を示します。
+
+![borders](./images/borders1.png)
+
+以下にボーダーを描画させる例を示します:
+
+```typescript
+// 基本の矢印に赤の2pxボーダーを付ける
+spriteLayer.addSprite('bordered-marker', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      border: { color: '#ff0000', widthPixel: 2 },
+    },
+  ],
+});
+
+// 後からボーダーを外す場合（nullでクリア）
+spriteLayer.updateSpriteImage(
+  'bordered-marker', 0, 0, { border: null });
+```
+
 ## イベントハンドラ
 
 SpriteLayerは次のインタラクションイベントを提供しています:
@@ -833,7 +862,6 @@ const spriteLayer = createSpriteLayer({
     generateMipmaps: true,
     maxAnisotropy: 4,
   },
-  showDebugBounds: false, // デバッグ時に当たり判定の赤枠を表示
 });
 ```
 
@@ -852,11 +880,6 @@ const spriteLayer = createSpriteLayer({
 - `textureFiltering.minFilter` / `magFilter` - WebGL のテクスチャフィルタリングを上書きします。既定値はいずれも `linear` です。`minFilter` にミップマップ系 (`linear-mipmap-linear` など) を指定すると、新規登録される画像で自動的にミップマップが生成されます。
 - `textureFiltering.generateMipmaps` - ミップマップ必須でないフィルターを選んだ場合でもミップマップを生成します。WebGL2 もしくは 2 のベキ乗サイズの画像で大きく縮小した際の画質を改善できます。WebGL1 かつ非 2 のベキ乗画像でミップマップが生成できない場合は、自動的に `linear` フィルターへフォールバックします。
 - `textureFiltering.maxAnisotropy` - `EXT_texture_filter_anisotropic` 拡張が利用できる場合に異方性フィルタリング係数を指定します (1 以上)。地表に沿ったスプライトを浅い角度から見た際のシャープさを維持できます。指定値は GPU の上限でクランプされ、ミップマップが存在する場合のみ適用されます。
-- `showDebugBounds` - `true` にするとスプライトのヒットテスト領域を赤枠で表示します。
-
-  ![debug-bounds](./images/debug-bounds.png)
-  
-  ポインタイベントハンドラのデバッグ用途を想定しており、本番環境ではパフォーマンスのため `false` のままにすることを推奨します。
 
 これらの値（スケーリング／テクスチャフィルタリング）はレイヤー生成時に一度解決されます。動的に変更したい場合はレイヤーを再生成してください。
 無効な値を指定すると自動で補正され、開発中に気付きやすいよう `console.warn` 経由で通知されます。

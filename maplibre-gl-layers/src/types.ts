@@ -49,6 +49,16 @@ export interface SpriteImageOffset {
 }
 
 /**
+ * Border surrounding a sprite image, primarily for debugging.
+ */
+export interface SpriteImageBorder {
+  /** CSS color string. Defaults to red. */
+  color?: string;
+  /** Border width in CSS pixels. Defaults to 1. */
+  widthPixel?: number;
+}
+
+/**
  * Anchor within the image.
  * The sprite's base coordinate maps to this location; range is -1.0 to 1.0 relative to image size.
  * x: -1.0 at left, 0.0 center, 1.0 right. y: -1.0 bottom, 0.0 center, 1.0 top.
@@ -127,6 +137,8 @@ export interface SpriteImageDefinitionInit {
   anchor?: SpriteAnchor;
   /** Offset from the sprite coordinate. Defaults to no offset. */
   offset?: SpriteImageOffset;
+  /** Optional border rendered around the image. */
+  border?: SpriteImageBorder;
   /**
    * Determines which coordinate to anchor against.
    * - Omitted: use the sprite base coordinate.
@@ -169,6 +181,8 @@ export interface SpriteImageDefinitionUpdate {
   anchor?: SpriteAnchor;
   /** Offset from the sprite coordinate. */
   offset?: SpriteImageOffset;
+  /** Border rendered around the image. Specify null to remove. */
+  border?: SpriteImageBorder | null;
   /** Additional rotation in degrees. */
   rotateDeg?: number;
   /** Enables auto-rotation toward the travel direction. */
@@ -260,6 +274,16 @@ export interface SpriteImageInterpolatedOffset {
 }
 
 /**
+ * Resolved border state for a sprite image.
+ */
+export interface SpriteImageBorderState {
+  /** CSS color string applied to the border. */
+  readonly color: string;
+  /** Border width in CSS pixels. */
+  readonly widthPixel: number;
+}
+
+/**
  * Sprite image state evaluated at runtime.
  *
  * @property {number} subLayer - Sub-layer index the image belongs to.
@@ -294,6 +318,8 @@ export interface SpriteImageState {
   readonly opacity: InterpolatedValues<number>;
   /** Offset applied relative to the anchor point. */
   readonly offset: Readonly<SpriteImageInterpolatedOffset>;
+  /** Optional border rendered around the image. */
+  readonly border: Readonly<SpriteImageBorderState> | undefined;
   /**
    * Additional rotation in degrees with interpolation metadata.
    * `from`/`to` are `undefined` when no rotation animation is running.
@@ -636,11 +662,6 @@ export interface SpriteLayerOptions {
   spriteScaling?: SpriteScalingOptions;
   /** Optional texture filtering configuration. */
   textureFiltering?: SpriteTextureFilteringOptions;
-  /**
-   * When true, renders red outlines around sprite hit-test regions to aid debugging.
-   * Defaults to false.
-   */
-  showDebugBounds?: boolean;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////

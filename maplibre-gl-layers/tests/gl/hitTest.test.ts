@@ -75,6 +75,23 @@ vi.mock('../../src/host/projectionHost', async (importOriginal) => {
   };
 });
 
+const outlineDrawCalls: Array<{ color: readonly number[]; width: number }> = [];
+
+vi.mock('../../src/gl/shader', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/gl/shader')>();
+  return {
+    ...actual,
+    createDebugOutlineRenderer: vi.fn(() => ({
+      begin: vi.fn(),
+      drawOutline: vi.fn((_, color, lineWidth) => {
+        outlineDrawCalls.push({ color, width: lineWidth });
+      }),
+      end: vi.fn(),
+      release: vi.fn(),
+    })),
+  };
+});
+
 import { createSpriteLayer } from '../../src/SpriteLayer';
 import type { SpriteLayerClickEvent } from '../../src/types';
 
@@ -347,6 +364,7 @@ class MockGLContext {
   generateMipmap(): void {}
 
   drawArrays(): void {}
+  lineWidth(): void {}
 
   enable(): void {}
   disable(): void {}
@@ -384,6 +402,7 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
     ).PointerEvent;
     (globalThis as unknown as { PointerEvent?: PointerEvent }).PointerEvent =
       undefined;
+    outlineDrawCalls.length = 0;
   });
 
   afterEach(() => {
@@ -652,6 +671,32 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
     map.transform.cameraToCenterDistance = threshold * 10;
     layer.render?.(gl, {} as any);
   };
+
+  it('draws per-image borders using the sprite opacity', async () => {
+    const { layer, map, gl } = await setupLayer();
+    const location = { lng: 1, lat: 1 };
+
+    layer.addSprite('bordered', {
+      location,
+      images: [
+        {
+          ...makeSpriteImage('marker'),
+          opacity: 0.5,
+          border: { color: 'rgba(0, 255, 0, 0.5)', widthPixel: 3 },
+        },
+      ],
+    });
+
+    layer.render?.(gl, {} as any);
+
+    expect(outlineDrawCalls.length).toBeGreaterThan(0);
+    const [{ color, width }] = outlineDrawCalls;
+    expect(width).toBe(3);
+    expect(color[1]).toBeCloseTo(1);
+    expect(color[3]).toBeCloseTo(0.25);
+
+    layer.onRemove?.(map as unknown as any, gl);
+  });
 
   it('restores opacity when pseudo LOD is disabled after sprites were hidden', async () => {
     const { layer, map, gl } = await setupLayer();

@@ -18,6 +18,7 @@ import type {
   SurfaceShaderInputs,
 } from '../internalTypes';
 import { DEG2RAD, UV_CORNERS } from '../const';
+import type { RgbaColor } from '../utils/color';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -776,7 +777,9 @@ export interface DebugOutlineRenderer extends Releasable {
       SpriteScreenPoint,
       SpriteScreenPoint,
       SpriteScreenPoint,
-    ]
+    ],
+    color: RgbaColor,
+    lineWidth: number
   ): void;
   end(): void;
 }
@@ -851,13 +854,6 @@ export const createDebugOutlineRenderer = (
     );
     glContext.disable(glContext.DEPTH_TEST);
     glContext.depthMask(false);
-    glContext.uniform4f(
-      uniformColorLocation,
-      DEBUG_OUTLINE_COLOR[0],
-      DEBUG_OUTLINE_COLOR[1],
-      DEBUG_OUTLINE_COLOR[2],
-      DEBUG_OUTLINE_COLOR[3]
-    );
     glContext.uniform2f(
       uniformScreenToClipScaleLocation,
       screenToClipScaleX,
@@ -868,7 +864,36 @@ export const createDebugOutlineRenderer = (
       screenToClipOffsetX,
       screenToClipOffsetY
     );
+    glContext.lineWidth(1);
     active = true;
+  };
+
+  const currentColor = [Number.NaN, Number.NaN, Number.NaN, Number.NaN];
+  let currentLineWidth = Number.NaN;
+
+  const applyColor = (color: RgbaColor): void => {
+    const [r, g, b, a] = color;
+    if (
+      currentColor[0] !== r ||
+      currentColor[1] !== g ||
+      currentColor[2] !== b ||
+      currentColor[3] !== a
+    ) {
+      glContext.uniform4f(uniformColorLocation, r, g, b, a);
+      currentColor[0] = r;
+      currentColor[1] = g;
+      currentColor[2] = b;
+      currentColor[3] = a;
+    }
+  };
+
+  const applyLineWidth = (lineWidth: number): void => {
+    const resolved =
+      Number.isFinite(lineWidth) && lineWidth > 0 ? lineWidth : 1;
+    if (resolved !== currentLineWidth) {
+      glContext.lineWidth(resolved);
+      currentLineWidth = resolved;
+    }
   };
 
   const drawOutline = (
@@ -877,11 +902,15 @@ export const createDebugOutlineRenderer = (
       SpriteScreenPoint,
       SpriteScreenPoint,
       SpriteScreenPoint,
-    ]
+    ],
+    color: RgbaColor,
+    lineWidth: number
   ): void => {
     if (!active) {
       return;
     }
+    applyColor(color);
+    applyLineWidth(lineWidth);
     let writeOffset = 0;
     for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
       const corner = corners[cornerIndex]!;
@@ -902,6 +931,12 @@ export const createDebugOutlineRenderer = (
     if (!active) {
       return;
     }
+    currentColor[0] = Number.NaN;
+    currentColor[1] = Number.NaN;
+    currentColor[2] = Number.NaN;
+    currentColor[3] = Number.NaN;
+    currentLineWidth = Number.NaN;
+    glContext.lineWidth(1);
     glContext.depthMask(true);
     glContext.enable(glContext.DEPTH_TEST);
     glContext.disableVertexAttribArray(attribPositionLocation);

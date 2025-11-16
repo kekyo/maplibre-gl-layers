@@ -1849,7 +1849,6 @@ const main = async () => {
           generateMipmaps: true,
           maxAnisotropy: 4,
         },
-        showDebugBounds,
       });
 
     /**
@@ -2353,6 +2352,24 @@ const main = async () => {
       updateOpacityInterpolationButton?.();
       applyOpacityInterpolationOptionsToAll();
       applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
+    };
+
+    const applyDebugBordersToAll = (): void => {
+      if (!spriteLayer) {
+        return;
+      }
+      const borderUpdate: SpriteImageDefinitionUpdate = showDebugBounds
+        ? { border: {} }
+        : { border: null };
+      spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        sprite.images.forEach((orderMap) => {
+          orderMap.forEach((image) => {
+            spriteUpdate.updateImage(image.subLayer, image.order, borderUpdate);
+          });
+        });
+        return true;
+      });
+      spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
     };
 
     /**
@@ -3121,7 +3138,7 @@ const main = async () => {
         debugBoundsButton.addEventListener('click', () => {
           showDebugBounds = !showDebugBounds;
           updateDebugBoundsButton?.();
-          void rebuildSpriteLayer();
+          applyDebugBordersToAll();
         });
       }
 
@@ -3818,6 +3835,7 @@ const main = async () => {
       const spriteVisibilityDistance = isPseudoLodEnabled
         ? generatePseudoLodDistanceMeters()
         : undefined;
+      const debugBorder = showDebugBounds ? { border: {} } : undefined;
       return {
         spriteId: id,
         location: {
@@ -3837,6 +3855,7 @@ const main = async () => {
             autoRotation: isAutoRotationEnabled,
             rotateDeg: primaryPlacement.rotateDeg,
             anchor: primaryPlacement.anchor,
+            ...(debugBorder ?? {}),
             interpolation: isRotateInterpolationEnabled
               ? {
                   rotateDeg: {
@@ -3856,6 +3875,7 @@ const main = async () => {
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
             scale: SECONDARY_IMAGE_SCALE,
             opacity: secondaryOpacity,
+            ...(debugBorder ?? {}),
             ...(secondaryOffset
               ? {
                   offset: secondaryOffset,

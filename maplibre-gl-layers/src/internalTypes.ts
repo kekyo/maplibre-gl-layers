@@ -22,8 +22,11 @@ import type {
   SpriteScreenPoint,
   SpritePoint,
   SpriteEasingPresetName,
+  SpriteImageBorderState,
+  SpriteImageState,
 } from './types';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
+import type { RgbaColor } from './utils/color';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -656,12 +659,17 @@ export type Canvas2DContext =
  */
 export type Canvas2DSource = HTMLCanvasElement | OffscreenCanvas;
 
+/** Border definition resolved for rendering. */
+export interface ResolvedSpriteImageBorder extends SpriteImageBorderState {
+  readonly rgba: RgbaColor;
+}
+
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Base attributes for an image that composes a sprite.
  */
-export interface InternalSpriteImageState {
+export interface InternalSpriteImageState extends SpriteImageState {
   subLayer: number;
   order: number;
   imageId: string;
@@ -670,6 +678,7 @@ export interface InternalSpriteImageState {
   opacity: MutableInterpolatedValues<number>;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
+  border: ResolvedSpriteImageBorder | undefined;
   offset: MutableSpriteImageInterpolatedOffset;
   rotateDeg: MutableInterpolatedValues<number>;
   rotationCommandDeg: number;
@@ -677,7 +686,7 @@ export interface InternalSpriteImageState {
   autoRotation: boolean;
   autoRotationMinDistanceMeters: number;
   resolvedBaseRotateDeg: number;
-  originLocation?: Readonly<SpriteImageOriginLocation>;
+  originLocation: Readonly<SpriteImageOriginLocation> | undefined;
   originReferenceKey: SpriteOriginReferenceKey;
   originRenderTargetIndex: SpriteOriginReferenceIndex;
   rotationInterpolationState: Readonly<DegreeInterpolationState> | null;

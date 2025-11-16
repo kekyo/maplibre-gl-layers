@@ -128,6 +128,7 @@ const createImageState = (
     },
     scale: 1,
     anchor,
+    border: null,
     offset: {
       offsetMeters: {
         current: offset.offsetMeters,
