@@ -81,7 +81,7 @@ vi.mock('../../src/gl/shader', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/gl/shader')>();
   return {
     ...actual,
-    createDebugOutlineRenderer: vi.fn(() => ({
+    createBorderOutlineRenderer: vi.fn(() => ({
       begin: vi.fn(),
       drawOutline: vi.fn((_, color, lineWidth) => {
         outlineDrawCalls.push({ color, width: lineWidth });

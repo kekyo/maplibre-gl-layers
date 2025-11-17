@@ -37,10 +37,20 @@ export const UV_OFFSET = POSITION_COMPONENT_COUNT * FLOAT_SIZE;
 /** Vertex count required to draw one sprite as two triangles. */
 export const QUAD_VERTEX_COUNT = 6;
 
+/** Initial vertex data for a unit quad. */
+export const INITIAL_QUAD_VERTICES = new Float32Array(
+  QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
+);
+
+/** Scratch buffer rewritten for each draw call. */
+export const QUAD_VERTEX_SCRATCH = new Float32Array(
+  QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
+);
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 /** Shared vertex shader that converts screen-space vertices when requested. */
-export const VERTEX_SHADER_SOURCE = `
+const VERTEX_SHADER_SOURCE = `
 attribute vec4 a_position;
 attribute vec2 a_uv;
 uniform vec2 u_screenToClipScale;
@@ -95,7 +105,7 @@ void main() {
 ` as const;
 
 /** Fragment shader that applies texture sampling and opacity. */
-export const FRAGMENT_SHADER_SOURCE = `
+const FRAGMENT_SHADER_SOURCE = `
 precision mediump float;
 uniform sampler2D u_texture;
 uniform float u_opacity;
@@ -106,18 +116,8 @@ void main() {
 }
 ` as const;
 
-/** Initial vertex data for a unit quad. */
-export const INITIAL_QUAD_VERTICES = new Float32Array(
-  QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
-);
-
-/** Scratch buffer rewritten for each draw call. */
-export const QUAD_VERTEX_SCRATCH = new Float32Array(
-  QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
-);
-
-/** Vertex shader for debug hit-test outline rendering using screen coordinates. */
-export const DEBUG_OUTLINE_VERTEX_SHADER_SOURCE = `
+/** Vertex shader for sprite-border outline rendering using screen coordinates. */
+const BORDER_OUTLINE_VERTEX_SHADER_SOURCE = `
 attribute vec4 a_position;
 uniform vec2 u_screenToClipScale;
 uniform vec2 u_screenToClipOffset;
@@ -128,8 +128,8 @@ void main() {
 }
 ` as const;
 
-/** Fragment shader emitting a solid color for debug outlines. */
-export const DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE = `
+/** Fragment shader emitting a solid color for border outlines. */
+const BORDER_OUTLINE_FRAGMENT_SHADER_SOURCE = `
 precision mediump float;
 uniform vec4 u_color;
 void main() {
@@ -138,24 +138,23 @@ void main() {
 ` as const;
 
 /** Maximum vertex count when drawing a quad outline as four edge quads (two triangles per edge). */
-export const DEBUG_OUTLINE_MAX_VERTEX_COUNT = 4 /* edges */ *
-  2 /* triangles */ *
-  3; /* vertices */
+const BORDER_OUTLINE_MAX_VERTEX_COUNT =
+  4 /* edges */ * 2 /* triangles */ * 3; /* vertices */
+
 /** Components per debug outline vertex (clipPosition.xyzw). */
-export const DEBUG_OUTLINE_POSITION_COMPONENT_COUNT = 4;
+const BORDER_OUTLINE_POSITION_COMPONENT_COUNT = 4;
+
 /** Stride in bytes for debug outline vertices. */
-export const DEBUG_OUTLINE_VERTEX_STRIDE =
-  DEBUG_OUTLINE_POSITION_COMPONENT_COUNT * FLOAT_SIZE;
+const BORDER_OUTLINE_VERTEX_STRIDE =
+  BORDER_OUTLINE_POSITION_COMPONENT_COUNT * FLOAT_SIZE;
+
 /** Scratch buffer reused when emitting debug outlines. */
-export const DEBUG_OUTLINE_VERTEX_SCRATCH = new Float32Array(
-  DEBUG_OUTLINE_MAX_VERTEX_COUNT * DEBUG_OUTLINE_POSITION_COMPONENT_COUNT
+const BORDER_OUTLINE_VERTEX_SCRATCH = new Float32Array(
+  BORDER_OUTLINE_MAX_VERTEX_COUNT * BORDER_OUTLINE_POSITION_COMPONENT_COUNT
 );
-/** Solid red RGBA color used for debug outlines. */
-export const DEBUG_OUTLINE_COLOR: readonly [number, number, number, number] = [
-  1.0, 0.0, 0.0, 1.0,
-];
+
 /** Corner traversal order used when outlining a quad without crossing diagonals. */
-export const DEBUG_OUTLINE_CORNER_ORDER = [0, 1, 3, 2] as const;
+export const BORDER_OUTLINE_CORNER_ORDER = [0, 1, 3, 2] as const;
 
 /** Base corner definitions used when expanding billboards in shaders. */
 export const BILLBOARD_BASE_CORNERS: ReadonlyArray<readonly [number, number]> =
@@ -766,7 +765,7 @@ export const createSpriteDrawProgram = <TTag>(
   };
 };
 
-export interface DebugOutlineRenderer extends Releasable {
+export interface BorderOutlineRenderer extends Releasable {
   begin(
     screenToClipScaleX: number,
     screenToClipScaleY: number,
@@ -786,13 +785,13 @@ export interface DebugOutlineRenderer extends Releasable {
   end(): void;
 }
 
-export const createDebugOutlineRenderer = (
+export const createBorderOutlineRenderer = (
   glContext: WebGLRenderingContext
-): DebugOutlineRenderer => {
+): BorderOutlineRenderer => {
   const program = createShaderProgram(
     glContext,
-    DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
-    DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE
+    BORDER_OUTLINE_VERTEX_SHADER_SOURCE,
+    BORDER_OUTLINE_FRAGMENT_SHADER_SOURCE
   );
 
   const attribPositionLocation = glContext.getAttribLocation(
@@ -801,7 +800,7 @@ export const createDebugOutlineRenderer = (
   );
   if (attribPositionLocation === -1) {
     glContext.deleteProgram(program);
-    throw new Error('Failed to acquire debug attribute location.');
+    throw new Error('Failed to acquire outline attribute location.');
   }
 
   const uniformColorLocation = glContext.getUniformLocation(program, 'u_color');
@@ -819,18 +818,18 @@ export const createDebugOutlineRenderer = (
     !uniformScreenToClipOffsetLocation
   ) {
     glContext.deleteProgram(program);
-    throw new Error('Failed to acquire debug uniforms.');
+    throw new Error('Failed to acquire outline uniforms.');
   }
 
   const vertexBuffer = glContext.createBuffer();
   if (!vertexBuffer) {
     glContext.deleteProgram(program);
-    throw new Error('Failed to create debug vertex buffer.');
+    throw new Error('Failed to create outline vertex buffer.');
   }
   glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
   glContext.bufferData(
     glContext.ARRAY_BUFFER,
-    DEBUG_OUTLINE_VERTEX_SCRATCH,
+    BORDER_OUTLINE_VERTEX_SCRATCH,
     glContext.DYNAMIC_DRAW
   );
   glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
@@ -848,10 +847,10 @@ export const createDebugOutlineRenderer = (
     glContext.enableVertexAttribArray(attribPositionLocation);
     glContext.vertexAttribPointer(
       attribPositionLocation,
-      DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
+      BORDER_OUTLINE_POSITION_COMPONENT_COUNT,
       glContext.FLOAT,
       false,
-      DEBUG_OUTLINE_VERTEX_STRIDE,
+      BORDER_OUTLINE_VERTEX_STRIDE,
       0
     );
     glContext.disable(glContext.DEPTH_TEST);
@@ -913,24 +912,24 @@ export const createDebugOutlineRenderer = (
 
     // Determine winding to pick outward normals correctly.
     let signedArea = 0;
-    for (let i = 0; i < DEBUG_OUTLINE_CORNER_ORDER.length; i++) {
-      const a = corners[DEBUG_OUTLINE_CORNER_ORDER[i]]!;
-      const b = corners[DEBUG_OUTLINE_CORNER_ORDER[(i + 1) % 4]]!;
+    for (let i = 0; i < BORDER_OUTLINE_CORNER_ORDER.length; i++) {
+      const a = corners[BORDER_OUTLINE_CORNER_ORDER[i]!]!;
+      const b = corners[BORDER_OUTLINE_CORNER_ORDER[(i + 1) % 4]!]!;
       signedArea += a.x * b.y - b.x * a.y;
     }
     const isCcw = signedArea >= 0;
 
     let writeOffset = 0;
     const emitVertex = (point: SpriteScreenPoint): void => {
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = point.x;
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = point.y;
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+      BORDER_OUTLINE_VERTEX_SCRATCH[writeOffset++] = point.x;
+      BORDER_OUTLINE_VERTEX_SCRATCH[writeOffset++] = point.y;
+      BORDER_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
+      BORDER_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
     };
 
-    for (let i = 0; i < DEBUG_OUTLINE_CORNER_ORDER.length; i++) {
-      const start = corners[DEBUG_OUTLINE_CORNER_ORDER[i]]!;
-      const end = corners[DEBUG_OUTLINE_CORNER_ORDER[(i + 1) % 4]]!;
+    for (let i = 0; i < BORDER_OUTLINE_CORNER_ORDER.length; i++) {
+      const start = corners[BORDER_OUTLINE_CORNER_ORDER[i]!]!;
+      const end = corners[BORDER_OUTLINE_CORNER_ORDER[(i + 1) % 4]!]!;
 
       const dirX = end.x - start.x;
       const dirY = end.y - start.y;
@@ -959,8 +958,7 @@ export const createDebugOutlineRenderer = (
       emitVertex(v3);
     }
 
-    const vertexCount =
-      writeOffset / DEBUG_OUTLINE_POSITION_COMPONENT_COUNT;
+    const vertexCount = writeOffset / BORDER_OUTLINE_POSITION_COMPONENT_COUNT;
     if (vertexCount <= 0) {
       return;
     }
@@ -968,7 +966,7 @@ export const createDebugOutlineRenderer = (
     glContext.bufferSubData(
       glContext.ARRAY_BUFFER,
       0,
-      DEBUG_OUTLINE_VERTEX_SCRATCH
+      BORDER_OUTLINE_VERTEX_SCRATCH
     );
     glContext.drawArrays(glContext.TRIANGLES, 0, vertexCount);
   };

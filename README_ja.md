@@ -628,6 +628,9 @@ spriteLayer.updateSpriteImage(
   'bordered-marker', 0, 0, { border: null });
 ```
 
+注意: ボーダーは常に全てのスプライトより手前に描画されます。
+つまり、サブレイヤーが常に最大の位置に配置されているのと同じとなります。
+
 ## イベントハンドラ
 
 SpriteLayerは次のインタラクションイベントを提供しています:

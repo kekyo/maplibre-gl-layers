@@ -600,6 +600,9 @@ spriteLayer.updateSpriteImage(
   'bordered-marker', 0, 0, { border: null });
 ```
 
+Note: Borders are always drawn in front of all sprites.
+This means it is equivalent to always placing the sublayer at the topmost position.
+
 ## Event Handlers
 
 SpriteLayer exposes interaction events so your application can react to clicks and hovers:

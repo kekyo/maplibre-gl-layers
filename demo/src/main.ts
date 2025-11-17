@@ -651,8 +651,8 @@ let secondaryImageOrbitDegrees = 0;
 let updateLocationInterpolationButton: (() => void) | undefined;
 /** UI updater for the mouse-events monitoring toggle. */
 let updateMouseEventsButton: (() => void) | undefined;
-/** UI updater for the debug bounds toggle. */
-let updateDebugBoundsButton: (() => void) | undefined;
+/** UI updater for the sprite border toggle. */
+let updateSpriteBordersButton: (() => void) | undefined;
 
 const shouldEnableHitTesting = () =>
   isMouseEventsMonitoringEnabled || showSpriteBorders;
@@ -2451,7 +2451,7 @@ const main = async () => {
       applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
     };
 
-    const applyDebugBordersToAll = (): void => {
+    const applySpriteBordersToAll = (): void => {
       if (!spriteLayer) {
         return;
       }
@@ -3232,18 +3232,22 @@ const main = async () => {
         });
       }
 
-      const debugBoundsButton = queryFirst<HTMLButtonElement>(
+      const spriteBordersButton = queryFirst<HTMLButtonElement>(
         '[data-control="sprite-borders-toggle"]'
       );
-      if (debugBoundsButton) {
-        updateDebugBoundsButton = () => {
-          setToggleButtonState(debugBoundsButton, showSpriteBorders, 'binary');
+      if (spriteBordersButton) {
+        updateSpriteBordersButton = () => {
+          setToggleButtonState(
+            spriteBordersButton,
+            showSpriteBorders,
+            'binary'
+          );
         };
-        updateDebugBoundsButton();
-        debugBoundsButton.addEventListener('click', () => {
+        updateSpriteBordersButton();
+        spriteBordersButton.addEventListener('click', () => {
           showSpriteBorders = !showSpriteBorders;
-          updateDebugBoundsButton?.();
-          applyDebugBordersToAll();
+          updateSpriteBordersButton?.();
+          applySpriteBordersToAll();
         });
       }
 
@@ -3943,7 +3947,7 @@ const main = async () => {
       const spriteVisibilityDistance = isPseudoLodEnabled
         ? generatePseudoLodDistanceMeters()
         : undefined;
-      const debugBorder = showSpriteBorders
+      const spriteBorder = showSpriteBorders
         ? { border: { color: BORDER_COLOR, widthPixel: BORDER_WIDTH_PIXEL } }
         : undefined;
       return {
@@ -3965,7 +3969,7 @@ const main = async () => {
             autoRotation: isAutoRotationEnabled,
             rotateDeg: primaryPlacement.rotateDeg,
             anchor: primaryPlacement.anchor,
-            ...(debugBorder ?? {}),
+            ...(spriteBorder ?? {}),
             interpolation: isRotateInterpolationEnabled
               ? {
                   rotateDeg: {
@@ -3985,7 +3989,7 @@ const main = async () => {
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
             scale: SECONDARY_IMAGE_SCALE,
             opacity: secondaryOpacity,
-            ...(debugBorder ?? {}),
+            ...(spriteBorder ?? {}),
             ...(secondaryOffset
               ? {
                   offset: secondaryOffset,

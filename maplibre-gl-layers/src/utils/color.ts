@@ -5,7 +5,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 /**
- * Minimal CSS color parser used for resolving debug border colors.
+ * Minimal CSS color parser used for resolving sprite border colors.
  */
 
 export type RgbaColor = readonly [number, number, number, number];

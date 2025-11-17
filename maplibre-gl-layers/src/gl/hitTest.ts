@@ -37,7 +37,7 @@ import {
   type Item as LooseQuadTreeItem,
   type Rect as LooseQuadTreeRect,
 } from '../utils/looseQuadTree';
-import { DEBUG_OUTLINE_CORNER_ORDER } from './shader';
+import { BORDER_OUTLINE_CORNER_ORDER } from './shader';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_IMAGE_OFFSET,
@@ -562,11 +562,11 @@ export const createHitTestController = <T>({
   ): boolean => {
     let hasPositiveCross = false;
     let hasNegativeCross = false;
-    for (let i = 0; i < DEBUG_OUTLINE_CORNER_ORDER.length; i++) {
-      const currentIndex = DEBUG_OUTLINE_CORNER_ORDER[i]!;
+    for (let i = 0; i < BORDER_OUTLINE_CORNER_ORDER.length; i++) {
+      const currentIndex = BORDER_OUTLINE_CORNER_ORDER[i]!;
       const nextIndex =
-        DEBUG_OUTLINE_CORNER_ORDER[
-          (i + 1) % DEBUG_OUTLINE_CORNER_ORDER.length
+        BORDER_OUTLINE_CORNER_ORDER[
+          (i + 1) % BORDER_OUTLINE_CORNER_ORDER.length
         ]!;
       const a = corners[currentIndex]!;
       const b = corners[nextIndex]!;

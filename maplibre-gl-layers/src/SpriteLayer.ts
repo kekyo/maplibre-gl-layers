@@ -95,9 +95,9 @@ import {
 import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './default';
 import {
   createSpriteDrawProgram,
-  createDebugOutlineRenderer,
+  createBorderOutlineRenderer,
   type SpriteDrawProgram,
-  type DebugOutlineRenderer,
+  type BorderOutlineRenderer,
 } from './gl/shader';
 import { createCalculationHost } from './host/calculationHost';
 import {
@@ -658,8 +658,8 @@ export const createSpriteLayer = <T = any>(
   let anisotropyExtension: EXT_texture_filter_anisotropic | null = null;
   /** Maximum anisotropy supported by the current context. */
   let maxSupportedAnisotropy = 1;
-  /** Helper used to render debug hit-test outlines. */
-  let debugOutlineRenderer: DebugOutlineRenderer | null = null;
+  /** Helper used to render sprite border outlines. */
+  let borderOutlineRenderer: BorderOutlineRenderer | null = null;
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -1740,9 +1740,9 @@ export const createSpriteLayer = <T = any>(
         spriteDrawProgram.release();
         spriteDrawProgram = null;
       }
-      if (debugOutlineRenderer) {
-        debugOutlineRenderer.release();
-        debugOutlineRenderer = null;
+      if (borderOutlineRenderer) {
+        borderOutlineRenderer.release();
+        borderOutlineRenderer = null;
       }
     }
 
@@ -1751,7 +1751,7 @@ export const createSpriteLayer = <T = any>(
 
     gl = null;
     map = null;
-    debugOutlineRenderer = null;
+    borderOutlineRenderer = null;
     anisotropyExtension = null;
     maxSupportedAnisotropy = 1;
   };
@@ -1992,11 +1992,11 @@ export const createSpriteLayer = <T = any>(
         .getHitTestEntries()
         .filter((entry) => entry.image.border);
       if (borderEntries.length > 0) {
-        if (!debugOutlineRenderer) {
-          debugOutlineRenderer = createDebugOutlineRenderer(glContext);
+        if (!borderOutlineRenderer) {
+          borderOutlineRenderer = createBorderOutlineRenderer(glContext);
         }
-        if (debugOutlineRenderer) {
-          debugOutlineRenderer.begin(
+        if (borderOutlineRenderer) {
+          borderOutlineRenderer.begin(
             screenToClipScaleX,
             screenToClipScaleY,
             screenToClipOffsetX,
@@ -2023,9 +2023,13 @@ export const createSpriteLayer = <T = any>(
             if (!Number.isFinite(width) || width <= 0) {
               continue;
             }
-            debugOutlineRenderer.drawOutline(entry.corners, borderColor, width);
+            borderOutlineRenderer.drawOutline(
+              entry.corners,
+              borderColor,
+              width
+            );
           }
-          debugOutlineRenderer.end();
+          borderOutlineRenderer.end();
         }
       }
     } finally {
