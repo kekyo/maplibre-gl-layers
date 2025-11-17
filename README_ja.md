@@ -631,6 +631,42 @@ spriteLayer.updateSpriteImage(
 注意: ボーダーは常に全てのスプライトより手前に描画されます。
 つまり、サブレイヤーが常に最大の位置に配置されているのと同じとなります。
 
+### 引き出し線
+
+画像に`leaderLine`を指定すると、その画像の基準座標点（アンカー適用後の位置）と`originLocation`で参照された画像の基準座標点を線で結びます。
+線は`color`と`widthMeters`で見た目を指定でき、不透明度は画像自身の（補間後の）`opacity`を使用します。
+
+![leader-line1](./images/leader-line1.png)
+
+以下の例では、2つの画像の間に引き出し線を引きます。
+
+```typescript
+spriteLayer.addSprite('vehicle-group', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    // プライマリ画像
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+    },
+    // セカンダリ画像(テキスト)
+    {
+      subLayer: 1,
+      order: 0,
+      imageId: TEXT_LABEL1_ID,
+      // プライマリ画像を参照
+      originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
+      // 引き出し線を引く
+      leaderLine: { color: '#00aa00', widthMeters: 2 },
+    },
+  ],
+});
+```
+
+注意: 引き出し線は、常に全てのスプライトより背面に描画されます。
+つまり、サブレイヤーが常に最小の位置に配置されているのと同じとなります。
+
 ## イベントハンドラ
 
 SpriteLayerは次のインタラクションイベントを提供しています:

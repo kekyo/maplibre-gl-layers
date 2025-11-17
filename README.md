@@ -603,6 +603,42 @@ spriteLayer.updateSpriteImage(
 Note: Borders are always drawn in front of all sprites.
 This means it is equivalent to always placing the sublayer at the topmost position.
 
+### Leader lines
+
+Set the optional `leaderLine` on an image to draw a connecting line between the image’s own anchor position and the anchor position of the image specified by `originLocation`.
+The line uses your specified CSS `color` and `widthMeters`, and the effective opacity follows the image’s (post-interpolation) `opacity`.
+
+![leader-line1](./images/leader-line1.png)
+
+In the following example, a pull-out line is drawn between two images:
+
+```typescript
+spriteLayer.addSprite('vehicle-group', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    // Primary image
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+    },
+    // Secondary image (text)
+    {
+      subLayer: 1,
+      order: 0,
+      imageId: TEXT_LABEL1_ID,
+      // Refer to primary image
+      originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
+      // Draw leader line
+      leaderLine: { color: '#00aa00', widthMeters: 2 },
+    },
+  ],
+});
+```
+
+Note: Leader lines are always drawn behind all sprites.
+This means it is equivalent to always placing the sublayer at the lowest position.
+
 ## Event Handlers
 
 SpriteLayer exposes interaction events so your application can react to clicks and hovers:
