@@ -21,9 +21,6 @@ import {
   type SpriteInitCollection,
   type SpriteLayerInterface,
   type SpriteLayerOptions,
-  type SpriteTextureFilteringOptions,
-  type SpriteTextureMagFilter,
-  type SpriteTextureMinFilter,
   type SpriteAnchor,
   type SpriteLocation,
   type SpriteCurrentState,
@@ -48,7 +45,6 @@ import {
   type SpriteImageRegisterOptions,
 } from './types';
 import type {
-  ResolvedTextureFilteringOptions,
   RegisteredImage,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
@@ -92,12 +88,14 @@ import {
   syncImageRotationChannel,
   hasActiveImageInterpolations,
 } from './interpolation/interpolationChannels';
-import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './default';
 import {
   createSpriteDrawProgram,
   createBorderOutlineRenderer,
   type SpriteDrawProgram,
   type BorderOutlineRenderer,
+  resolveTextureFilteringOptions,
+  resolveAnisotropyExtension,
+  ensureTextures,
 } from './gl/shader';
 import { createCalculationHost } from './host/calculationHost';
 import {
@@ -106,7 +104,12 @@ import {
 } from './host/projectionHost';
 import { createWasmProjectionHost } from './host/wasmProjectionHost';
 import { createWasmCalculationHost } from './host/wasmCalculationHost';
-import { DEFAULT_ANCHOR, DEFAULT_IMAGE_OFFSET } from './const';
+import {
+  DEFAULT_ANCHOR,
+  DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
+  DEFAULT_BORDER_WIDTH_METERS,
+  DEFAULT_IMAGE_OFFSET,
+} from './const';
 import {
   SL_DEBUG,
   ATLAS_QUEUE_CHUNK_SIZE,
@@ -172,137 +175,8 @@ import { renderTextGlyphBitmap } from './gl/text';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-/** Default threshold in meters for auto-rotation to treat movement as significant. */
-const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
-
-/** Default border width in meters for sprite image outlines. */
-const DEFAULT_BORDER_WIDTH_METERS = 1;
-
 /** Sentinel used when an image has not been placed on any atlas page. */
 const ATLAS_PAGE_INDEX_NONE = -1;
-
-/** List of acceptable minification filters exposed to callers. */
-const MIN_FILTER_VALUES: readonly SpriteTextureMinFilter[] = [
-  'nearest',
-  'linear',
-  'nearest-mipmap-nearest',
-  'nearest-mipmap-linear',
-  'linear-mipmap-nearest',
-  'linear-mipmap-linear',
-] as const;
-
-/** List of acceptable magnification filters. */
-const MAG_FILTER_VALUES: readonly SpriteTextureMagFilter[] = [
-  'nearest',
-  'linear',
-] as const;
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-/** Minification filters that require mipmaps to produce complete textures. */
-const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> =
-  new Set<SpriteTextureMinFilter>([
-    'nearest-mipmap-nearest',
-    'nearest-mipmap-linear',
-    'linear-mipmap-nearest',
-    'linear-mipmap-linear',
-  ]);
-
-const filterRequiresMipmaps = (filter: SpriteTextureMinFilter): boolean =>
-  MIPMAP_MIN_FILTERS.has(filter);
-
-const resolveTextureFilteringOptions = (
-  options?: SpriteTextureFilteringOptions
-): ResolvedTextureFilteringOptions => {
-  const minCandidate = options?.minFilter;
-  const minFilter: SpriteTextureMinFilter = MIN_FILTER_VALUES.includes(
-    minCandidate as SpriteTextureMinFilter
-  )
-    ? (minCandidate as SpriteTextureMinFilter)
-    : DEFAULT_TEXTURE_FILTERING_OPTIONS.minFilter!;
-
-  const magCandidate = options?.magFilter;
-  const magFilter: SpriteTextureMagFilter = MAG_FILTER_VALUES.includes(
-    magCandidate as SpriteTextureMagFilter
-  )
-    ? (magCandidate as SpriteTextureMagFilter)
-    : DEFAULT_TEXTURE_FILTERING_OPTIONS.magFilter!;
-
-  let generateMipmaps =
-    options?.generateMipmaps ??
-    DEFAULT_TEXTURE_FILTERING_OPTIONS.generateMipmaps!;
-  if (filterRequiresMipmaps(minFilter)) {
-    generateMipmaps = true;
-  }
-
-  let maxAnisotropy =
-    options?.maxAnisotropy ?? DEFAULT_TEXTURE_FILTERING_OPTIONS.maxAnisotropy!;
-  if (!Number.isFinite(maxAnisotropy) || maxAnisotropy < 1) {
-    maxAnisotropy = 1;
-  }
-
-  return {
-    minFilter,
-    magFilter,
-    generateMipmaps,
-    maxAnisotropy,
-  };
-};
-
-const ANISOTROPY_EXTENSION_NAMES = [
-  'EXT_texture_filter_anisotropic',
-  'WEBKIT_EXT_texture_filter_anisotropic',
-  'MOZ_EXT_texture_filter_anisotropic',
-] as const;
-
-const resolveAnisotropyExtension = (
-  glContext: WebGLRenderingContext
-): EXT_texture_filter_anisotropic | null => {
-  for (const name of ANISOTROPY_EXTENSION_NAMES) {
-    const extension = glContext.getExtension(name);
-    if (extension) {
-      return extension as EXT_texture_filter_anisotropic;
-    }
-  }
-  return null;
-};
-
-const isPowerOfTwo = (value: number): boolean =>
-  value > 0 && (value & (value - 1)) === 0;
-
-const resolveGlMinFilter = (
-  glContext: WebGLRenderingContext,
-  filter: SpriteTextureMinFilter
-): number => {
-  switch (filter) {
-    case 'nearest':
-      return glContext.NEAREST;
-    case 'nearest-mipmap-nearest':
-      return glContext.NEAREST_MIPMAP_NEAREST;
-    case 'nearest-mipmap-linear':
-      return glContext.NEAREST_MIPMAP_LINEAR;
-    case 'linear-mipmap-nearest':
-      return glContext.LINEAR_MIPMAP_NEAREST;
-    case 'linear-mipmap-linear':
-      return glContext.LINEAR_MIPMAP_LINEAR;
-    case 'linear':
-    default:
-      return glContext.LINEAR;
-  }
-};
-
-const resolveGlMagFilter = (
-  glContext: WebGLRenderingContext,
-  filter: SpriteTextureMagFilter
-): number => {
-  switch (filter) {
-    case 'nearest':
-      return glContext.NEAREST;
-    case 'linear':
-    default:
-      return glContext.LINEAR;
-  }
-};
 
 const updateImageInterpolationDirtyState = <T>(
   sprite: InternalSpriteCurrentState<T>,
@@ -314,8 +188,6 @@ const updateImageInterpolationDirtyState = <T>(
     sprite.interpolationDirty = true;
   }
 };
-
-//////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Applies auto-rotation to all images within a sprite when movement exceeds the configured threshold.
@@ -1335,149 +1207,6 @@ export const createSpriteLayer = <T = any>(
   //////////////////////////////////////////////////////////////////////////
 
   /**
-   * Creates or refreshes WebGL textures for registered images.
-   * Processes only queued entries to avoid unnecessary work.
-   * Intended to run just before drawing; returns immediately if the GL context is unavailable.
-   * Ensures registerImage calls outside the render loop sync on the next frame.
-   * @returns {void}
-   */
-  const ensureTextures = (): void => {
-    if (!gl) {
-      return;
-    }
-    atlasQueue.flushPending();
-    if (!atlasNeedsUpload) {
-      return;
-    }
-
-    const glContext = gl;
-    const pages = atlasManager.getPages();
-    const activePageIndices = new Set<number>();
-    pages.forEach((page) => activePageIndices.add(page.index));
-
-    atlasPageTextures.forEach((texture, pageIndex) => {
-      if (!activePageIndices.has(pageIndex)) {
-        glContext.deleteTexture(texture);
-        atlasPageTextures.delete(pageIndex);
-      }
-    });
-
-    pages.forEach((page) => {
-      const requiresUpload =
-        page.needsUpload || !atlasPageTextures.has(page.index);
-      if (!requiresUpload) {
-        return;
-      }
-
-      let texture = atlasPageTextures.get(page.index);
-      let isNewTexture = false;
-      if (!texture) {
-        texture = glContext.createTexture();
-        if (!texture) {
-          throw new Error('Failed to create texture.');
-        }
-        atlasPageTextures.set(page.index, texture);
-        isNewTexture = true;
-      }
-      glContext.bindTexture(glContext.TEXTURE_2D, texture);
-      if (isNewTexture) {
-        glContext.texParameteri(
-          glContext.TEXTURE_2D,
-          glContext.TEXTURE_WRAP_S,
-          glContext.CLAMP_TO_EDGE
-        );
-        glContext.texParameteri(
-          glContext.TEXTURE_2D,
-          glContext.TEXTURE_WRAP_T,
-          glContext.CLAMP_TO_EDGE
-        );
-      }
-      glContext.pixelStorei(glContext.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
-      glContext.texImage2D(
-        glContext.TEXTURE_2D,
-        0,
-        glContext.RGBA,
-        glContext.RGBA,
-        glContext.UNSIGNED_BYTE,
-        page.canvas as TexImageSource
-      );
-
-      let minFilterEnum = resolveGlMinFilter(
-        glContext,
-        resolvedTextureFiltering.minFilter
-      );
-      const magFilterEnum = resolveGlMagFilter(
-        glContext,
-        resolvedTextureFiltering.magFilter
-      );
-
-      let usedMipmaps = false;
-      if (resolvedTextureFiltering.generateMipmaps) {
-        const isWebGL2 =
-          typeof WebGL2RenderingContext !== 'undefined' &&
-          glContext instanceof WebGL2RenderingContext;
-        const canUseMipmaps =
-          isWebGL2 || (isPowerOfTwo(page.width) && isPowerOfTwo(page.height));
-        if (canUseMipmaps) {
-          glContext.generateMipmap(glContext.TEXTURE_2D);
-          usedMipmaps = true;
-        } else {
-          minFilterEnum = glContext.LINEAR;
-        }
-      }
-
-      if (
-        !usedMipmaps &&
-        filterRequiresMipmaps(resolvedTextureFiltering.minFilter)
-      ) {
-        minFilterEnum = glContext.LINEAR;
-      }
-
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_MIN_FILTER,
-        minFilterEnum
-      );
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_MAG_FILTER,
-        magFilterEnum
-      );
-
-      if (
-        usedMipmaps &&
-        anisotropyExtension &&
-        resolvedTextureFiltering.maxAnisotropy > 1
-      ) {
-        const ext = anisotropyExtension;
-        const targetAnisotropy = Math.min(
-          resolvedTextureFiltering.maxAnisotropy,
-          maxSupportedAnisotropy
-        );
-        if (targetAnisotropy > 1) {
-          glContext.texParameterf(
-            glContext.TEXTURE_2D,
-            ext.TEXTURE_MAX_ANISOTROPY_EXT,
-            targetAnisotropy
-          );
-        }
-      }
-
-      atlasManager.markPageClean(page.index);
-    });
-
-    images.forEach((image) => {
-      if (image.atlasPageIndex !== ATLAS_PAGE_INDEX_NONE) {
-        image.texture = atlasPageTextures.get(image.atlasPageIndex);
-      } else {
-        image.texture = undefined;
-      }
-    });
-    imageHandleBuffersController.markDirty(images);
-    atlasNeedsUpload = shouldUploadAtlasPages(pages);
-  };
-
-  /**
    * Requests a redraw from MapLibre.
    * Custom layers must call triggerRepaint manually whenever their content changes.
    * Ensure this runs after animations or style updates so the render loop reflects changes.
@@ -1827,7 +1556,20 @@ export const createSpriteLayer = <T = any>(
     }
 
     // Synchronize GPU uploads for image textures.
-    ensureTextures();
+    atlasNeedsUpload = ensureTextures({
+      gl,
+      atlasQueue,
+      atlasManager,
+      atlasPageTextures,
+      atlasNeedsUpload,
+      resolvedTextureFiltering,
+      anisotropyExtension,
+      maxSupportedAnisotropy,
+      images,
+      imageHandleBuffersController,
+      atlasPageIndexNone: ATLAS_PAGE_INDEX_NONE,
+      shouldUploadAtlasPages,
+    });
 
     const drawingBufferWidth = glContext.drawingBufferWidth;
     const drawingBufferHeight = glContext.drawingBufferHeight;
