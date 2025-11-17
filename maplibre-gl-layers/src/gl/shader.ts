@@ -137,8 +137,10 @@ void main() {
 }
 ` as const;
 
-/** Number of vertices required to outline a quad using LINE_LOOP. */
-export const DEBUG_OUTLINE_VERTEX_COUNT = 4;
+/** Maximum vertex count when drawing a quad outline as four edge quads (two triangles per edge). */
+export const DEBUG_OUTLINE_MAX_VERTEX_COUNT = 4 /* edges */ *
+  2 /* triangles */ *
+  3; /* vertices */
 /** Components per debug outline vertex (clipPosition.xyzw). */
 export const DEBUG_OUTLINE_POSITION_COMPONENT_COUNT = 4;
 /** Stride in bytes for debug outline vertices. */
@@ -146,7 +148,7 @@ export const DEBUG_OUTLINE_VERTEX_STRIDE =
   DEBUG_OUTLINE_POSITION_COMPONENT_COUNT * FLOAT_SIZE;
 /** Scratch buffer reused when emitting debug outlines. */
 export const DEBUG_OUTLINE_VERTEX_SCRATCH = new Float32Array(
-  DEBUG_OUTLINE_VERTEX_COUNT * DEBUG_OUTLINE_POSITION_COMPONENT_COUNT
+  DEBUG_OUTLINE_MAX_VERTEX_COUNT * DEBUG_OUTLINE_POSITION_COMPONENT_COUNT
 );
 /** Solid red RGBA color used for debug outlines. */
 export const DEBUG_OUTLINE_COLOR: readonly [number, number, number, number] = [
@@ -869,7 +871,6 @@ export const createDebugOutlineRenderer = (
   };
 
   const currentColor = [Number.NaN, Number.NaN, Number.NaN, Number.NaN];
-  let currentLineWidth = Number.NaN;
 
   const applyColor = (color: RgbaColor): void => {
     const [r, g, b, a] = color;
@@ -887,15 +888,6 @@ export const createDebugOutlineRenderer = (
     }
   };
 
-  const applyLineWidth = (lineWidth: number): void => {
-    const resolved =
-      Number.isFinite(lineWidth) && lineWidth > 0 ? lineWidth : 1;
-    if (resolved !== currentLineWidth) {
-      glContext.lineWidth(resolved);
-      currentLineWidth = resolved;
-    }
-  };
-
   const drawOutline = (
     corners: readonly [
       SpriteScreenPoint,
@@ -910,21 +902,75 @@ export const createDebugOutlineRenderer = (
       return;
     }
     applyColor(color);
-    applyLineWidth(lineWidth);
+
+    // gl.lineWidth is clamped to 1px on many platforms, so build a quad ring in
+    // screen space to visualize thicker borders.
+    const halfWidth =
+      Number.isFinite(lineWidth) && lineWidth > 0 ? lineWidth / 2 : 0;
+    if (halfWidth <= 0) {
+      return;
+    }
+
+    // Determine winding to pick outward normals correctly.
+    let signedArea = 0;
+    for (let i = 0; i < DEBUG_OUTLINE_CORNER_ORDER.length; i++) {
+      const a = corners[DEBUG_OUTLINE_CORNER_ORDER[i]]!;
+      const b = corners[DEBUG_OUTLINE_CORNER_ORDER[(i + 1) % 4]]!;
+      signedArea += a.x * b.y - b.x * a.y;
+    }
+    const isCcw = signedArea >= 0;
+
     let writeOffset = 0;
-    for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
-      const corner = corners[cornerIndex]!;
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
+    const emitVertex = (point: SpriteScreenPoint): void => {
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = point.x;
+      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = point.y;
       DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
       DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+    };
+
+    for (let i = 0; i < DEBUG_OUTLINE_CORNER_ORDER.length; i++) {
+      const start = corners[DEBUG_OUTLINE_CORNER_ORDER[i]]!;
+      const end = corners[DEBUG_OUTLINE_CORNER_ORDER[(i + 1) % 4]]!;
+
+      const dirX = end.x - start.x;
+      const dirY = end.y - start.y;
+      const length = Math.hypot(dirX, dirY);
+      if (length <= 0) {
+        continue;
+      }
+
+      // outward normal (right-hand for CCW, left-hand for CW)
+      const normalX = (isCcw ? dirY : -dirY) / length;
+      const normalY = (isCcw ? -dirX : dirX) / length;
+      const offsetX = normalX * halfWidth;
+      const offsetY = normalY * halfWidth;
+
+      const v0 = { x: start.x + offsetX, y: start.y + offsetY };
+      const v1 = { x: end.x + offsetX, y: end.y + offsetY };
+      const v2 = { x: end.x - offsetX, y: end.y - offsetY };
+      const v3 = { x: start.x - offsetX, y: start.y - offsetY };
+
+      // Two triangles per edge quad.
+      emitVertex(v0);
+      emitVertex(v1);
+      emitVertex(v2);
+      emitVertex(v0);
+      emitVertex(v2);
+      emitVertex(v3);
     }
+
+    const vertexCount =
+      writeOffset / DEBUG_OUTLINE_POSITION_COMPONENT_COUNT;
+    if (vertexCount <= 0) {
+      return;
+    }
+
     glContext.bufferSubData(
       glContext.ARRAY_BUFFER,
       0,
       DEBUG_OUTLINE_VERTEX_SCRATCH
     );
-    glContext.drawArrays(glContext.LINE_LOOP, 0, DEBUG_OUTLINE_VERTEX_COUNT);
+    glContext.drawArrays(glContext.TRIANGLES, 0, vertexCount);
   };
 
   const end = (): void => {
@@ -935,8 +981,6 @@ export const createDebugOutlineRenderer = (
     currentColor[1] = Number.NaN;
     currentColor[2] = Number.NaN;
     currentColor[3] = Number.NaN;
-    currentLineWidth = Number.NaN;
-    glContext.lineWidth(1);
     glContext.depthMask(true);
     glContext.enable(glContext.DEPTH_TEST);
     glContext.disableVertexAttribArray(attribPositionLocation);

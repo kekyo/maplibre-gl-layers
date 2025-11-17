@@ -288,7 +288,10 @@ const BILLBOARD_PRIMARY_ANCHOR_Y = 1 - 2 * ARROW_HEAD_TOP_FRACTION;
 /** Interaction states that control if and how the secondary image orbits the primary marker. */
 type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
 
+/** Sprite border color */
 const BORDER_COLOR = '#ff0000';
+
+/** Sprite border width in pixel */
 const BORDER_WIDTH_PIXEL = 2;
 
 /////////////////////////////////////////////////////////////////////////////////////////
