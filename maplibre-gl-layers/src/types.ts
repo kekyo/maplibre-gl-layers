@@ -54,8 +54,8 @@ export interface SpriteImageOffset {
 export interface SpriteImageLineAttribute {
   /** CSS color string. Defaults to red. */
   color?: string;
-  /** Border width in CSS pixels. Defaults to 1. */
-  widthPixel?: number;
+  /** Border width in meters. Defaults to 1. */
+  widthMeters?: number;
 }
 
 /**
@@ -279,8 +279,8 @@ export interface SpriteImageInterpolatedOffset {
 export interface SpriteImageLineAttributeState {
   /** CSS color string applied to the border. */
   readonly color: string;
-  /** Border width in CSS pixels. */
-  readonly widthPixel: number;
+  /** Border width in meters. */
+  readonly widthMeters: number;
 }
 
 /**

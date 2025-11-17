@@ -130,6 +130,34 @@ const resolveImageOffset = (
   };
 };
 
+const calculateBorderWidthPixels = (
+  widthMeters: number | undefined,
+  imageScale: number,
+  zoomScaleFactor: number,
+  effectivePixelsPerMeter: number,
+  sizeScaleAdjustment: number
+): number => {
+  if (
+    widthMeters === undefined ||
+    !Number.isFinite(widthMeters) ||
+    widthMeters <= 0
+  ) {
+    return 0;
+  }
+  if (
+    !Number.isFinite(effectivePixelsPerMeter) ||
+    effectivePixelsPerMeter <= 0
+  ) {
+    return 0;
+  }
+  const scaledWidthMeters =
+    widthMeters * imageScale * zoomScaleFactor * sizeScaleAdjustment;
+  if (!Number.isFinite(scaledWidthMeters) || scaledWidthMeters <= 0) {
+    return 0;
+  }
+  return scaledWidthMeters * effectivePixelsPerMeter;
+};
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -819,6 +847,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
 
   // Reset previous frame state so skipped images do not leak stale uniforms.
   imageEntry.surfaceShaderInputs = undefined;
+  imageEntry.borderPixelWidth = 0;
 
   let screenCornerBuffer:
     | [
@@ -846,6 +875,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     offsetX: identityOffsetX,
     offsetY: identityOffsetY,
   };
+  let borderSizeScaleAdjustment = 1;
 
   // Use per-image anchor/offset when provided; otherwise fall back to defaults.
   const anchor = imageEntry.anchor ?? DEFAULT_ANCHOR;
@@ -983,6 +1013,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       pixelRatio,
       project: clipContext ? undefined : projectionHost.project,
     });
+
+    borderSizeScaleAdjustment = surfaceCenter.worldDimensions.scaleAdjustment;
 
     if (!surfaceCenter.center) {
       // Projection failed for at least one corner; skip rendering to avoid NaNs.
@@ -1276,6 +1308,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       offset: offsetDef,
     });
 
+    borderSizeScaleAdjustment = placement.scaleAdjustment;
+
     const billboardShaderInputs = {
       center: placement.center,
       halfWidth: placement.halfWidth,
@@ -1401,6 +1435,15 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       };
     }
   }
+
+  const borderWidthMeters = imageEntry.border?.widthMeters;
+  imageEntry.borderPixelWidth = calculateBorderWidthPixels(
+    borderWidthMeters,
+    imageScale,
+    zoomScaleFactor,
+    effectivePixelsPerMeter,
+    borderSizeScaleAdjustment
+  );
 
   const hitTestCorners =
     screenCornerBuffer && screenCornerBuffer.length === 4

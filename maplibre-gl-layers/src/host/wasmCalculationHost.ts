@@ -33,6 +33,9 @@ import type {
 import {
   SURFACE_CORNER_DISPLACEMENT_COUNT,
   cloneSpriteLocation,
+  calculateMetersPerPixelAtLatitude,
+  calculateEffectivePixelsPerMeter,
+  multiplyMatrixAndVector,
   type SurfaceCorner,
 } from '../utils/math';
 import type {
@@ -80,6 +83,8 @@ import {
   ORDER_BUCKET,
   ORDER_MAX,
   EPS_NDC,
+  EARTH_RADIUS_METERS,
+  DEG2RAD,
 } from '../const';
 import {
   ENABLE_NDC_BIAS_SURFACE,
@@ -110,6 +115,8 @@ const WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 const EASING_PRESET_IDS: Record<SpriteEasingPresetName, number> = {
   linear: 0,
 };
+
+const MAX_MERCATOR_LATITUDE = 85.051129;
 
 const resolveImageOffset = (
   image: Readonly<InternalSpriteImageState>
@@ -951,6 +958,10 @@ interface PreparedInputBuffer extends Releasable {
 
 interface WritableWasmProjectionState<TTag> {
   readonly preparedProjection: PreparedProjectionState;
+  lastFrameParams?: {
+    baseMetersPerPixel: number;
+    zoomScaleFactor: number;
+  };
   readonly prepareInputBuffer: (
     params: PrepareDrawSpriteImageParams<TTag>
   ) => PreparedInputBuffer;
@@ -1007,6 +1018,104 @@ const converToPreparedDrawImageParams = <TTag>(
   const resourceRefs = state.getResourceRefs();
 
   const items: PreparedDrawSpriteImageParams<TTag>[] = [];
+
+  const zoomScaleFactor = state.lastFrameParams?.zoomScaleFactor ?? 1;
+
+  const clampLatitude = (lat: number): number =>
+    Math.min(Math.max(lat, -MAX_MERCATOR_LATITUDE), MAX_MERCATOR_LATITUDE);
+
+  const mercatorZfromAltitude = (
+    altitude: number,
+    latitude: number
+  ): number => {
+    const circumferenceAtLatitude =
+      2 * Math.PI * EARTH_RADIUS_METERS * Math.cos(latitude * DEG2RAD);
+    if (
+      !Number.isFinite(circumferenceAtLatitude) ||
+      circumferenceAtLatitude === 0
+    ) {
+      return 0;
+    }
+    return altitude / circumferenceAtLatitude;
+  };
+
+  const calculatePerspectiveRatio = (
+    location: Readonly<SpriteLocation>
+  ): number => {
+    const { mercatorMatrix, cameraToCenterDistance } = state.preparedProjection;
+    if (!mercatorMatrix || !Number.isFinite(cameraToCenterDistance)) {
+      return 1;
+    }
+    const lng = location.lng ?? 0;
+    const lat = clampLatitude(location.lat ?? 0);
+    const altitude = location.z ?? 0;
+    const mercatorX = (180 + lng) / 360;
+    const mercatorY =
+      (180 -
+        (180 / Math.PI) *
+          Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360))) /
+      360;
+    const mercatorZ = mercatorZfromAltitude(altitude, lat);
+    try {
+      const [, , , w] = multiplyMatrixAndVector(
+        mercatorMatrix,
+        mercatorX,
+        mercatorY,
+        mercatorZ,
+        1
+      );
+      if (!Number.isFinite(w) || w <= 0) {
+        return 1;
+      }
+      const ratio = cameraToCenterDistance / w;
+      return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+    } catch {
+      return 1;
+    }
+  };
+
+  const resolveEffectivePixelsPerMeter = (
+    location: Readonly<SpriteLocation>
+  ): number => {
+    const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
+      state.preparedProjection.zoom,
+      location.lat ?? 0
+    );
+    const perspectiveRatio = calculatePerspectiveRatio(location);
+    const effective = calculateEffectivePixelsPerMeter(
+      metersPerPixelAtLat,
+      perspectiveRatio
+    );
+    return Number.isFinite(effective) && effective > 0 ? effective : 0;
+  };
+
+  const calculateBorderWidthPixels = (
+    widthMeters: number | undefined,
+    imageScale: number,
+    sizeScaleAdjustment: number,
+    effectivePixelsPerMeter: number
+  ): number => {
+    if (
+      widthMeters === undefined ||
+      !Number.isFinite(widthMeters) ||
+      widthMeters <= 0 ||
+      !Number.isFinite(effectivePixelsPerMeter) ||
+      effectivePixelsPerMeter <= 0 ||
+      !Number.isFinite(imageScale) ||
+      imageScale <= 0 ||
+      !Number.isFinite(sizeScaleAdjustment) ||
+      sizeScaleAdjustment <= 0
+    ) {
+      return 0;
+    }
+    return (
+      widthMeters *
+      imageScale *
+      zoomScaleFactor *
+      effectivePixelsPerMeter *
+      sizeScaleAdjustment
+    );
+  };
 
   for (let itemIndex = 0; itemIndex < preparedCount; itemIndex++) {
     const base = RESULT_HEADER_LENGTH + itemIndex * itemStride;
@@ -1205,6 +1314,26 @@ const converToPreparedDrawImageParams = <TTag>(
         }
       : null;
 
+    // Calculate border pixel width on the JS side (wasm does not currently emit it).
+    const widthMeters = imageEntry.border?.widthMeters;
+    const imageScale = imageEntry.scale ?? 1;
+    const effectivePixelsPerMeter = resolveEffectivePixelsPerMeter(
+      spriteEntry.location.current
+    );
+
+    // Apply surface size clamp scaling when available.
+    let sizeScaleAdjustment = 1;
+    if (useShaderSurface && surfaceShaderInputs) {
+      sizeScaleAdjustment = surfaceShaderInputs.scaleAdjustment;
+    }
+
+    imageEntry.borderPixelWidth = calculateBorderWidthPixels(
+      widthMeters,
+      imageScale,
+      sizeScaleAdjustment,
+      effectivePixelsPerMeter
+    );
+
     items.push({
       spriteEntry,
       imageEntry,
@@ -1293,6 +1422,8 @@ const convertToWasmProjectionState = <TTag>(
   let spriteHandles: number[] = [];
   let imageRefs: InternalSpriteImageState[] = [];
   let resourceRefs: ReadonlyArray<RegisteredImage | undefined> = [];
+
+  let state: WritableWasmProjectionState<TTag>;
 
   const writeMatrix = (
     buffer: Float64Array,
@@ -1416,6 +1547,11 @@ const convertToWasmProjectionState = <TTag>(
     frameConstView[fcCursor++] = cameraLocation?.lng ?? 0;
     frameConstView[fcCursor++] = cameraLocation?.lat ?? 0;
     frameConstView[fcCursor++] = cameraLocation?.z ?? 0;
+
+    state.lastFrameParams = {
+      baseMetersPerPixel: callParams.baseMetersPerPixel,
+      zoomScaleFactor: toFiniteOr(callParams.zoomScaleFactor, 1),
+    };
 
     writeMatrix(
       parameterBuffer,
@@ -1546,12 +1682,15 @@ const convertToWasmProjectionState = <TTag>(
     };
   };
 
-  return {
+  state = {
     preparedProjection,
+    lastFrameParams: undefined,
     prepareInputBuffer,
     getImageRefs: () => imageRefs,
     getResourceRefs: () => resourceRefs,
   };
+
+  return state;
 };
 
 /**

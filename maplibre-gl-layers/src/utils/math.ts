@@ -1047,6 +1047,7 @@ export interface BillboardCenterResult {
   pixelHeight: number;
   anchorShift: SpritePoint;
   offsetShift: SpritePoint;
+  scaleAdjustment: number;
 }
 
 /**
@@ -1115,6 +1116,7 @@ export const calculateBillboardCenterPosition = (
     pixelHeight: pixelDims.height,
     anchorShift,
     offsetShift,
+    scaleAdjustment: pixelDims.scaleAdjustment,
   };
 };
 

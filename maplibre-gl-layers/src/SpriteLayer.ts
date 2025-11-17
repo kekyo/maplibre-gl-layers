@@ -175,8 +175,8 @@ import { renderTextGlyphBitmap } from './gl/text';
 /** Default threshold in meters for auto-rotation to treat movement as significant. */
 const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
 
-/** Default border width in CSS pixels for sprite image outlines. */
-const DEFAULT_BORDER_WIDTH_PIXEL = 1;
+/** Default border width in meters for sprite image outlines. */
+const DEFAULT_BORDER_WIDTH_METERS = 1;
 
 /** Sentinel used when an image has not been placed on any atlas page. */
 const ATLAS_PAGE_INDEX_NONE = -1;
@@ -457,12 +457,12 @@ const createInterpolatedOffsetState = (
   };
 };
 
-const resolveBorderWidthPixel = (width?: number): number => {
+const resolveBorderWidthMeters = (width?: number): number => {
   if (typeof width !== 'number') {
-    return DEFAULT_BORDER_WIDTH_PIXEL;
+    return DEFAULT_BORDER_WIDTH_METERS;
   }
   if (!Number.isFinite(width) || width <= 0) {
-    return DEFAULT_BORDER_WIDTH_PIXEL;
+    return DEFAULT_BORDER_WIDTH_METERS;
   }
   return width;
 };
@@ -480,7 +480,7 @@ const resolveSpriteImageLineAttribute = (
   const rgba = parseCssColorToRgba(colorString, DEFAULT_BORDER_COLOR_RGBA);
   return {
     color: colorString,
-    widthPixel: resolveBorderWidthPixel(border.widthPixel),
+    widthMeters: resolveBorderWidthMeters(border.widthMeters),
     rgba,
   };
 };
@@ -550,6 +550,7 @@ export const createImageStateFromInit = (
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
     border: resolveSpriteImageLineAttribute(imageInit.border),
+    borderPixelWidth: 0,
     offset: createInterpolatedOffsetState(initialOffset),
     rotateDeg: {
       current: initialRotateDeg,
@@ -2019,7 +2020,7 @@ export const createSpriteLayer = <T = any>(
               border.rgba[2],
               effectiveAlpha,
             ];
-            const width = border.widthPixel;
+            const width = entry.image.borderPixelWidth;
             if (!Number.isFinite(width) || width <= 0) {
               continue;
             }
@@ -2806,6 +2807,7 @@ export const createSpriteLayer = <T = any>(
     }
     if (imageUpdate.border !== undefined) {
       state.border = resolveSpriteImageLineAttribute(imageUpdate.border);
+      state.borderPixelWidth = 0;
     }
     const prevAutoRotation = state.autoRotation;
     const prevMinDistance = state.autoRotationMinDistanceMeters;

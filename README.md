@@ -582,7 +582,7 @@ Additionally, the event handler described later indicates the area used as the c
 Example:
 
 ```typescript
-// Add a 2px red border to the arrow
+// Add a 2m red border to the arrow
 spriteLayer.addSprite('bordered-marker', {
   location: { lng: 136.8852, lat: 35.17 },
   images: [
@@ -590,7 +590,7 @@ spriteLayer.addSprite('bordered-marker', {
       subLayer: 0,
       order: 0,
       imageId: ARROW_IMAGE_ID,
-      border: { color: '#ff0000', widthPixel: 2 },
+      border: { color: '#ff0000', widthMeters: 2 },
     },
   ],
 });

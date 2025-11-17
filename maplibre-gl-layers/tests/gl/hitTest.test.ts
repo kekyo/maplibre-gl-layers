@@ -6,6 +6,13 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { MercatorCoordinate } from 'maplibre-gl';
+import {
+  calculateBillboardPixelDimensions,
+  calculateEffectivePixelsPerMeter,
+  calculateMetersPerPixelAtLatitude,
+  calculateZoomScaleFactor,
+  resolveScalingOptions,
+} from '../../src/utils/math';
 import type { ProjectionHostParams } from '../../src/host/projectionHost';
 import type {
   InternalSpriteCurrentState,
@@ -675,23 +682,52 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
   it('draws per-image borders using the sprite opacity', async () => {
     const { layer, map, gl } = await setupLayer();
     const location = { lng: 1, lat: 1 };
+    const widthMeters = 3;
+
+    const spriteImage = {
+      ...makeSpriteImage('marker'),
+      opacity: 0.5,
+      border: { color: 'rgba(0, 255, 0, 0.5)', widthMeters },
+    };
 
     layer.addSprite('bordered', {
       location,
-      images: [
-        {
-          ...makeSpriteImage('marker'),
-          opacity: 0.5,
-          border: { color: 'rgba(0, 255, 0, 0.5)', widthPixel: 3 },
-        },
-      ],
+      images: [spriteImage],
     });
 
     layer.render?.(gl, {} as any);
 
     expect(outlineDrawCalls.length).toBeGreaterThan(0);
     const [{ color, width }] = outlineDrawCalls;
-    expect(width).toBe(3);
+    const resolvedScaling = resolveScalingOptions();
+    const zoom = map.getZoom();
+    const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
+    const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
+      zoom,
+      location.lat
+    );
+    const effectivePixelsPerMeter = calculateEffectivePixelsPerMeter(
+      metersPerPixelAtLat,
+      map.transform.cameraToCenterDistance
+    );
+    const imageScale = spriteImage.scale ?? 1;
+    const pixelDims = calculateBillboardPixelDimensions(
+      fakeBitmap.width,
+      fakeBitmap.height,
+      resolvedScaling.metersPerPixel,
+      imageScale,
+      zoomScaleFactor,
+      effectivePixelsPerMeter,
+      resolvedScaling.spriteMinPixel,
+      resolvedScaling.spriteMaxPixel
+    );
+    const expectedWidth =
+      widthMeters *
+      imageScale *
+      zoomScaleFactor *
+      effectivePixelsPerMeter *
+      pixelDims.scaleAdjustment;
+    expect(width).toBeCloseTo(expectedWidth);
     expect(color[1]).toBeCloseTo(1);
     expect(color[3]).toBeCloseTo(0.25);
 

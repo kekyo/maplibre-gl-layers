@@ -610,7 +610,7 @@ spriteLayer.updateSprite('vehicle-lod', {
 以下にボーダーを描画させる例を示します:
 
 ```typescript
-// 基本の矢印に赤の2pxボーダーを付ける
+// 基本の矢印に赤の2mボーダーを付ける
 spriteLayer.addSprite('bordered-marker', {
   location: { lng: 136.8852, lat: 35.17 },
   images: [
@@ -618,7 +618,7 @@ spriteLayer.addSprite('bordered-marker', {
       subLayer: 0,
       order: 0,
       imageId: ARROW_IMAGE_ID,
-      border: { color: '#ff0000', widthPixel: 2 },
+      border: { color: '#ff0000', widthMeters: 2 },
     },
   ],
 });

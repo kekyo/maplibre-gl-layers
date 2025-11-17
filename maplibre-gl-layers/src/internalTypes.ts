@@ -680,6 +680,7 @@ export interface InternalSpriteImageState extends SpriteImageState {
   scale: number;
   anchor: Readonly<SpriteAnchor>;
   border: ResolvedSpriteImageLineAttribute | undefined;
+  borderPixelWidth: number;
   offset: MutableSpriteImageInterpolatedOffset;
   rotateDeg: MutableInterpolatedValues<number>;
   rotationCommandDeg: number;

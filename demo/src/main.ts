@@ -294,7 +294,7 @@ const BORDER_COLOR = '#c00000';
 const BORDER_COLOR_SELECTED = '#a0a000';
 
 /** Sprite border width in pixel */
-const BORDER_WIDTH_PIXEL = 2;
+const BORDER_WIDTH_METERS = 2;
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -2442,7 +2442,7 @@ const main = async () => {
         return { border: null };
       }
       return {
-        border: { color, widthPixel: BORDER_WIDTH_PIXEL },
+        border: { color, widthMeters: BORDER_WIDTH_METERS },
       };
     };
 
@@ -2452,7 +2452,7 @@ const main = async () => {
         return undefined;
       }
       return {
-        border: { color, widthPixel: BORDER_WIDTH_PIXEL },
+        border: { color, widthMeters: BORDER_WIDTH_METERS },
       };
     };
 
