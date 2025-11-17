@@ -54,7 +54,7 @@ export interface SpriteImageOffset {
 export interface SpriteImageLineAttribute {
   /** CSS color string. Defaults to red. */
   color?: string;
-  /** Border width in meters. Defaults to 1. */
+  /** Line width in meters. Defaults to 1. */
   widthMeters?: number;
 }
 
@@ -139,6 +139,8 @@ export interface SpriteImageDefinitionInit {
   offset?: SpriteImageOffset;
   /** Optional border rendered around the image. */
   border?: SpriteImageLineAttribute;
+  /** Optional leader line rendered toward the origin image. */
+  leaderLine?: SpriteImageLineAttribute;
   /**
    * Determines which coordinate to anchor against.
    * - Omitted: use the sprite base coordinate.
@@ -183,6 +185,8 @@ export interface SpriteImageDefinitionUpdate {
   offset?: SpriteImageOffset;
   /** Border rendered around the image. Specify null to remove. */
   border?: SpriteImageLineAttribute | null;
+  /** Leader line rendered toward the origin image. Specify null to remove. */
+  leaderLine?: SpriteImageLineAttribute | null;
   /** Additional rotation in degrees. */
   rotateDeg?: number;
   /** Enables auto-rotation toward the travel direction. */
@@ -277,9 +281,9 @@ export interface SpriteImageInterpolatedOffset {
  * Resolved line attribute state.
  */
 export interface SpriteImageLineAttributeState {
-  /** CSS color string applied to the border. */
+  /** CSS color string applied to the line. */
   readonly color: string;
-  /** Border width in meters. */
+  /** Line width in meters. */
   readonly widthMeters: number;
 }
 
@@ -295,6 +299,7 @@ export interface SpriteImageLineAttributeState {
  * @property {Readonly<SpriteAnchor>} anchor - Anchor coordinates resolved for the image.
  * @property {SpriteImageInterpolatedOffset} offset - Offset applied relative to the anchor point, with interpolation metadata.
  * @property {SpriteImageLineAttributeState | undefined} border - Border line attribute.
+ * @property {SpriteImageLineAttributeState | undefined} leaderLine - Leader line attribute.
  * @property {InterpolatedValues<number>} rotateDeg - Additional rotation in degrees plus interpolation metadata.
  * @property {boolean} autoRotation - Indicates whether auto-rotation is active.
  * @property {number} autoRotationMinDistanceMeters - Minimum travel distance before auto-rotation updates.
@@ -321,6 +326,8 @@ export interface SpriteImageState {
   readonly offset: SpriteImageInterpolatedOffset;
   /** Optional border rendered around the image. */
   readonly border: SpriteImageLineAttributeState | undefined;
+  /** Optional leader line rendered toward the origin image. */
+  readonly leaderLine: SpriteImageLineAttributeState | undefined;
   /**
    * Additional rotation in degrees with interpolation metadata.
    * `from`/`to` are `undefined` when no rotation animation is running.

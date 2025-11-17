@@ -233,6 +233,11 @@ const SECONDARY_SUB_LAYER = 10;
 
 /** Default scale multiplier applied to the orbiting secondary image. */
 const SECONDARY_IMAGE_SCALE = 0.5;
+/** Leader line style applied to secondary images when enabled. */
+const SECONDARY_LEADER_LINE_STYLE = {
+  color: '#00aa00',
+  widthMeters: 4,
+} as const;
 /** Distance in meters that secondary images orbit from their primary marker. */
 const SECONDARY_ORBIT_RADIUS_METERS = 180;
 /** Angular increment in degrees applied to the orbiting image during each step. */
@@ -606,6 +611,8 @@ let movementSpeedScale = DEFAULT_MOVEMENT_SPEED_SCALE;
 let currentSecondaryImageOrbitMode: SecondaryOrbitMode = 'hidden';
 /** Currently selected secondary image type. */
 let currentSecondaryImageType: SecondaryImageType = 'box';
+/** Whether leader lines are drawn for the secondary image. */
+let isSecondaryLeaderLineEnabled = false;
 /** Whether we interpolate the orbital angle of the secondary image. */
 let isOrbitDegInterpolationEnabled = true;
 /** Whether we interpolate the orbital distance of the secondary image. */
@@ -626,6 +633,8 @@ let isSecondaryImageReady = false;
 let updateSecondaryImageButtons: (() => void) | undefined;
 /** UI updater for secondary image type buttons. */
 let updateSecondaryImageTypeButtons: (() => void) | undefined;
+/** UI updater for the secondary leader line toggle. */
+let updateSecondaryLeaderLineButton: (() => void) | undefined;
 /** UI updater for the rotate-interpolation toggle. */
 let updateRotateInterpolationButton: (() => void) | undefined;
 /** UI updater for the primary opacity buttons. */
@@ -1260,6 +1269,20 @@ const createHud = () => {
             data-testid="toggle-secondary-orbit"
           >
             Orbit
+          </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${isSecondaryLeaderLineEnabled ? ' active' : ''}"
+            data-control="secondary-leader-line-toggle"
+            data-label="Leader Line"
+            data-active-text="On"
+            data-inactive-text="Off"
+            aria-pressed="${isSecondaryLeaderLineEnabled}"
+            data-testid="toggle-secondary-leader-line"
+          >
+            Leader Line: ${isSecondaryLeaderLineEnabled ? 'On' : 'Off'}
           </button>
         </div>
         <div class="button-group">
@@ -2770,6 +2793,30 @@ const main = async () => {
     };
 
     /**
+     * Enables or disables leader lines for all secondary images.
+     * @param {boolean} enabled - Whether to draw leader lines.
+     */
+    const setSecondaryLeaderLineEnabled = (enabled: boolean): void => {
+      isSecondaryLeaderLineEnabled = enabled;
+      updateSecondaryLeaderLineButton?.();
+      if (!isSecondaryImageReady) {
+        return;
+      }
+      spriteLayer.updateForEach((sprite, update) => {
+        const subLayerImages = sprite.images.get(SECONDARY_SUB_LAYER);
+        if (!subLayerImages) {
+          return true;
+        }
+        subLayerImages.forEach((imageState) => {
+          update.updateImage(imageState.subLayer, imageState.order, {
+            leaderLine: enabled ? { ...SECONDARY_LEADER_LINE_STYLE } : null,
+          });
+        });
+        return true;
+      });
+    };
+
+    /**
      * Pre-registers every primary arrow image variant so sprite creation can reuse cached textures.
      */
     const registerPrimaryArrowImages = async (): Promise<void> => {
@@ -2797,6 +2844,10 @@ const main = async () => {
       isSecondaryImageReady = true;
       updateSecondaryImageButtons?.();
       updateSecondaryImageTypeButtons?.();
+      updateSecondaryLeaderLineButton?.();
+      if (isSecondaryLeaderLineEnabled) {
+        setSecondaryLeaderLineEnabled(true);
+      }
     };
 
     // Expand the movement extent based on sprite count.
@@ -3118,6 +3169,27 @@ const main = async () => {
         spriteCountSlider.addEventListener('change', () => {
           // Once the user releases the slider, optionally rebuild movement paths.
           applyLimitFromSlider(spriteCountSlider.value, true);
+        });
+      }
+
+      const secondaryLeaderLineButton = queryFirst<HTMLButtonElement>(
+        '[data-control="secondary-leader-line-toggle"]'
+      );
+      if (secondaryLeaderLineButton) {
+        updateSecondaryLeaderLineButton = () => {
+          setToggleButtonState(
+            secondaryLeaderLineButton,
+            isSecondaryLeaderLineEnabled,
+            'binary'
+          );
+          secondaryLeaderLineButton.disabled = !isSecondaryImageReady;
+        };
+        updateSecondaryLeaderLineButton();
+        secondaryLeaderLineButton.addEventListener('click', () => {
+          if (!isSecondaryImageReady) {
+            return;
+          }
+          setSecondaryLeaderLineEnabled(!isSecondaryLeaderLineEnabled);
         });
       }
 
@@ -4023,6 +4095,9 @@ const main = async () => {
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
             scale: SECONDARY_IMAGE_SCALE,
             opacity: secondaryOpacity,
+            leaderLine: isSecondaryLeaderLineEnabled
+              ? { ...SECONDARY_LEADER_LINE_STYLE }
+              : undefined,
             ...(spriteBorder ?? {}),
             ...(secondaryOffset
               ? {

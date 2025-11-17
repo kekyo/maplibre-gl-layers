@@ -1445,6 +1445,14 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     effectivePixelsPerMeter,
     borderSizeScaleAdjustment
   );
+  const leaderLineWidthMeters = imageEntry.leaderLine?.widthMeters;
+  imageEntry.leaderLinePixelWidth = calculateBorderWidthPixels(
+    leaderLineWidthMeters,
+    imageScale,
+    zoomScaleFactor,
+    effectivePixelsPerMeter,
+    borderSizeScaleAdjustment
+  );
 
   const hitTestCorners =
     screenCornerBuffer && screenCornerBuffer.length === 4

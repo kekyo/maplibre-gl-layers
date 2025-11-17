@@ -168,6 +168,18 @@ const BORDER_OUTLINE_VERTEX_SCRATCH = new Float32Array(
   BORDER_OUTLINE_MAX_VERTEX_COUNT * BORDER_OUTLINE_POSITION_COMPONENT_COUNT
 );
 
+/** Components per leader line vertex (clipPosition.xyzw). */
+const LEADER_LINE_POSITION_COMPONENT_COUNT = 4;
+/** Vertex count when drawing a single thick line as two triangles. */
+const LEADER_LINE_VERTEX_COUNT = 6;
+/** Stride in bytes for leader line vertices. */
+const LEADER_LINE_VERTEX_STRIDE =
+  LEADER_LINE_POSITION_COMPONENT_COUNT * FLOAT_SIZE;
+/** Scratch buffer reused when emitting leader line quads. */
+const LEADER_LINE_VERTEX_SCRATCH = new Float32Array(
+  LEADER_LINE_VERTEX_COUNT * LEADER_LINE_POSITION_COMPONENT_COUNT
+);
+
 /** Corner traversal order used when outlining a quad without crossing diagonals. */
 export const BORDER_OUTLINE_CORNER_ORDER = [0, 1, 3, 2] as const;
 
@@ -1010,6 +1022,200 @@ export const createBorderOutlineRenderer = (
   return {
     begin,
     drawOutline,
+    end,
+    release,
+  };
+};
+
+export interface LeaderLineRenderer extends Releasable {
+  begin(
+    screenToClipScaleX: number,
+    screenToClipScaleY: number,
+    screenToClipOffsetX: number,
+    screenToClipOffsetY: number
+  ): void;
+  drawLine(
+    from: Readonly<SpriteScreenPoint>,
+    to: Readonly<SpriteScreenPoint>,
+    color: RgbaColor,
+    lineWidth: number
+  ): void;
+  end(): void;
+}
+
+export const createLeaderLineRenderer = (
+  glContext: WebGLRenderingContext
+): LeaderLineRenderer => {
+  const program = createShaderProgram(
+    glContext,
+    BORDER_OUTLINE_VERTEX_SHADER_SOURCE,
+    BORDER_OUTLINE_FRAGMENT_SHADER_SOURCE
+  );
+
+  const attribPositionLocation = glContext.getAttribLocation(
+    program,
+    'a_position'
+  );
+  if (attribPositionLocation === -1) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire leader line attribute location.');
+  }
+
+  const uniformColorLocation = glContext.getUniformLocation(program, 'u_color');
+  const uniformScreenToClipScaleLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipScale'
+  );
+  const uniformScreenToClipOffsetLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipOffset'
+  );
+  if (
+    !uniformColorLocation ||
+    !uniformScreenToClipScaleLocation ||
+    !uniformScreenToClipOffsetLocation
+  ) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire leader line uniforms.');
+  }
+
+  const vertexBuffer = glContext.createBuffer();
+  if (!vertexBuffer) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to create leader line vertex buffer.');
+  }
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+  glContext.bufferData(
+    glContext.ARRAY_BUFFER,
+    LEADER_LINE_VERTEX_SCRATCH,
+    glContext.DYNAMIC_DRAW
+  );
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+
+  let active = false;
+
+  const begin = (
+    screenToClipScaleX: number,
+    screenToClipScaleY: number,
+    screenToClipOffsetX: number,
+    screenToClipOffsetY: number
+  ): void => {
+    glContext.useProgram(program);
+    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+    glContext.enableVertexAttribArray(attribPositionLocation);
+    glContext.vertexAttribPointer(
+      attribPositionLocation,
+      LEADER_LINE_POSITION_COMPONENT_COUNT,
+      glContext.FLOAT,
+      false,
+      LEADER_LINE_VERTEX_STRIDE,
+      0
+    );
+    glContext.disable(glContext.DEPTH_TEST);
+    glContext.depthMask(false);
+    glContext.uniform2f(
+      uniformScreenToClipScaleLocation,
+      screenToClipScaleX,
+      screenToClipScaleY
+    );
+    glContext.uniform2f(
+      uniformScreenToClipOffsetLocation,
+      screenToClipOffsetX,
+      screenToClipOffsetY
+    );
+    active = true;
+  };
+
+  const currentColor = [Number.NaN, Number.NaN, Number.NaN, Number.NaN];
+  const applyColor = (color: RgbaColor): void => {
+    const [r, g, b, a] = color;
+    if (
+      currentColor[0] !== r ||
+      currentColor[1] !== g ||
+      currentColor[2] !== b ||
+      currentColor[3] !== a
+    ) {
+      glContext.uniform4f(uniformColorLocation, r, g, b, a);
+      currentColor[0] = r;
+      currentColor[1] = g;
+      currentColor[2] = b;
+      currentColor[3] = a;
+    }
+  };
+
+  const drawLine = (
+    from: Readonly<SpriteScreenPoint>,
+    to: Readonly<SpriteScreenPoint>,
+    color: RgbaColor,
+    lineWidth: number
+  ): void => {
+    if (!active) {
+      return;
+    }
+    if (!Number.isFinite(lineWidth) || lineWidth <= 0) {
+      return;
+    }
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy);
+    if (length <= 0) {
+      return;
+    }
+    applyColor(color);
+    const halfWidth = lineWidth / 2;
+    const nx = (-dy / length) * halfWidth;
+    const ny = (dx / length) * halfWidth;
+
+    const v0 = { x: from.x + nx, y: from.y + ny };
+    const v1 = { x: to.x + nx, y: to.y + ny };
+    const v2 = { x: to.x - nx, y: to.y - ny };
+    const v3 = { x: from.x - nx, y: from.y - ny };
+
+    let offset = 0;
+    const emitVertex = (pt: { x: number; y: number }) => {
+      LEADER_LINE_VERTEX_SCRATCH[offset++] = pt.x;
+      LEADER_LINE_VERTEX_SCRATCH[offset++] = pt.y;
+      LEADER_LINE_VERTEX_SCRATCH[offset++] = 0;
+      LEADER_LINE_VERTEX_SCRATCH[offset++] = 1;
+    };
+
+    emitVertex(v0);
+    emitVertex(v1);
+    emitVertex(v2);
+    emitVertex(v0);
+    emitVertex(v2);
+    emitVertex(v3);
+
+    glContext.bufferSubData(
+      glContext.ARRAY_BUFFER,
+      0,
+      LEADER_LINE_VERTEX_SCRATCH
+    );
+    glContext.drawArrays(glContext.TRIANGLES, 0, LEADER_LINE_VERTEX_COUNT);
+  };
+
+  const end = (): void => {
+    if (!active) {
+      return;
+    }
+    currentColor[0] = Number.NaN;
+    currentColor[1] = Number.NaN;
+    currentColor[2] = Number.NaN;
+    currentColor[3] = Number.NaN;
+    glContext.disableVertexAttribArray(attribPositionLocation);
+    glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+    active = false;
+  };
+
+  const release = (): void => {
+    end();
+    glContext.deleteBuffer(vertexBuffer);
+    glContext.deleteProgram(program);
+  };
+
+  return {
+    begin,
+    drawLine,
     end,
     release,
   };

@@ -1333,6 +1333,13 @@ const converToPreparedDrawImageParams = <TTag>(
       sizeScaleAdjustment,
       effectivePixelsPerMeter
     );
+    const leaderLineWidthMeters = imageEntry.leaderLine?.widthMeters;
+    imageEntry.leaderLinePixelWidth = calculateBorderWidthPixels(
+      leaderLineWidthMeters,
+      imageScale,
+      sizeScaleAdjustment,
+      effectivePixelsPerMeter
+    );
 
     items.push({
       spriteEntry,

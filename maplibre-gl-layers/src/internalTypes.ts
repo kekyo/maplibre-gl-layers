@@ -667,7 +667,7 @@ export type Canvas2DContext =
  */
 export type Canvas2DSource = HTMLCanvasElement | OffscreenCanvas;
 
-/** Border definition resolved for rendering. */
+/** Line definition resolved for rendering. */
 export interface ResolvedSpriteImageLineAttribute
   extends SpriteImageLineAttributeState {
   readonly rgba: RgbaColor;
@@ -689,6 +689,8 @@ export interface InternalSpriteImageState extends SpriteImageState {
   anchor: Readonly<SpriteAnchor>;
   border: ResolvedSpriteImageLineAttribute | undefined;
   borderPixelWidth: number;
+  leaderLine: ResolvedSpriteImageLineAttribute | undefined;
+  leaderLinePixelWidth: number;
   offset: MutableSpriteImageInterpolatedOffset;
   rotateDeg: MutableInterpolatedValues<number>;
   rotationCommandDeg: number;

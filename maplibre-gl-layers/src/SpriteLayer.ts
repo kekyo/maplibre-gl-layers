@@ -91,8 +91,10 @@ import {
 import {
   createSpriteDrawProgram,
   createBorderOutlineRenderer,
+  createLeaderLineRenderer,
   type SpriteDrawProgram,
   type BorderOutlineRenderer,
+  type LeaderLineRenderer,
   resolveTextureFilteringOptions,
   resolveAnisotropyExtension,
   ensureTextures,
@@ -423,6 +425,8 @@ export const createImageStateFromInit = (
     anchor: cloneAnchor(imageInit.anchor),
     border: resolveSpriteImageLineAttribute(imageInit.border),
     borderPixelWidth: 0,
+    leaderLine: resolveSpriteImageLineAttribute(imageInit.leaderLine),
+    leaderLinePixelWidth: 0,
     offset: createInterpolatedOffsetState(initialOffset),
     rotateDeg: {
       current: initialRotateDeg,
@@ -533,6 +537,8 @@ export const createSpriteLayer = <T = any>(
   let maxSupportedAnisotropy = 1;
   /** Helper used to render sprite border outlines. */
   let borderOutlineRenderer: BorderOutlineRenderer | undefined;
+  /** Helper used to render leader lines. */
+  let leaderLineRenderer: LeaderLineRenderer | undefined;
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -1476,6 +1482,10 @@ export const createSpriteLayer = <T = any>(
         borderOutlineRenderer.release();
         borderOutlineRenderer = undefined;
       }
+      if (leaderLineRenderer) {
+        leaderLineRenderer.release();
+        leaderLineRenderer = undefined;
+      }
     }
 
     eventListeners.forEach((set) => set.clear());
@@ -1484,6 +1494,7 @@ export const createSpriteLayer = <T = any>(
     gl = undefined;
     map = undefined;
     borderOutlineRenderer = undefined;
+    leaderLineRenderer = undefined;
     anisotropyExtension = undefined;
     maxSupportedAnisotropy = 1;
   };
@@ -1612,7 +1623,6 @@ export const createSpriteLayer = <T = any>(
       glContext.depthMask(false);
 
       const drawProgram = spriteDrawProgram;
-      drawProgram.beginFrame();
 
       let drawOrderCounter = 0;
       const drawPreparedSprite = (
@@ -1687,6 +1697,109 @@ export const createSpriteLayer = <T = any>(
           processResult.interpolationResult.hasActiveInterpolation;
         const preparedItems = processResult.preparedItems;
 
+        const preparedByImage = new Map<
+          InternalSpriteImageState,
+          PreparedDrawSpriteImageParams<T>
+        >();
+        for (const prepared of preparedItems) {
+          preparedByImage.set(prepared.imageEntry, prepared);
+        }
+
+        const resolveLineAnchorCenter = (
+          prepared: PreparedDrawSpriteImageParams<T>
+        ): SpriteScreenPoint | null => {
+          const corners = prepared.hitTestCorners;
+          if (corners && corners.length === 4) {
+            let x = 0;
+            let y = 0;
+            for (const corner of corners) {
+              x += corner.x;
+              y += corner.y;
+            }
+            return { x: x / 4, y: y / 4 };
+          }
+          const billboard = prepared.billboardUniforms;
+          if (billboard) {
+            return { x: billboard.center.x, y: billboard.center.y };
+          }
+          return null;
+        };
+
+        const leaderLineEntries: Array<{
+          from: SpriteScreenPoint;
+          to: SpriteScreenPoint;
+          color: RgbaColor;
+          width: number;
+        }> = [];
+
+        for (const prepared of preparedItems) {
+          const leader = prepared.imageEntry.leaderLine;
+          if (!leader) {
+            continue;
+          }
+          const originIndex = prepared.imageEntry.originRenderTargetIndex;
+          if (
+            originIndex === SPRITE_ORIGIN_REFERENCE_INDEX_NONE ||
+            originIndex < 0 ||
+            originIndex >= renderTargetEntries.length
+          ) {
+            continue;
+          }
+          const originEntry = renderTargetEntries[originIndex];
+          if (!originEntry) {
+            continue;
+          }
+          const [, originImage] = originEntry;
+          const originPrepared = preparedByImage.get(originImage);
+          if (!originPrepared) {
+            continue;
+          }
+          const from = resolveLineAnchorCenter(prepared);
+          const to = resolveLineAnchorCenter(originPrepared);
+          if (!from || !to) {
+            continue;
+          }
+          const width = prepared.imageEntry.leaderLinePixelWidth;
+          if (!Number.isFinite(width) || width <= 0) {
+            continue;
+          }
+          const alpha = clampOpacity(leader.rgba[3] * prepared.opacity);
+          if (alpha <= 0) {
+            continue;
+          }
+          const color: RgbaColor = [
+            leader.rgba[0],
+            leader.rgba[1],
+            leader.rgba[2],
+            alpha,
+          ];
+          leaderLineEntries.push({ from, to, color, width });
+        }
+
+        if (leaderLineEntries.length > 0) {
+          if (!leaderLineRenderer) {
+            leaderLineRenderer = createLeaderLineRenderer(glContext);
+          }
+          if (leaderLineRenderer) {
+            leaderLineRenderer.begin(
+              screenToClipScaleX,
+              screenToClipScaleY,
+              screenToClipOffsetX,
+              screenToClipOffsetY
+            );
+            for (const entry of leaderLineEntries) {
+              leaderLineRenderer.drawLine(
+                entry.from,
+                entry.to,
+                entry.color,
+                entry.width
+              );
+            }
+            leaderLineRenderer.end();
+          }
+        }
+
+        drawProgram.beginFrame();
         drawProgram.uploadVertexBatch(preparedItems);
 
         const preparedBySubLayer = new Map<
@@ -2552,6 +2665,12 @@ export const createSpriteLayer = <T = any>(
     if (imageUpdate.border !== undefined) {
       state.border = resolveSpriteImageLineAttribute(imageUpdate.border);
       state.borderPixelWidth = 0;
+    }
+    if (imageUpdate.leaderLine !== undefined) {
+      state.leaderLine = resolveSpriteImageLineAttribute(
+        imageUpdate.leaderLine
+      );
+      state.leaderLinePixelWidth = 0;
     }
     const prevAutoRotation = state.autoRotation;
     const prevMinDistance = state.autoRotationMinDistanceMeters;
