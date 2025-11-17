@@ -419,6 +419,21 @@ interface InternalBufferHolder<TArray extends TypedArrayBufferView<TArray>>
   release: () => void;
 }
 
+const resolveThreadPoolLimit = (): number => {
+  const hardware =
+    typeof navigator !== 'undefined' &&
+    typeof navigator.hardwareConcurrency === 'number'
+      ? navigator.hardwareConcurrency
+      : 0;
+  if (CONFIGURED_PTHREAD_POOL_SIZE > 0 && hardware > 0) {
+    return Math.min(CONFIGURED_PTHREAD_POOL_SIZE, hardware);
+  }
+  if (CONFIGURED_PTHREAD_POOL_SIZE > 0) {
+    return CONFIGURED_PTHREAD_POOL_SIZE;
+  }
+  return hardware;
+};
+
 const instantiateThreadedProjectionWasm =
   async (): Promise<RawProjectionWasmExports> => {
     const scriptUrl = resolveVariantAssetUrl('simd-mt', 'js');
@@ -961,18 +976,4 @@ export const prepareWasmHost = (): WasmHost => {
     throw new Error('Could not use WasmHost, needs before initialization.');
   }
   return currentWasmHost;
-};
-const resolveThreadPoolLimit = (): number => {
-  const hardware =
-    typeof navigator !== 'undefined' &&
-    typeof navigator.hardwareConcurrency === 'number'
-      ? navigator.hardwareConcurrency
-      : 0;
-  if (CONFIGURED_PTHREAD_POOL_SIZE > 0 && hardware > 0) {
-    return Math.min(CONFIGURED_PTHREAD_POOL_SIZE, hardware);
-  }
-  if (CONFIGURED_PTHREAD_POOL_SIZE > 0) {
-    return CONFIGURED_PTHREAD_POOL_SIZE;
-  }
-  return hardware;
 };

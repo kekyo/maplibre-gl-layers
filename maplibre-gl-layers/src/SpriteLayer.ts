@@ -522,17 +522,17 @@ export const createSpriteLayer = <T = any>(
   };
 
   /** WebGL context supplied by MapLibre, assigned during onAdd. */
-  let gl: WebGLRenderingContext | null = null;
+  let gl: WebGLRenderingContext | undefined;
   /** MapLibre map instance provided to the custom layer. */
-  let map: MapLibreMap | null = null;
+  let map: MapLibreMap | undefined;
   /** Sprite drawing helper encapsulating shader state. */
-  let spriteDrawProgram: SpriteDrawProgram<T> | null = null;
+  let spriteDrawProgram: SpriteDrawProgram<T> | undefined;
   /** Cached anisotropic filtering extension instance (when available). */
-  let anisotropyExtension: EXT_texture_filter_anisotropic | null = null;
+  let anisotropyExtension: EXT_texture_filter_anisotropic | undefined;
   /** Maximum anisotropy supported by the current context. */
   let maxSupportedAnisotropy = 1;
   /** Helper used to render sprite border outlines. */
-  let borderOutlineRenderer: BorderOutlineRenderer | null = null;
+  let borderOutlineRenderer: BorderOutlineRenderer | undefined;
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -1029,7 +1029,7 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
-  let canvasElement: HTMLCanvasElement | null = null;
+  let canvasElement: HTMLCanvasElement | undefined;
   const inputListenerDisposers: Array<() => void> = [];
 
   /**
@@ -1061,7 +1061,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {{ sprite: SpriteCurrentState<T> | undefined; image: SpriteImageState | undefined }} Sprite/image state pair.
    */
   const resolveSpriteEventPayload = (
-    hitEntry: HitTestEntry<T> | null
+    hitEntry: HitTestEntry<T> | undefined
   ): {
     sprite: SpriteCurrentState<T> | undefined;
     image: SpriteImageState | undefined;
@@ -1123,7 +1123,7 @@ export const createSpriteLayer = <T = any>(
    * @param {MouseEvent | PointerEvent} originalEvent - Native input event.
    */
   const dispatchSpriteHover = (
-    hitEntry: HitTestEntry<T> | null,
+    hitEntry: HitTestEntry<T> | undefined,
     screenPoint: SpriteScreenPoint,
     originalEvent: MouseEvent | PointerEvent
   ): void => {
@@ -1151,14 +1151,16 @@ export const createSpriteLayer = <T = any>(
   /**
    * Resolves hit-test information for a native event.
    * @param {MouseEvent | PointerEvent | TouchEvent} nativeEvent - Original browser event.
-   * @returns {{ hitEntry: HitTestEntry; screenPoint: SpriteScreenPoint } | null} Hit-test result or `null`.
+   * @returns {{ hitEntry: HitTestEntry; screenPoint: SpriteScreenPoint } | undefined} Hit-test result or `undefined`.
    */
   const resolveHitTestResult = (
     nativeEvent: MouseEvent | PointerEvent | TouchEvent
-  ): {
-    hitEntry: HitTestEntry<T> | null;
-    screenPoint: SpriteScreenPoint;
-  } | null => {
+  ):
+    | {
+        hitEntry: HitTestEntry<T> | undefined;
+        screenPoint: SpriteScreenPoint;
+      }
+    | undefined => {
     return hitTestController.resolveHitTestResult(
       nativeEvent,
       canvasElement,
@@ -1453,7 +1455,7 @@ export const createSpriteLayer = <T = any>(
   const onRemove = (): void => {
     inputListenerDisposers.forEach((dispose) => dispose());
     inputListenerDisposers.length = 0;
-    canvasElement = null;
+    canvasElement = undefined;
     hitTestController.clearAll();
 
     const glContext = gl;
@@ -1468,21 +1470,21 @@ export const createSpriteLayer = <T = any>(
       atlasNeedsUpload = true;
       if (spriteDrawProgram) {
         spriteDrawProgram.release();
-        spriteDrawProgram = null;
+        spriteDrawProgram = undefined;
       }
       if (borderOutlineRenderer) {
         borderOutlineRenderer.release();
-        borderOutlineRenderer = null;
+        borderOutlineRenderer = undefined;
       }
     }
 
     eventListeners.forEach((set) => set.clear());
     eventListeners.clear();
 
-    gl = null;
-    map = null;
-    borderOutlineRenderer = null;
-    anisotropyExtension = null;
+    gl = undefined;
+    map = undefined;
+    borderOutlineRenderer = undefined;
+    anisotropyExtension = undefined;
     maxSupportedAnisotropy = 1;
   };
 
@@ -1557,7 +1559,7 @@ export const createSpriteLayer = <T = any>(
 
     // Synchronize GPU uploads for image textures.
     atlasNeedsUpload = ensureTextures({
-      gl,
+      glContext: gl,
       atlasQueue,
       atlasManager,
       atlasPageTextures,

@@ -89,7 +89,7 @@ export interface HitTestEntry<T> {
 }
 
 export interface HitTestResult<T> {
-  readonly hitEntry: HitTestEntry<T> | null;
+  readonly hitEntry: HitTestEntry<T> | undefined;
   readonly screenPoint: SpriteScreenPoint;
 }
 
@@ -120,13 +120,13 @@ export interface HitTestController<T> {
   ) => void;
   readonly findTopmostHitEntry: (
     point: SpriteScreenPoint,
-    map: MapLibreMap | null
-  ) => HitTestEntry<T> | null;
+    map: MapLibreMap | undefined
+  ) => HitTestEntry<T> | undefined;
   readonly resolveHitTestResult: (
     nativeEvent: MouseEvent | PointerEvent | TouchEvent,
-    canvasElement: HTMLCanvasElement | null,
-    map: MapLibreMap | null
-  ) => HitTestResult<T> | null;
+    canvasElement: HTMLCanvasElement | undefined,
+    map: MapLibreMap | undefined
+  ) => HitTestResult<T> | undefined;
   readonly setHitTestEnabled: (enabled: boolean) => boolean;
   readonly isHitTestEnabled: () => boolean;
 }
@@ -653,22 +653,22 @@ export const createHitTestController = <T>({
 
   const findTopmostHitEntryLinear = (
     point: SpriteScreenPoint
-  ): HitTestEntry<T> | null => {
+  ): HitTestEntry<T> | undefined => {
     for (let i = hitTestEntries.length - 1; i >= 0; i--) {
       const entry = hitTestEntries[i]!;
       if (isPointInsideHitEntry(entry, point)) {
         return entry;
       }
     }
-    return null;
+    return undefined;
   };
 
   const findTopmostHitEntry = (
     point: SpriteScreenPoint,
-    mapInstance: MapLibreMap | null
-  ): HitTestEntry<T> | null => {
+    mapInstance: MapLibreMap | undefined
+  ): HitTestEntry<T> | undefined => {
     if (!isHitTestEnabled) {
-      return null;
+      return undefined;
     }
     if (!mapInstance) {
       return findTopmostHitEntryLinear(point);
@@ -736,10 +736,10 @@ export const createHitTestController = <T>({
 
   const resolveScreenPointFromEvent = (
     nativeEvent: MouseEvent | PointerEvent | TouchEvent,
-    canvasElement: HTMLCanvasElement | null
-  ): SpriteScreenPoint | null => {
+    canvasElement: HTMLCanvasElement | undefined
+  ): SpriteScreenPoint | undefined => {
     if (!canvasElement) {
-      return null;
+      return undefined;
     }
     const rect = canvasElement.getBoundingClientRect();
     const toScreenPoint = (
@@ -752,10 +752,9 @@ export const createHitTestController = <T>({
 
     if ('changedTouches' in nativeEvent) {
       const touchEvent = nativeEvent as TouchEvent;
-      const touch =
-        touchEvent.changedTouches?.[0] ?? touchEvent.touches?.[0] ?? null;
+      const touch = touchEvent.changedTouches?.[0] ?? touchEvent.touches?.[0];
       if (!touch) {
-        return null;
+        return undefined;
       }
       return toScreenPoint(touch.clientX, touch.clientY);
     }
@@ -766,16 +765,16 @@ export const createHitTestController = <T>({
 
   const resolveHitTestResult = (
     nativeEvent: MouseEvent | PointerEvent | TouchEvent,
-    canvasElement: HTMLCanvasElement | null,
-    mapInstance: MapLibreMap | null
-  ): HitTestResult<T> | null => {
+    canvasElement: HTMLCanvasElement | undefined,
+    mapInstance: MapLibreMap | undefined
+  ): HitTestResult<T> | undefined => {
     const screenPoint = resolveScreenPointFromEvent(nativeEvent, canvasElement);
     if (!screenPoint) {
-      return null;
+      return undefined;
     }
 
     const hitEntry = findTopmostHitEntry(screenPoint, mapInstance);
-    return { hitEntry: hitEntry ?? null, screenPoint };
+    return { hitEntry: hitEntry ?? undefined, screenPoint };
   };
 
   const beginFrame = (): void => {

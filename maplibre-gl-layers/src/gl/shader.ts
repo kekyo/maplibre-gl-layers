@@ -1033,8 +1033,6 @@ const MAG_FILTER_VALUES: readonly SpriteTextureMagFilter[] = [
   'linear',
 ] as const;
 
-//////////////////////////////////////////////////////////////////////////////////////
-
 /** Minification filters that require mipmaps to produce complete textures. */
 const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> =
   new Set<SpriteTextureMinFilter>([
@@ -1044,9 +1042,8 @@ const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> =
     'linear-mipmap-linear',
   ]);
 
-export const filterRequiresMipmaps = (
-  filter: SpriteTextureMinFilter
-): boolean => MIPMAP_MIN_FILTERS.has(filter);
+const filterRequiresMipmaps = (filter: SpriteTextureMinFilter): boolean =>
+  MIPMAP_MIN_FILTERS.has(filter);
 
 export const resolveTextureFilteringOptions = (
   options?: SpriteTextureFilteringOptions
@@ -1094,17 +1091,17 @@ const ANISOTROPY_EXTENSION_NAMES = [
 
 export const resolveAnisotropyExtension = (
   glContext: WebGLRenderingContext
-): EXT_texture_filter_anisotropic | null => {
+): EXT_texture_filter_anisotropic | undefined => {
   for (const name of ANISOTROPY_EXTENSION_NAMES) {
     const extension = glContext.getExtension(name);
     if (extension) {
       return extension as EXT_texture_filter_anisotropic;
     }
   }
-  return null;
+  return undefined;
 };
 
-export const resolveGlMinFilter = (
+const resolveGlMinFilter = (
   glContext: WebGLRenderingContext,
   filter: SpriteTextureMinFilter
 ): number => {
@@ -1125,7 +1122,7 @@ export const resolveGlMinFilter = (
   }
 };
 
-export const resolveGlMagFilter = (
+const resolveGlMagFilter = (
   glContext: WebGLRenderingContext,
   filter: SpriteTextureMagFilter
 ): number => {
@@ -1138,19 +1135,17 @@ export const resolveGlMagFilter = (
   }
 };
 
-//////////////////////////////////////////////////////////////////////////////////////
-
 const isPowerOfTwo = (value: number): boolean =>
   value > 0 && (value & (value - 1)) === 0;
 
 export interface EnsureTexturesParams {
-  readonly gl: WebGLRenderingContext | null;
+  readonly glContext: WebGLRenderingContext | undefined;
   readonly atlasQueue: AtlasOperationQueue;
   readonly atlasManager: AtlasManager;
   readonly atlasPageTextures: Map<number, WebGLTexture>;
   readonly atlasNeedsUpload: boolean;
   readonly resolvedTextureFiltering: ResolvedTextureFilteringOptions;
-  readonly anisotropyExtension: EXT_texture_filter_anisotropic | null;
+  readonly anisotropyExtension: EXT_texture_filter_anisotropic | undefined;
   readonly maxSupportedAnisotropy: number;
   readonly images: ReadonlyMap<string, RegisteredImage>;
   readonly imageHandleBuffersController: ImageHandleBufferController;
@@ -1168,7 +1163,7 @@ export interface EnsureTexturesParams {
  * @returns {boolean} Updated atlas upload requirement flag.
  */
 export const ensureTextures = ({
-  gl,
+  glContext,
   atlasQueue,
   atlasManager,
   atlasPageTextures,
@@ -1181,7 +1176,7 @@ export const ensureTextures = ({
   atlasPageIndexNone,
   shouldUploadAtlasPages,
 }: EnsureTexturesParams): boolean => {
-  if (!gl) {
+  if (!glContext) {
     return atlasNeedsUpload;
   }
   atlasQueue.flushPending();
@@ -1189,7 +1184,6 @@ export const ensureTextures = ({
     return atlasNeedsUpload;
   }
 
-  const glContext = gl;
   const pages = atlasManager.getPages();
   const activePageIndices = new Set<number>();
   pages.forEach((page) => activePageIndices.add(page.index));

@@ -37,10 +37,7 @@ import type {
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
-/**
- * Maximum number of sprites shown simultaneously in the demo scene.
- */
-const MAX_NUMBER_OF_SPRITES = 10000;
+/////////////////////////////////////////////////////////////////////////////////////////
 
 type TestScenarioDirection = 'up' | 'right' | 'down' | 'left';
 
@@ -92,6 +89,13 @@ const resolveTestScenario = (): TestScenario => {
 const testScenario = resolveTestScenario();
 const isTestMode = testScenario.id !== null;
 
+/////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Maximum number of sprites shown simultaneously in the demo scene.
+ */
+const MAX_NUMBER_OF_SPRITES = 10000;
+
 /**
  * Initial number of sprites to display when the demo loads.
  */
@@ -100,17 +104,15 @@ const INITIAL_NUMBER_OF_SPRITES = isTestMode ? 1 : 1000;
 /**
  * Interval in milliseconds between movement updates.
  */
-const MOVEMENT_INTERVAL_MS = 500;
+const MOVEMENT_INTERVAL_MS = 1000;
 
+/** Opacity waving sequence */
 const PRIMARY_OPACITY_SEQUENCE = [0.6, 0.3, 0.6, 1.0] as const;
 
 /** Minimum pseudo LOD distance in meters applied when enabled. */
 const PSEUDO_LOD_DISTANCE_MIN_METERS = 5000;
 /** Maximum pseudo LOD distance in meters applied when enabled. */
 const PSEUDO_LOD_DISTANCE_MAX_METERS = 20000;
-
-/** Identifier assigned to the sprite layer instance registered with MapLibre. */
-const SPRITE_LAYER_ID = 'demo-sprite';
 
 /**
  * Center position used as the demo origin.
@@ -149,22 +151,10 @@ const mapSourceSpecification: SourceSpecifications = {
   },
 };
 
-interface SpriteDemoDebugState {
-  mapLoaded: boolean;
-  spritesReady: boolean;
-  spriteLimit: number;
-  activeSpriteCount: number;
-  mapInstance?: Map;
-  spriteLayer?: unknown;
-}
-
-declare global {
-  interface Window {
-    __spriteDemo?: SpriteDemoDebugState;
-  }
-}
-
 /////////////////////////////////////////////////////////////////////////////////////////
+
+/** Identifier assigned to the sprite layer instance registered with MapLibre. */
+const SPRITE_LAYER_ID = 'demo-sprite';
 
 /**
  * @typedef {Object} IconSpec
@@ -1480,6 +1470,21 @@ const createHud = () => {
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////
+
+interface SpriteDemoDebugState {
+  mapLoaded: boolean;
+  spritesReady: boolean;
+  spriteLimit: number;
+  activeSpriteCount: number;
+  mapInstance?: Map;
+  spriteLayer?: unknown;
+}
+
+declare global {
+  interface Window {
+    __spriteDemo?: SpriteDemoDebugState;
+  }
+}
 
 /**
  * Application entry point.
