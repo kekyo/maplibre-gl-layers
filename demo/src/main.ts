@@ -289,7 +289,9 @@ const BILLBOARD_PRIMARY_ANCHOR_Y = 1 - 2 * ARROW_HEAD_TOP_FRACTION;
 type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
 
 /** Sprite border color */
-const BORDER_COLOR = '#ff0000';
+const BORDER_COLOR = '#c00000';
+/** Sprite border color when selected */
+const BORDER_COLOR_SELECTED = '#a0a000';
 
 /** Sprite border width in pixel */
 const BORDER_WIDTH_PIXEL = 2;
@@ -589,6 +591,7 @@ let isMovementInterpolationEnabled = true;
 let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
 let spriteScalingMode: 'standard' | 'unlimited' = 'unlimited';
 let showSpriteBorders = false;
+let selectedSpriteId: string | null = null;
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
@@ -653,6 +656,12 @@ let updateLocationInterpolationButton: (() => void) | undefined;
 let updateMouseEventsButton: (() => void) | undefined;
 /** UI updater for the sprite border toggle. */
 let updateSpriteBordersButton: (() => void) | undefined;
+/** Clears any selected sprite highlight and resets the detail panel. */
+let clearSpriteSelection: () => void = () => {};
+/** Marks a sprite as selected and updates highlighting. */
+let selectSprite: (spriteId: string) => void = () => {};
+/** Timestamp of the last sprite click to suppress map click clearing. */
+let lastSpriteClickAt = 0;
 
 const shouldEnableHitTesting = () =>
   isMouseEventsMonitoringEnabled || showSpriteBorders;
@@ -1668,6 +1677,15 @@ const main = async () => {
       | SpriteLayerHoverEvent<DemoSpriteTag>
       | SpriteLayerClickEvent<DemoSpriteTag>
   ) => {
+    // Keep the detail panel pinned to the selected sprite even while hovering others.
+    if (
+      selectedSpriteId &&
+      event.type === 'spritehover' &&
+      event.sprite?.spriteId !== selectedSpriteId
+    ) {
+      return;
+    }
+
     const spriteState = event.sprite;
     const imageState = event.image;
 
@@ -1755,6 +1773,10 @@ const main = async () => {
     requestedCalculationVariant;
 
   const clearSpriteDetails = () => {
+    if (selectedSpriteId) {
+      // Preserve the selected sprite details until selection is cleared.
+      return;
+    }
     renderSpriteDetails({
       type: 'spritehover',
       sprite: undefined,
@@ -1763,6 +1785,22 @@ const main = async () => {
       originalEvent: new MouseEvent('mousemove'),
     });
   };
+
+  const handleMapClick = () => {
+    const now =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - lastSpriteClickAt < 32) {
+      // Ignore the map click immediately following a sprite click.
+      return;
+    }
+    if (!selectedSpriteId) {
+      return;
+    }
+    clearSpriteSelection();
+    clearSpriteDetails();
+  };
+
+  map.on('click', handleMapClick);
 
   const attachSpriteMouseEvents = () => {
     if (!spriteLayer) {
@@ -1795,6 +1833,7 @@ const main = async () => {
       attachSpriteMouseEvents();
     } else {
       detachSpriteMouseEvents();
+      clearSpriteSelection();
       clearSpriteDetails();
     }
     updateMouseEventsButton?.();
@@ -1808,85 +1847,19 @@ const main = async () => {
   const handleSpriteClick = (
     event: SpriteLayerClickEvent<DemoSpriteTag>
   ): void => {
+    lastSpriteClickAt =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
     const spriteState = event.sprite;
-    if (!spriteState) {
+    const imageState = event.image;
+
+    if (!spriteState || !imageState) {
+      clearSpriteSelection();
       renderSpriteDetails(event);
       return;
     }
 
-    const currentTag = spriteState.tag;
-    if (!currentTag) {
-      return;
-    }
-
-    const normalizeProgress = (progress: number): number => {
-      if (!Number.isFinite(progress)) {
-        return 0;
-      }
-      let value = progress % 1;
-      if (value < 0) {
-        value += 1;
-      }
-      return value;
-    };
-
-    const invertedTag: DemoSpriteTag = {
-      ...currentTag,
-      dx: -currentTag.dx,
-      dy: -currentTag.dy,
-      lastStepLng: -currentTag.lastStepLng,
-      lastStepLat: -currentTag.lastStepLat,
-      worldLng: spriteState.location.current.lng,
-      worldLat: spriteState.location.current.lat,
-    };
-
-    if (currentTag.path) {
-      const path = currentTag.path;
-      const invertedSpeed = path.speed === 0 ? path.speed : -path.speed;
-      let progress = path.progress;
-      const pathVectorLng = path.endLng - path.startLng;
-      const pathVectorLat = path.endLat - path.startLat;
-      const pathLengthSq =
-        pathVectorLng * pathVectorLng + pathVectorLat * pathVectorLat;
-      if (pathLengthSq > 0) {
-        const originToCurrentLng =
-          spriteState.location.current.lng - path.startLng;
-        const originToCurrentLat =
-          spriteState.location.current.lat - path.startLat;
-        progress =
-          (originToCurrentLng * pathVectorLng +
-            originToCurrentLat * pathVectorLat) /
-          pathLengthSq;
-      }
-      invertedTag.path = {
-        ...path,
-        speed: invertedSpeed,
-        progress: normalizeProgress(progress),
-      };
-      // Keep linear-mode step vectors aligned with the updated direction.
-      invertedTag.dx = -currentTag.dx;
-      invertedTag.dy = -currentTag.dy;
-    }
-
-    // Ensure the sprite keeps moving even when the vector collapses due to floating point error.
-    if (
-      Math.abs(invertedTag.dx) < EPSILON_DELTA &&
-      Math.abs(invertedTag.dy) < EPSILON_DELTA
-    ) {
-      const baseMagnitude = Math.max(
-        Math.hypot(currentTag.dx, currentTag.dy),
-        0.0001
-      );
-      const angle = Math.random() * Math.PI * 2;
-      invertedTag.dx = Math.cos(angle) * baseMagnitude;
-      invertedTag.dy = Math.sin(angle) * baseMagnitude;
-      invertedTag.lastStepLng = invertedTag.dx * MOVEMENT_STEP_FACTOR;
-      invertedTag.lastStepLat = invertedTag.dy * MOVEMENT_STEP_FACTOR;
-    }
-
-    spriteLayer.updateSprite(spriteState.spriteId, {
-      tag: invertedTag,
-    });
+    selectSprite(spriteState.spriteId);
+    renderSpriteDetails(event);
   };
 
   if (typeof window !== 'undefined') {
@@ -2451,14 +2424,44 @@ const main = async () => {
       applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
     };
 
+    const resolveBorderColorForSprite = (spriteId: string): string | null => {
+      if (selectedSpriteId && spriteId === selectedSpriteId) {
+        return BORDER_COLOR_SELECTED;
+      }
+      if (showSpriteBorders) {
+        return BORDER_COLOR;
+      }
+      return null;
+    };
+
+    const createBorderUpdateForSprite = (
+      spriteId: string
+    ): SpriteImageDefinitionUpdate => {
+      const color = resolveBorderColorForSprite(spriteId);
+      if (!color) {
+        return { border: null };
+      }
+      return {
+        border: { color, widthPixel: BORDER_WIDTH_PIXEL },
+      };
+    };
+
+    const resolveSpriteBorderDefinition = (spriteId: string) => {
+      const color = resolveBorderColorForSprite(spriteId);
+      if (!color) {
+        return undefined;
+      }
+      return {
+        border: { color, widthPixel: BORDER_WIDTH_PIXEL },
+      };
+    };
+
     const applySpriteBordersToAll = (): void => {
       if (!spriteLayer) {
         return;
       }
-      const borderUpdate: SpriteImageDefinitionUpdate = showSpriteBorders
-        ? { border: { color: BORDER_COLOR, widthPixel: BORDER_WIDTH_PIXEL } }
-        : { border: null };
       spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        const borderUpdate = createBorderUpdateForSprite(sprite.spriteId);
         sprite.images.forEach((orderMap) => {
           orderMap.forEach((image) => {
             spriteUpdate.updateImage(image.subLayer, image.order, borderUpdate);
@@ -2467,6 +2470,34 @@ const main = async () => {
         return true;
       });
       spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
+    };
+
+    const renderPlaceholderDetails = () => {
+      renderSpriteDetails({
+        type: 'spritehover',
+        sprite: undefined,
+        image: undefined,
+        screenPoint: { x: 0, y: 0 },
+        originalEvent: new MouseEvent('mousemove'),
+      });
+    };
+
+    clearSpriteSelection = (): void => {
+      if (!selectedSpriteId) {
+        renderPlaceholderDetails();
+        return;
+      }
+      selectedSpriteId = null;
+      applySpriteBordersToAll();
+      renderPlaceholderDetails();
+    };
+
+    selectSprite = (spriteId: string): void => {
+      if (selectedSpriteId === spriteId) {
+        return;
+      }
+      selectedSpriteId = spriteId;
+      applySpriteBordersToAll();
     };
 
     /**
@@ -3947,9 +3978,7 @@ const main = async () => {
       const spriteVisibilityDistance = isPseudoLodEnabled
         ? generatePseudoLodDistanceMeters()
         : undefined;
-      const spriteBorder = showSpriteBorders
-        ? { border: { color: BORDER_COLOR, widthPixel: BORDER_WIDTH_PIXEL } }
-        : undefined;
+      const spriteBorder = resolveSpriteBorderDefinition(id);
       return {
         spriteId: id,
         location: {
@@ -4044,6 +4073,9 @@ const main = async () => {
         if (removedIds.length > 0) {
           spriteLayer.removeSprites(removedIds);
           removed = removedIds.length;
+          if (selectedSpriteId && removedIds.includes(selectedSpriteId)) {
+            clearSpriteSelection();
+          }
         }
       }
 
@@ -4058,6 +4090,7 @@ const main = async () => {
       spriteLayerRebuildPromise = (async () => {
         stopMovementInterval();
         detachSpriteMouseEvents();
+        selectedSpriteId = null;
         if (map.getLayer(SPRITE_LAYER_ID)) {
           map.removeLayer(SPRITE_LAYER_ID);
         }
