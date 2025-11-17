@@ -26,6 +26,7 @@ const BASE_PARAMS: ProjectionHostParams = {
   width: 1024,
   height: 768,
   center: { lng: 139.7514, lat: 35.685, z: 45 },
+  cameraLocation: { lng: 139.7514, lat: 35.685, z: 45 },
   pitchDeg: 37,
   bearingDeg: 25,
   rollDeg: 3,
@@ -138,6 +139,11 @@ type StubMap = {
     readonly autoCalculateNearFarZ: boolean;
     readonly nearZ?: number;
     readonly farZ?: number;
+    readonly getCameraLngLat: () => {
+      readonly lng: number;
+      readonly lat: number;
+    };
+    readonly getCameraAltitude: () => number;
   };
 };
 
@@ -234,6 +240,17 @@ const createStubMap = (params: ProjectionHostParams): StubMap => {
         params.autoCalculateNearFarZ === false
           ? params.farZOverride
           : undefined,
+      getCameraLngLat: () => {
+        const camera = reference.getCameraLocation();
+        if (camera) {
+          return { lng: camera.lng, lat: camera.lat };
+        }
+        return { lng: params.center.lng, lat: params.center.lat };
+      },
+      getCameraAltitude: () => {
+        const camera = reference.getCameraLocation();
+        return camera?.z ?? params.centerElevationMeters ?? 0;
+      },
     },
   };
 

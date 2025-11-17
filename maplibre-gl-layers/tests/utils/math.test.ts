@@ -677,8 +677,12 @@ describe('calculateBillboardDepthKey', () => {
   });
 
   it('returns null when clip projection fails', () => {
-    const depth = calculateBillboardDepthKey(center, unproject, () => null);
-    expect(depth).toBeNull();
+    const depth = calculateBillboardDepthKey(
+      center,
+      unproject,
+      () => undefined
+    );
+    expect(depth).toBeUndefined();
   });
 
   it('calculates depth from clip coordinates', () => {

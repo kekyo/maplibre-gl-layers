@@ -80,7 +80,7 @@ const createProject = (
     const d = (
       _location: Readonly<SpriteLocation>,
       _cachedMercator?: SpriteMercatorCoordinate
-    ) => null;
+    ) => undefined;
     d.release = () => {};
     return d;
   }
@@ -98,7 +98,9 @@ const createProject = (
   );
 
   // `project` delegation body
-  const project = (location: Readonly<SpriteLocation>): SpritePoint | null => {
+  const project = (
+    location: Readonly<SpriteLocation>
+  ): SpritePoint | undefined => {
     // Prepare the matrix buffer.
     const { ptr: matrixPtr } = matrixHolder.prepare();
     // Prepare the result buffer.
@@ -121,7 +123,7 @@ const createProject = (
 
       return { x, y };
     } else {
-      return null;
+      return undefined;
     }
   };
 
@@ -155,7 +157,7 @@ const createUnproject = (
     preparedState.pixelMatrixInverse.length !==
       WASM_Unproject_CONTEXT_ELEMENT_COUNT
   ) {
-    const d = (_point: Readonly<SpritePoint>) => null;
+    const d = (_point: Readonly<SpritePoint>) => undefined;
     d.release = () => {};
     return d;
   }
@@ -173,7 +175,9 @@ const createUnproject = (
   );
 
   // `unproject` delegation body
-  const unproject = (point: Readonly<SpritePoint>): SpriteLocation | null => {
+  const unproject = (
+    point: Readonly<SpritePoint>
+  ): SpriteLocation | undefined => {
     // Prepare the matrix buffer.
     const { ptr: matrixPtr } = matrixHolder.prepare();
     // Prepare the result buffer.
@@ -193,7 +197,7 @@ const createUnproject = (
 
       return { lng, lat };
     } else {
-      return null;
+      return undefined;
     }
   };
 
@@ -440,18 +444,7 @@ export const createWasmProjectionHost = (
       return preparedState.clipContext;
     },
     getCameraLocation: () => {
-      const location = preparedState.cameraLocation;
-      if (!location) {
-        return null;
-      }
-      const result: SpriteLocation = {
-        lng: location.lng,
-        lat: location.lat,
-      };
-      if (location.z !== undefined) {
-        result.z = location.z;
-      }
-      return result;
+      return preparedState.cameraLocation;
     },
     fromLngLat, // Overrided
     project, // Overrided

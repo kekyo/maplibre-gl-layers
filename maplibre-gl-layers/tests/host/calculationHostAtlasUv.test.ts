@@ -50,6 +50,7 @@ const PROJECTION_PARAMS: ProjectionHostParams = {
   width: 800,
   height: 600,
   center: { lng: 0, lat: 0 },
+  cameraLocation: undefined,
 };
 
 interface HostFactory {
@@ -128,7 +129,8 @@ const createImageState = (
     },
     scale: 1,
     anchor,
-    border: null,
+    border: undefined,
+    borderPixelWidth: 0,
     offset: {
       offsetMeters: {
         current: offset.offsetMeters,

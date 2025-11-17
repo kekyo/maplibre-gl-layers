@@ -36,6 +36,7 @@ vi.mock('../../src/host/projectionHost', async (importOriginal) => {
         width: map.getCanvas?.()?.width ?? map.canvas?.width ?? 0,
         height: map.getCanvas?.()?.height ?? map.canvas?.height ?? 0,
         center: map.getCenter?.() ?? { lng: 0, lat: 0 },
+        cameraLocation: undefined,
       };
       paramsToMap.set(params, map);
       return params;
@@ -698,7 +699,9 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
     layer.render?.(gl, {} as any);
 
     expect(outlineDrawCalls.length).toBeGreaterThan(0);
-    const [{ color, width }] = outlineDrawCalls;
+    const [call] = outlineDrawCalls;
+    expect(call).toBeDefined();
+    const { color, width } = call!;
     const resolvedScaling = resolveScalingOptions();
     const zoom = map.getZoom();
     const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);

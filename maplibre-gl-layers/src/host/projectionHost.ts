@@ -36,6 +36,7 @@ export interface ProjectionHostParams {
   readonly width: number;
   readonly height: number;
   readonly center: Readonly<SpriteLocation>;
+  readonly cameraLocation: SpriteLocation | undefined;
   readonly pitchDeg?: number;
   readonly bearingDeg?: number;
   readonly rollDeg?: number;
@@ -53,14 +54,14 @@ export interface ProjectionHostParams {
 
 export interface PreparedProjectionState {
   readonly zoom: number;
-  readonly mercatorMatrix: Mat4 | null;
-  readonly pixelMatrix: Mat4 | null;
-  readonly pixelMatrixInverse: Mat4 | null;
+  readonly mercatorMatrix: Mat4 | undefined;
+  readonly pixelMatrix: Mat4 | undefined;
+  readonly pixelMatrixInverse: Mat4 | undefined;
   readonly worldSize: number;
   readonly pixelPerMeter: number;
   readonly cameraToCenterDistance: number;
-  readonly clipContext: ClipContext | null;
-  readonly cameraLocation: SpriteLocation | null;
+  readonly clipContext: ClipContext | undefined;
+  readonly cameraLocation: SpriteLocation | undefined;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -252,14 +253,14 @@ export const prepareProjectionState = (
   if (width <= 0 || height <= 0) {
     return {
       zoom,
-      mercatorMatrix: null,
-      pixelMatrix: null,
-      pixelMatrixInverse: null,
+      mercatorMatrix: undefined,
+      pixelMatrix: undefined,
+      pixelMatrixInverse: undefined,
       worldSize: 0,
       pixelPerMeter: 0,
       cameraToCenterDistance: 0,
-      clipContext: null,
-      cameraLocation: null,
+      clipContext: undefined,
+      cameraLocation: undefined,
     };
   }
 
@@ -275,6 +276,7 @@ export const prepareProjectionState = (
   );
   const centerElevation = toFiniteOr(params.centerElevationMeters, 0);
   const minElevation = toFiniteOr(params.minElevationMeters, centerElevation);
+  const cameraLocation = params.cameraLocation;
 
   const pitchDeg = toFiniteOr(params.pitchDeg, 0);
   const bearingDeg = toFiniteOr(params.bearingDeg, 0);
@@ -368,21 +370,12 @@ export const prepareProjectionState = (
     worldMatrix
   );
 
-  const pixelMatrixInverse = mat4.invert(createMat4f64(), pixelMatrix) ?? null;
+  const pixelMatrixInverse =
+    mat4.invert(createMat4f64(), pixelMatrix) ?? undefined;
 
-  const clipContext: ClipContext | null = mercatorMatrix
+  const clipContext: ClipContext | undefined = mercatorMatrix
     ? { mercatorMatrix }
-    : null;
-
-  const pixelPerMeterSafe = pixelPerMeter || 1;
-  const cameraAltitude =
-    (Math.cos(pitchRad) * (cameraToCenterDistance || 1)) / pixelPerMeterSafe +
-    centerElevation;
-  const cameraLocation: SpriteLocation = {
-    lng: centerLng,
-    lat: centerLat,
-    z: cameraAltitude,
-  };
+    : undefined;
 
   return {
     zoom,
@@ -416,26 +409,6 @@ export const createProjectionHost = (
   const getZoom = (): number => state.zoom;
 
   /**
-   * Extracts the current clip-space context if the mercator matrix is available.
-   * @returns {ClipContext | null} Clip context or `null` when the transform is not ready.
-   */
-  const getClipContext = (): ClipContext | null => state.clipContext;
-  const getCameraLocation = (): SpriteLocation | null => {
-    const location = state.cameraLocation;
-    if (!location) {
-      return null;
-    }
-    const result: SpriteLocation = {
-      lng: location.lng,
-      lat: location.lat,
-    };
-    if (location.z !== undefined) {
-      result.z = location.z;
-    }
-    return result;
-  };
-
-  /**
    * Get mercator coordinate from the location
    * @param location Location.
    * @returns Mercator coordinate.
@@ -458,13 +431,22 @@ export const createProjectionHost = (
   };
 
   /**
+   * Extracts the current clip-space context if the mercator matrix is available.
+   * @returns {ClipContext | null} Clip context or `undefined` when the transform is not ready.
+   */
+  const getClipContext = () => state.clipContext;
+  const getCameraLocation = () => state.cameraLocation;
+
+  /**
    * Project the location.
    * @param location Location.
    * @returns Projected point if valid location.
    */
-  const project = (location: Readonly<SpriteLocation>): SpritePoint | null => {
+  const project = (
+    location: Readonly<SpriteLocation>
+  ): SpritePoint | undefined => {
     if (!state.pixelMatrix) {
-      return null;
+      return undefined;
     }
     const mercator = fromLngLat(location);
     const worldX = mercator.x * state.worldSize;
@@ -480,14 +462,14 @@ export const createProjectionHost = (
     );
 
     if (!Number.isFinite(w) || w <= 0) {
-      return null;
+      return undefined;
     }
 
     const projectedX = x / w;
     const projectedY = y / w;
 
     if (!Number.isFinite(projectedX) || !Number.isFinite(projectedY)) {
-      return null;
+      return undefined;
     }
 
     return { x: projectedX, y: projectedY };
@@ -498,9 +480,11 @@ export const createProjectionHost = (
    * @param point Projected point.
    * @returns Location if valid point.
    */
-  const unproject = (point: Readonly<SpritePoint>): SpriteLocation | null => {
+  const unproject = (
+    point: Readonly<SpritePoint>
+  ): SpriteLocation | undefined => {
     if (!state.pixelMatrixInverse) {
-      return null;
+      return undefined;
     }
 
     const coord0 = multiplyMatrixAndVector(
@@ -522,7 +506,7 @@ export const createProjectionHost = (
     const w1 = coord1[3];
 
     if (!Number.isFinite(w0) || !Number.isFinite(w1) || w0 === 0 || w1 === 0) {
-      return null;
+      return undefined;
     }
 
     const x0 = coord0[0] / w0;
@@ -542,7 +526,7 @@ export const createProjectionHost = (
     const mercatorY = worldY / (state.worldSize || 1);
 
     if (!Number.isFinite(mercatorX) || !Number.isFinite(mercatorY)) {
-      return null;
+      return undefined;
     }
 
     return {
@@ -619,7 +603,7 @@ export const createProjectionHostParamsFromMapLibre = (
       : undefined;
 
   const centerLngLat = map.getCenter();
-  const transform: any = (map as unknown as { transform?: unknown }).transform;
+  const transform = map.transform;
   const canvas =
     typeof map.getCanvas === 'function' ? (map.getCanvas() ?? null) : null;
 
@@ -630,6 +614,7 @@ export const createProjectionHostParamsFromMapLibre = (
       width: ensureFinite(canvas?.width) ?? 0,
       height: ensureFinite(canvas?.height) ?? 0,
       center: { lng: centerLngLat.lng, lat: centerLngLat.lat },
+      cameraLocation: undefined,
     };
   }
 
@@ -653,35 +638,38 @@ export const createProjectionHostParamsFromMapLibre = (
   const tileSize = ensureFinite(transform.tileSize);
   const autoCalculateNearFarZ =
     typeof transform.autoCalculateNearFarZ === 'boolean'
-      ? (transform.autoCalculateNearFarZ as boolean)
+      ? transform.autoCalculateNearFarZ
       : undefined;
   const nearZOverride =
     autoCalculateNearFarZ === false ? ensureFinite(transform.nearZ) : undefined;
   const farZOverride =
     autoCalculateNearFarZ === false ? ensureFinite(transform.farZ) : undefined;
+  const cameraLngLat = transform.getCameraLngLat();
+  const cameraAltitude = transform.getCameraAltitude();
+  const cameraLocation: SpriteLocation = {
+    lng: cameraLngLat.lng,
+    lat: cameraLngLat.lat,
+    z: cameraAltitude,
+  };
 
   return {
     zoom,
     width,
     height,
-    center: {
-      lng: centerLngLat.lng,
-      lat: centerLngLat.lat,
-    },
-    ...(pitchDeg !== undefined ? { pitchDeg } : {}),
-    ...(bearingDeg !== undefined ? { bearingDeg } : {}),
-    ...(rollDeg !== undefined ? { rollDeg } : {}),
-    ...(fovDeg !== undefined ? { fovDeg } : {}),
-    ...(centerElevation !== undefined
-      ? { centerElevationMeters: centerElevation }
-      : {}),
-    ...(minElevation !== undefined ? { minElevationMeters: minElevation } : {}),
-    ...(cameraToCenterDistance !== undefined ? { cameraToCenterDistance } : {}),
-    ...(centerOffsetX !== undefined ? { centerOffsetX } : {}),
-    ...(centerOffsetY !== undefined ? { centerOffsetY } : {}),
-    ...(tileSize !== undefined ? { tileSize } : {}),
-    ...(autoCalculateNearFarZ !== undefined ? { autoCalculateNearFarZ } : {}),
-    ...(nearZOverride !== undefined ? { nearZOverride } : {}),
-    ...(farZOverride !== undefined ? { farZOverride } : {}),
+    center: centerLngLat,
+    cameraLocation,
+    pitchDeg,
+    bearingDeg,
+    rollDeg,
+    fovDeg,
+    centerElevationMeters: centerElevation,
+    minElevationMeters: minElevation,
+    cameraToCenterDistance,
+    centerOffsetX,
+    centerOffsetY,
+    tileSize,
+    autoCalculateNearFarZ,
+    nearZOverride,
+    farZOverride,
   };
 };

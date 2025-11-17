@@ -875,21 +875,21 @@ export const calculateEffectivePixelsPerMeter = (
  * Projects a geographic coordinate and elevation into homogeneous clip space.
  * @typedef ProjectToClipSpaceFn
  * @param {number} location - Location in degrees.
- * @returns {[number, number, number, number] | null} Homogeneous clip coordinates or `null` when outside the view.
+ * @returns {[number, number, number, number] | undefined} Homogeneous clip coordinates or `undefined` when outside the view.
  */
 export type ProjectToClipSpaceFn = (
   location: Readonly<SpriteLocation>
-) => [number, number, number, number] | null;
+) => [number, number, number, number] | undefined;
 
 /**
  * Unprojects a screen-space point back to longitude/latitude.
  * @typedef UnprojectPointFn
  * @param {SpriteScreenPoint} point - Screen-space coordinates in pixels.
- * @returns {SpriteLocation | null} Geographic location or `null` when unprojection fails.
+ * @returns {SpriteLocation | undefined} Geographic location or `undefined` when unprojection fails.
  */
 export type UnprojectPointFn = (
   point: Readonly<SpriteScreenPoint>
-) => SpriteLocation | null;
+) => SpriteLocation | undefined;
 
 /**
  * Resolves a depth key for billboards by sampling the clip-space Z at the sprite center.
@@ -897,22 +897,22 @@ export type UnprojectPointFn = (
  * @param {SpriteLocation} spriteLocation - Geographic location including optional altitude.
  * @param {UnprojectPointFn} unproject - Function for converting screen coordinates to geographic coordinates.
  * @param {ProjectToClipSpaceFn} projectToClipSpace - Function that projects a geographic coordinate to clip space.
- * @returns {number | null} Negative normalized device coordinate Z used for depth sorting, or `null` when unavailable.
+ * @returns {number | undefined} Negative normalized device coordinate Z used for depth sorting, or `undefined` when unavailable.
  */
 export const calculateBillboardDepthKey = (
   center: Readonly<SpriteScreenPoint>,
   unproject: UnprojectPointFn,
   projectToClipSpace: ProjectToClipSpaceFn
-): number | null => {
+): number | undefined => {
   const lngLat = unproject(center);
   // If the point cannot be unprojected (e.g., outside map), skip depth evaluation.
   if (!lngLat) {
-    return null;
+    return undefined;
   }
   const clipPosition = projectToClipSpace(lngLat);
   // Projection failures indicate the sprite is outside the camera frustum.
   if (!clipPosition) {
-    return null;
+    return undefined;
   }
   const [, , clipZ, clipW] = clipPosition;
   // Avoid dividing by zero when the homogeneous W collapses.
@@ -938,7 +938,7 @@ export type SurfaceDepthBiasFn = (params: {
  * @param {readonly SurfaceCorner[]} displacements - Corner offsets in meters from the center.
  * @param {ProjectToClipSpaceFn} projectToClipSpace - Projection function used to reach clip space.
  * @param {{ readonly indices?: readonly number[]; readonly biasFn?: SurfaceDepthBiasFn }} [options] - Optional overrides.
- * @returns {number | null} Depth key suitable for sorting, or `null` when any corner cannot be projected.
+ * @returns {number | undefined} Depth key suitable for sorting, or `undefined` when any corner cannot be projected.
  */
 export const calculateSurfaceDepthKey = (
   baseLngLat: Readonly<SpriteLocation>,
@@ -948,7 +948,7 @@ export const calculateSurfaceDepthKey = (
     readonly indices?: readonly number[];
     readonly biasFn?: SurfaceDepthBiasFn;
   }
-): number | null => {
+): number | undefined => {
   const indices = options?.indices ?? TRIANGLE_INDICES;
   let maxDepth = Number.NEGATIVE_INFINITY;
 
@@ -965,7 +965,7 @@ export const calculateSurfaceDepthKey = (
     const clipPosition = projectToClipSpace(displaced);
     // Any unprojectable corner invalidates the depth key for the entire surface.
     if (!clipPosition) {
-      return null;
+      return undefined;
     }
 
     let [, , clipZ, clipW] = clipPosition;
@@ -991,11 +991,11 @@ export const calculateSurfaceDepthKey = (
  * Projects a longitude/latitude pair to screen-space pixels.
  * @typedef ProjectLngLatFn
  * @param {SpriteLocation} lngLat - Geographic coordinate to project.
- * @returns {SpriteScreenPoint | null} Screen coordinates or `null` when projection fails.
+ * @returns {SpriteScreenPoint | undefined} Screen coordinates or `undefined` when projection fails.
  */
 export type ProjectLngLatFn = (
   lngLat: Readonly<SpriteLocation>
-) => SpriteScreenPoint | null;
+) => SpriteScreenPoint | undefined;
 
 /**
  * Parameters required to resolve a billboard center position.
@@ -1322,7 +1322,7 @@ export interface SurfaceCenterParams {
 /**
  * Output describing the resolved surface center and displacement details.
  * @typedef SurfaceCenterResult
- * @property {SpriteScreenPoint | null} center - Projected screen coordinates or `null` when projection fails.
+ * @property {SpriteScreenPoint | undefined} center - Projected screen coordinates or `undefined` when projection fails.
  * @property {{ width: number; height: number; scaleAdjustment: number }} worldDimensions - Sprite dimensions in world meters.
  * @property {SurfaceCorner} totalDisplacement - Combined anchor and offset displacement in meters.
  * @property {SpriteLocation} displacedLngLat - Geographic coordinates after applying displacement.
@@ -1331,7 +1331,7 @@ export interface SurfaceCenterParams {
  * @property {SpriteLocation | undefined} [anchorlessLngLat] - Anchorless geographic coordinate when requested.
  */
 export interface SurfaceCenterResult {
-  center: Readonly<SpriteScreenPoint> | null;
+  center: Readonly<SpriteScreenPoint> | undefined;
   worldDimensions: Readonly<{
     width: number;
     height: number;
@@ -1385,7 +1385,7 @@ export const calculateSurfaceCenterPosition = (
 
   const projectPoint = (
     lngLat: Readonly<SpriteLocation>
-  ): SpriteScreenPoint | null => {
+  ): SpriteScreenPoint | undefined => {
     if (hasClipProjection && projectToClipSpace) {
       const clip = projectToClipSpace(lngLat);
       if (clip) {
@@ -1400,7 +1400,7 @@ export const calculateSurfaceCenterPosition = (
         }
       }
     }
-    return project ? project(lngLat) : null;
+    return project ? project(lngLat) : undefined;
   };
 
   const worldDims = calculateSurfaceWorldDimensions(

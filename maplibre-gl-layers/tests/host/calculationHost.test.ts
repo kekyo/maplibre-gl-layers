@@ -43,6 +43,8 @@ import type {
   PreparedDrawSpriteImageParams,
   RenderInterpolationParams,
   MutableSpriteImageInterpolatedOffset,
+  MutableInterpolatedValues,
+  ResolvedSpriteImageLineAttribute,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -51,6 +53,7 @@ import {
 import type {
   SpriteAnchor,
   SpriteImageOffset,
+  SpriteImageLineAttribute,
   SpriteLocation,
   SpritePoint,
   SpriteInterpolationOptions,
@@ -79,11 +82,11 @@ const DEFAULT_CLIP_CONTEXT: ClipContext = { mercatorMatrix: IDENTITY_MATRIX };
 
 type ProjectOverride = (
   location: Readonly<SpriteLocation>
-) => SpritePoint | null;
+) => SpritePoint | undefined;
 
 type UnprojectOverride = (
   point: Readonly<SpritePoint>
-) => SpriteLocation | null;
+) => SpriteLocation | undefined;
 
 type FakeProjectionHostOptions = {
   readonly project?: ProjectOverride;
@@ -100,6 +103,32 @@ type FakeProjectionHostOptions = {
         cached?: SpriteMercatorCoordinate
       ) => number);
   readonly cameraLocation?: SpriteLocation;
+};
+
+const isMutableInterpolatedValues = <TValue>(
+  value: unknown
+): value is MutableInterpolatedValues<TValue> => {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'current' in (value as Record<string, unknown>)
+  );
+};
+
+const isMutableOffset = (
+  offset: MutableSpriteImageInterpolatedOffset | SpriteImageOffset | undefined
+): offset is MutableSpriteImageInterpolatedOffset => {
+  if (!offset) {
+    return false;
+  }
+  const { offsetMeters, offsetDeg } = offset as {
+    offsetMeters: unknown;
+    offsetDeg: unknown;
+  };
+  return (
+    isMutableInterpolatedValues<number>(offsetMeters) &&
+    isMutableInterpolatedValues<number>(offsetDeg)
+  );
 };
 
 const createFakeProjectionHost = (
@@ -133,7 +162,7 @@ const createFakeProjectionHost = (
   const clipContext =
     options.clipContext === undefined
       ? DEFAULT_CLIP_CONTEXT
-      : options.clipContext;
+      : (options.clipContext ?? undefined);
   const zoom = options.zoom ?? 10;
   const perspective = options.perspectiveRatio;
   const defaultRatio = typeof perspective === 'number' ? perspective : 8;
@@ -147,7 +176,7 @@ const createFakeProjectionHost = (
 
   return {
     getZoom: () => zoom,
-    getClipContext: () => clipContext,
+    getClipContext: () => clipContext ?? undefined,
     fromLngLat,
     project,
     unproject,
@@ -178,15 +207,10 @@ const originReference = createSpriteOriginReference();
 const resolveMutableOffset = (
   offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset | undefined
 ): MutableSpriteImageInterpolatedOffset => {
-  if (
-    offset &&
-    'offsetMeters' in offset &&
-    typeof offset.offsetMeters === 'object' &&
-    'current' in (offset.offsetMeters as Record<string, unknown>)
-  ) {
-    return offset as MutableSpriteImageInterpolatedOffset;
+  if (isMutableOffset(offset)) {
+    return offset;
   }
-  const base = offset ?? DEFAULT_OFFSET;
+  const base: SpriteImageOffset = offset ?? DEFAULT_OFFSET;
   return {
     offsetMeters: {
       current: base.offsetMeters,
@@ -204,13 +228,8 @@ const resolveMutableOffset = (
 const resolveOpacityState = (
   value?: MutableInterpolatedValues<number> | number
 ): MutableInterpolatedValues<number> => {
-  if (
-    value &&
-    typeof value === 'object' &&
-    'current' in value &&
-    typeof (value as MutableInterpolatedValues<number>).current === 'number'
-  ) {
-    const candidate = value as MutableInterpolatedValues<number>;
+  if (isMutableInterpolatedValues<number>(value)) {
+    const candidate = value;
     return {
       current: candidate.current,
       from: candidate.from,
@@ -225,8 +244,41 @@ const resolveOpacityState = (
   };
 };
 
+type ImageStateOverrides = Partial<
+  Omit<
+    InternalSpriteImageState,
+    'opacity' | 'offset' | 'rotateDeg' | 'border' | 'borderPixelWidth'
+  >
+> & {
+  opacity?: MutableInterpolatedValues<number> | number;
+  offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset;
+  rotateDeg?: MutableInterpolatedValues<number> | number;
+  border?:
+    | ResolvedSpriteImageLineAttribute
+    | SpriteImageLineAttribute
+    | null
+    | undefined;
+  borderPixelWidth?: number;
+};
+
+const resolveBorder = (
+  border: ImageStateOverrides['border']
+): ResolvedSpriteImageLineAttribute | undefined => {
+  if (!border) {
+    return undefined;
+  }
+  if ('rgba' in border) {
+    return border;
+  }
+  return {
+    color: border.color ?? 'red',
+    widthMeters: border.widthMeters ?? 1,
+    rgba: [0, 0, 0, 1] as const,
+  };
+};
+
 const createImageState = (
-  overrides: Partial<InternalSpriteImageState> = {}
+  overrides: ImageStateOverrides = {}
 ): InternalSpriteImageState => {
   const originLocation = overrides.originLocation;
   const originReferenceKey =
@@ -236,16 +288,28 @@ const createImageState = (
   const resolvedOpacity = resolveOpacityState(overrides.opacity);
   const initialOpacity = resolvedOpacity.current;
   const resolvedOffset = resolveMutableOffset(overrides.offset);
+  const rotateDegOverride = overrides.rotateDeg;
   const rotationCommandDeg =
     overrides.rotationCommandDeg ??
-    overrides.rotateDeg?.current ??
-    overrides.displayedRotateDeg ??
-    0;
-  const rotateDeg = overrides.rotateDeg ?? {
-    current: rotationCommandDeg,
-    from: undefined,
-    to: undefined,
-  };
+    (isMutableInterpolatedValues<number>(rotateDegOverride)
+      ? rotateDegOverride.current
+      : typeof rotateDegOverride === 'number'
+        ? rotateDegOverride
+        : (overrides.displayedRotateDeg ?? 0));
+  const rotateDeg = isMutableInterpolatedValues<number>(rotateDegOverride)
+    ? {
+        current: rotateDegOverride.current,
+        from: rotateDegOverride.from,
+        to: rotateDegOverride.to,
+      }
+    : typeof rotateDegOverride === 'number'
+      ? { current: rotateDegOverride, from: undefined, to: undefined }
+      : {
+          current: rotationCommandDeg,
+          from: undefined,
+          to: undefined,
+        };
+  const border = resolveBorder(overrides.border);
   return {
     subLayer: overrides.subLayer ?? 0,
     order: overrides.order ?? 0,
@@ -255,7 +319,8 @@ const createImageState = (
     opacity: resolvedOpacity,
     scale: overrides.scale ?? 1,
     anchor: overrides.anchor ?? DEFAULT_ANCHOR,
-    border: overrides.border ?? null,
+    border,
+    borderPixelWidth: overrides.borderPixelWidth ?? 0,
     offset: resolvedOffset,
     rotateDeg,
     rotationCommandDeg,
@@ -350,7 +415,7 @@ type DepthItem<TTag> = {
   readonly resolveOrigin: (
     sprite: InternalSpriteCurrentState<TTag>,
     image: InternalSpriteImageState
-  ) => InternalSpriteImageState | null;
+  ) => InternalSpriteImageState | undefined;
 };
 
 interface CollectContext {
@@ -404,8 +469,10 @@ const createCollectContext = (
 
   const projectionHost =
     projectionHostOverride ?? createFakeProjectionHost(projectionHostOptions);
-  const clipContext =
-    clipOverride === undefined ? projectionHost.getClipContext() : clipOverride;
+  const clipContext: Readonly<ClipContext> | undefined =
+    clipOverride === undefined
+      ? projectionHost.getClipContext()
+      : (clipOverride ?? undefined);
 
   const zoom = zoomOverride ?? projectionHost.getZoom();
   const resolvedScaling =
@@ -497,11 +564,12 @@ const createAfterParams = (
       | 'baseMetersPerPixel'
       | 'spriteMinPixel'
       | 'spriteMaxPixel'
+      | 'clipContext'
       | 'drawingBufferWidth'
       | 'drawingBufferHeight'
       | 'pixelRatio'
     >
-  > = {}
+  > & { clipContext?: Readonly<ClipContext> | null } = {}
 ): PrepareDrawSpriteImageParamsAfter => {
   return {
     imageResources: before.imageResources,
@@ -515,7 +583,7 @@ const createAfterParams = (
     clipContext:
       overrides.clipContext === undefined
         ? before.clipContext
-        : overrides.clipContext,
+        : (overrides.clipContext ?? undefined),
     identityScaleX: overrides.identityScaleX ?? 1,
     identityScaleY: overrides.identityScaleY ?? 1,
     identityOffsetX: overrides.identityOffsetX ?? 0,
@@ -1458,11 +1526,11 @@ describe('prepareDrawSpriteImages', () => {
       image,
       resource,
       depthKey: 0,
-      resolveOrigin: () => null,
+      resolveOrigin: () => undefined,
     };
 
     const projectionHost = createFakeProjectionHost({
-      project: () => null,
+      project: () => undefined,
     });
     const controller = createImageHandleBufferController();
     controller.markDirty(new Map([['icon-e', resource]]));

@@ -23,6 +23,7 @@ const BASE_PARAMS: ProjectionHostParams = {
   width: 1024,
   height: 768,
   center: { lng: 139.7514, lat: 35.685, z: 35 },
+  cameraLocation: { lng: 139.7514, lat: 35.685, z: 35 },
   pitchDeg: 45,
   bearingDeg: 30,
   rollDeg: 5,

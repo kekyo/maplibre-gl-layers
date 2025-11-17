@@ -183,7 +183,7 @@ type ImageCenterCache = Map<string, Map<string, ImageCenterCacheEntry>>;
 type OriginImageResolver<T> = (
   sprite: Readonly<InternalSpriteCurrentState<T>>,
   image: Readonly<InternalSpriteImageState>
-) => InternalSpriteImageState | null;
+) => InternalSpriteImageState | undefined;
 
 export const DEFAULT_RENDER_INTERPOLATION_RESULT: RenderInterpolationResult = {
   handled: false,
@@ -225,17 +225,17 @@ const createBucketOriginResolver = <T>(
       index >= bucket.length
     ) {
       // Missing index or out-of-bounds reference -> origin cannot be resolved.
-      return null;
+      return undefined;
     }
     const entry = bucket[index];
     if (!entry) {
       // Bucket holes should not happen, but guard to avoid undefined access.
-      return null;
+      return undefined;
     }
     const [resolvedSprite, resolvedImage] = entry;
     if (resolvedSprite !== sprite) {
       // A stale index referencing another sprite is treated as unresolved.
-      return null;
+      return undefined;
     }
     return resolvedImage;
   };
@@ -361,7 +361,7 @@ export const collectDepthSortedItemsInternal = <T>(
       true
     );
 
-    let depthKey: number;
+    let depthKey: number | undefined;
 
     if (imageEntry.mode === 'surface') {
       const imageScale = imageEntry.scale ?? 1;
@@ -438,7 +438,7 @@ export const collectDepthSortedItemsInternal = <T>(
         }
       );
 
-      if (surfaceDepth === null) {
+      if (surfaceDepth === undefined) {
         continue;
       }
       depthKey = surfaceDepth;
@@ -448,7 +448,7 @@ export const collectDepthSortedItemsInternal = <T>(
         unprojectPoint,
         projectToClipSpace
       );
-      if (billboardDepth === null) {
+      if (billboardDepth === undefined) {
         continue;
       }
       depthKey = billboardDepth;
@@ -487,16 +487,16 @@ export const collectDepthSortedItemsInternal = <T>(
  * @param {number} lng - Longitude in degrees.
  * @param {number} lat - Latitude in degrees.
  * @param {number} elevationMeters - Elevation above the ellipsoid in meters.
- * @param {ClipContext | null} context - Clip-space context; `null` skips projection.
- * @returns {[number, number, number, number] | null} Clip coordinates or `null` when projection fails.
+ * @param {ClipContext | undefined} context - Clip-space context; `undefined` skips projection.
+ * @returns {[number, number, number, number] | undefined} Clip coordinates or `undefined` when projection fails.
  */
 const projectLngLatToClipSpace = (
   projectionHost: ProjectionHost,
   location: Readonly<SpriteLocation>,
-  context: Readonly<ClipContext> | null
-): [number, number, number, number] | null => {
+  context: Readonly<ClipContext> | undefined
+): [number, number, number, number] | undefined => {
   if (!context) {
-    return null;
+    return undefined;
   }
   const { mercatorMatrix } = context;
   const coord = projectionHost.fromLngLat(location);
@@ -508,7 +508,7 @@ const projectLngLatToClipSpace = (
     1
   );
   if (!isFiniteNumber(clipW) || clipW <= MIN_CLIP_W) {
-    return null;
+    return undefined;
   }
   return [clipX, clipY, clipZ, clipW];
 };
@@ -529,7 +529,7 @@ interface ComputeImageCenterParams<T> {
   readonly drawingBufferWidth: number;
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
-  readonly clipContext: Readonly<ClipContext> | null;
+  readonly clipContext: Readonly<ClipContext> | undefined;
   readonly resolveOrigin: OriginImageResolver<T>;
 }
 
@@ -980,7 +980,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     z: spriteBaseLocation.z ?? 0,
   };
   const cameraDistanceMeters =
-    cameraLocation !== null
+    cameraLocation !== undefined
       ? calculateCartesianDistanceMeters(cameraLocation, spriteDistanceLocation)
       : Number.POSITIVE_INFINITY;
 
@@ -1057,9 +1057,10 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     imageEntry.surfaceShaderInputs = surfaceShaderInputs;
 
     useShaderSurface = USE_SHADER_SURFACE_GEOMETRY && !!clipContext;
-    let clipCornerPositions: Array<[number, number, number, number]> | null =
-      null;
-    let clipCenterPosition: [number, number, number, number] | null = null;
+    let clipCornerPositions:
+      | Array<[number, number, number, number]>
+      | undefined = undefined;
+    let clipCenterPosition: [number, number, number, number] | undefined;
     if (useShaderSurface) {
       clipCornerPositions = new Array(SURFACE_BASE_CORNERS.length) as Array<
         [number, number, number, number]
@@ -1071,7 +1072,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       );
       if (!clipCenterPosition) {
         useShaderSurface = false;
-        clipCornerPositions = null;
+        clipCornerPositions = undefined;
       }
     }
 

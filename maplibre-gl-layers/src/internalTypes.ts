@@ -232,7 +232,7 @@ export interface Releasable {
 }
 
 /**
- * Abstraction that exposes projection-related helpers.
+ * Mimimum abstraction that exposes projection-related helpers.
  */
 export interface ProjectionHost extends Releasable {
   /**
@@ -241,10 +241,15 @@ export interface ProjectionHost extends Releasable {
    */
   readonly getZoom: () => number;
   /**
-   * Extracts the current clip-space context if the mercator matrix is available.
-   * @returns {ClipContext | null} Clip context or `null` when the transform is not ready.
+   * Get camera location.
+   * @returns Camera location when viewport is available.
    */
-  readonly getClipContext: () => ClipContext | null;
+  readonly getCameraLocation: () => SpriteLocation | undefined;
+  /**
+   * Extracts the current clip-space context if the mercator matrix is available.
+   * @returns {ClipContext | undefined} Clip context or `undefined` when the transform is not ready.
+   */
+  readonly getClipContext: () => ClipContext | undefined;
   /**
    * Get mercator coordinate from the location
    * @param location Location.
@@ -258,13 +263,17 @@ export interface ProjectionHost extends Releasable {
    * @param location Location.
    * @returns Projected point if valid location.
    */
-  readonly project: (location: Readonly<SpriteLocation>) => SpritePoint | null;
+  readonly project: (
+    location: Readonly<SpriteLocation>
+  ) => SpritePoint | undefined;
   /**
    * Unproject the location.
    * @param point Projected point.
    * @returns Location if valid point.
    */
-  readonly unproject: (point: Readonly<SpritePoint>) => SpriteLocation | null;
+  readonly unproject: (
+    point: Readonly<SpritePoint>
+  ) => SpriteLocation | undefined;
   /**
    * Calculate perspective ratio.
    * @param location Location.
@@ -275,7 +284,6 @@ export interface ProjectionHost extends Releasable {
     location: Readonly<SpriteLocation>,
     cachedMercator?: SpriteMercatorCoordinate
   ) => number;
-  readonly getCameraLocation: () => SpriteLocation | null;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -289,7 +297,7 @@ export interface PrepareDrawSpriteImageParamsBase {
   readonly drawingBufferWidth: number;
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
-  readonly clipContext: Readonly<ClipContext> | null;
+  readonly clipContext: Readonly<ClipContext> | undefined;
 }
 
 export interface PrepareDrawSpriteImageParamsBefore<TTag>

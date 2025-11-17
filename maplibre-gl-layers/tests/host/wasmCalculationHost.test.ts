@@ -378,6 +378,7 @@ const PROJECTION_PARAMS: ProjectionHostParams = {
   width: 800,
   height: 600,
   center: { lng: 0, lat: 0 },
+  cameraLocation: undefined,
 };
 
 const createMockDependencies = () => {

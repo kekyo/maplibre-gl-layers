@@ -30,7 +30,8 @@ const createImageState = (): InternalSpriteImageState => ({
   },
   scale: 1,
   anchor: { x: 0, y: 0 },
-  border: null,
+  border: undefined,
+  borderPixelWidth: 0,
   offset: {
     offsetMeters: { current: 0, from: undefined, to: undefined },
     offsetDeg: { current: 0, from: undefined, to: undefined },
