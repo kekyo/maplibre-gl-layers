@@ -22,7 +22,7 @@ import type {
   SpriteScreenPoint,
   SpritePoint,
   SpriteEasingPresetName,
-  SpriteImageBorderState,
+  SpriteImageLineAttributeState,
   SpriteImageState,
 } from './types';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
@@ -660,7 +660,8 @@ export type Canvas2DContext =
 export type Canvas2DSource = HTMLCanvasElement | OffscreenCanvas;
 
 /** Border definition resolved for rendering. */
-export interface ResolvedSpriteImageBorder extends SpriteImageBorderState {
+export interface ResolvedSpriteImageLineAttribute
+  extends SpriteImageLineAttributeState {
   readonly rgba: RgbaColor;
 }
 
@@ -678,7 +679,7 @@ export interface InternalSpriteImageState extends SpriteImageState {
   opacity: MutableInterpolatedValues<number>;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
-  border: ResolvedSpriteImageBorder | undefined;
+  border: ResolvedSpriteImageLineAttribute | undefined;
   offset: MutableSpriteImageInterpolatedOffset;
   rotateDeg: MutableInterpolatedValues<number>;
   rotationCommandDeg: number;

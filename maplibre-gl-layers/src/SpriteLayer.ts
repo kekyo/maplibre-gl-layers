@@ -37,7 +37,7 @@ import {
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
   type SpriteImageOffset,
-  type SpriteImageBorder,
+  type SpriteImageLineAttribute,
   type SpriteInterpolationOptions,
   type SpriteImageOriginLocation,
   type SpriteScreenPoint,
@@ -59,7 +59,7 @@ import type {
   RenderInterpolationParams,
   SpriteOriginReference,
   SpriteOriginReferenceKey,
-  ResolvedSpriteImageBorder,
+  ResolvedSpriteImageLineAttribute,
 } from './internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -467,9 +467,9 @@ const resolveBorderWidthPixel = (width?: number): number => {
   return width;
 };
 
-const resolveSpriteImageBorder = (
-  border?: SpriteImageBorder | null
-): ResolvedSpriteImageBorder | undefined => {
+const resolveSpriteImageLineAttribute = (
+  border?: SpriteImageLineAttribute | null
+): ResolvedSpriteImageLineAttribute | undefined => {
   if (!border) {
     return undefined;
   }
@@ -549,7 +549,7 @@ export const createImageStateFromInit = (
     },
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
-    border: resolveSpriteImageBorder(imageInit.border),
+    border: resolveSpriteImageLineAttribute(imageInit.border),
     offset: createInterpolatedOffsetState(initialOffset),
     rotateDeg: {
       current: initialRotateDeg,
@@ -2805,7 +2805,7 @@ export const createSpriteLayer = <T = any>(
       state.scale = imageUpdate.scale;
     }
     if (imageUpdate.border !== undefined) {
-      state.border = resolveSpriteImageBorder(imageUpdate.border);
+      state.border = resolveSpriteImageLineAttribute(imageUpdate.border);
     }
     const prevAutoRotation = state.autoRotation;
     const prevMinDistance = state.autoRotationMinDistanceMeters;
