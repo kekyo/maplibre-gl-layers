@@ -1014,6 +1014,7 @@ const converToPreparedDrawImageParams = <TTag>(
 
   const items: PreparedDrawSpriteImageParams<TTag>[] = [];
 
+  const baseMetersPerPixel = state.lastFrameParams?.baseMetersPerPixel ?? 1;
   const zoomScaleFactor = state.lastFrameParams?.zoomScaleFactor ?? 1;
 
   const clampLatitude = (lat: number): number =>
@@ -1316,10 +1317,38 @@ const converToPreparedDrawImageParams = <TTag>(
       spriteEntry.location.current
     );
 
-    // Apply surface size clamp scaling when available.
+    // Apply surface/billboard size clamp scaling when available.
     let sizeScaleAdjustment = 1;
     if (useShaderSurface && surfaceShaderInputs) {
       sizeScaleAdjustment = surfaceShaderInputs.scaleAdjustment;
+    } else if (useShaderBillboard && imageResource) {
+      const actualWidth = (halfWidth ?? 0) * 2;
+      const actualHeight = (halfHeight ?? 0) * 2;
+      const rawWidth =
+        imageResource.width *
+        baseMetersPerPixel *
+        imageScale *
+        zoomScaleFactor *
+        effectivePixelsPerMeter;
+      const rawHeight =
+        imageResource.height *
+        baseMetersPerPixel *
+        imageScale *
+        zoomScaleFactor *
+        effectivePixelsPerMeter;
+      const largestActual = Math.max(actualWidth, actualHeight);
+      const largestRaw = Math.max(rawWidth, rawHeight);
+      if (
+        Number.isFinite(largestActual) &&
+        largestActual > 0 &&
+        Number.isFinite(largestRaw) &&
+        largestRaw > 0
+      ) {
+        const ratio = largestActual / largestRaw;
+        if (Number.isFinite(ratio) && ratio > 0) {
+          sizeScaleAdjustment = ratio;
+        }
+      }
     }
 
     imageEntry.borderPixelWidth = calculateBorderWidthPixels(
