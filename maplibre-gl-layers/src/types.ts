@@ -1039,6 +1039,13 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   ////////////////////////////////////////////////////////////////////////////////
 
   /**
+   * Controls entire interpolation Calculation.
+   * When `false`, interpolation halts immediately and resumes smoothly from the paused state when re-enabled.
+   * @param moveable - Continuous calculation for movement interpolation when value is true.
+   */
+  readonly setInterpolationCalculation: (moveable: boolean) => void;
+
+  /**
    * Adds an event listener.
    *
    * @param {K} type - Event name.

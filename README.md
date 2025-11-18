@@ -453,6 +453,51 @@ With feedback, even if a new coordinate is set, the animation won't reach that c
 
 Of course, since this is a predicted coordinate, a disadvantage is that if the movement direction or speed changes significantly during the move, it will continue moving toward an incorrect coordinate. Nevertheless, when a new coordinate is supplied, it will be corrected to move quickly toward that new coordinate, so the coordinate deviation should converge.
 
+## Controlling Overall Interpolation Calculation
+
+To pause interpolation for the entire sprite attributes, call `setInterpolationCalculation(false)`.
+The pause takes effect immediately, halting all ongoing interpolation behavior.
+Setting it back to `true` smoothly resumes the paused interpolation from its current position.
+
+The initial state is `true`, and interpolation is continuously calculated.
+
+Here's an example:
+
+```typescript
+// Pause interpolation
+spriteLayer.setInterpolationCalculation(false);
+
+// (Your another tasks...)
+
+// Resuming interpolation smoothly continues the paused
+spriteLayer.setInterpolationCalculation(true);
+```
+
+Note: If you update the sprite or sprite image while paused, the internal interpolation state will be reset:
+
+```typescript
+// Pause interpolation
+spriteLayer.setInterpolationCalculation(false);
+
+// Modify sprites or images
+spriteLayer.updateSprite('car-1', {
+  location: { lng: 136.8853, lat: 35.1702 },  // Immediately applied
+  interpolation: { durationMs: 1000 },
+});
+spriteLayer.updateSpriteImage('car-1', 0, 0, {
+  rotateDeg: 45,  // Immediately applied
+  offset: { offsetMeters: 12, offsetDeg: 30 },  // Immediately applied
+  interpolation: {
+    rotateDeg: { durationMs: 800 },
+    offsetDeg: { durationMs: 500 },
+  },
+});
+
+// When interpolation resumes, it will start from the above settings
+// (the previous interpolation state is reset).
+spriteLayer.setInterpolationCalculation(true);
+```
+
 ## Interpolation of Image Rotation Angle, Offset, and Opacity
 
 Similar to sprite position interpolation, you can smoothly change the rotation, offset, and opacity of each image.

@@ -534,6 +534,51 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
 });
 ```
 
+## 全体的な補間計算の制御
+
+スプライト全体の補間を一時停止したい場合は `setInterpolationCalculation(false)` を呼び出します。
+一時停止は即時に反映され、補間中の動作も全て完全に一時停止します。
+再度 `true` に戻すと、停止していた補間を途中から滑らかに再開します。
+
+初期状態は `true` で、継続的に補間が計算されます。
+
+以下に例を示します:
+
+```typescript
+// 補間を一時停止する
+spriteLayer.setInterpolationCalculation(false);
+
+// (何か他の処理...)
+
+// 補間を再開すると、停止していた補間が滑らかに続行する
+spriteLayer.setInterpolationCalculation(true);
+```
+
+注意: 停止中にスプライトやスプライト画像の更新を行った場合は、内部の補間ステートはリセットされます:
+
+```typescript
+// 補間を一時停止する
+spriteLayer.setInterpolationCalculation(false);
+
+// スプライトや画像に変更を加える
+spriteLayer.updateSprite('car-1', {
+  location: { lng: 136.8853, lat: 35.1702 },  // 即時反映される
+  interpolation: { durationMs: 1000 },
+});
+spriteLayer.updateSpriteImage('car-1', 0, 0, {
+  rotateDeg: 45,  // 即時反映される
+  offset: { offsetMeters: 12, offsetDeg: 30 },  //即時反映される
+  interpolation: {
+    rotateDeg: { durationMs: 800 },
+    offsetDeg: { durationMs: 500 },
+  },
+});
+
+// 補間を再開すると、上記の設定から補間が改めて開始される
+// （以前の補間ステートはリセットされる）
+spriteLayer.setInterpolationCalculation(true);
+```
+
 ## 基準座標点とアンカー
 
 各画像は既定でスプライトの`location`（補間後の座標）を基準に、アンカー・オフセット・回転を計算します。`originLocation`を指定すると、同じスプライト内の別画像を座標の基準として再利用でき、複数の画像を一つの塊として扱えます。

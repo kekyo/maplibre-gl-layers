@@ -1024,6 +1024,16 @@ const createHud = () => {
         >
           Sprite Layer
         </button>
+        <button
+          type="button"
+          class="toggle-button active"
+          data-control="interpolation-movement-toggle"
+          data-label="Interpolation Calculation"
+          aria-pressed="true"
+          data-testid="toggle-interpolation-movement"
+        >
+          Interpolation Calculation: ON
+        </button>
       </div>
       <div class="control-group" data-testid="group-sprite-count">
         <h1>Sprite</h1>
@@ -2020,6 +2030,7 @@ const main = async () => {
     applyBasemapVisibility();
 
     let isActive = true;
+    let isInterpolationCalculationEnabled = true;
     let spriteVisibilityLimit = INITIAL_NUMBER_OF_SPRITES;
     let lastVisibleSpriteCount = 0;
     let syncSpritePoolWithLimit: (targetSize: number) => {
@@ -3359,6 +3370,18 @@ const main = async () => {
       }
 
       let updateAutoRotationButton: (() => void) | undefined;
+      let updateInterpolationCalculationButton: (() => void) | undefined;
+
+      const setInterpolationCalculationEnabled = (enabled: boolean): void => {
+        if (isInterpolationCalculationEnabled === enabled) {
+          updateInterpolationCalculationButton?.();
+          return;
+        }
+        isInterpolationCalculationEnabled = enabled;
+        spriteLayer?.setInterpolationCalculation(enabled);
+        updateInterpolationCalculationButton?.();
+      };
+
       const setAutoRotationEnabled = (enabled: boolean) => {
         if (isAutoRotationEnabled === enabled) {
           // No change—still refresh the UI so it reflects the existing state.
@@ -3381,6 +3404,25 @@ const main = async () => {
         applyLayerVisibility(!isActive);
         updateSpriteLayerToggle();
       });
+
+      const interpolationCalculationButton = queryFirst<HTMLButtonElement>(
+        '[data-control="interpolation-movement-toggle"]'
+      );
+      if (interpolationCalculationButton) {
+        updateInterpolationCalculationButton = () => {
+          setToggleButtonState(
+            interpolationCalculationButton,
+            isInterpolationCalculationEnabled,
+            'binary'
+          );
+        };
+        updateInterpolationCalculationButton();
+        interpolationCalculationButton.addEventListener('click', () => {
+          setInterpolationCalculationEnabled(
+            !isInterpolationCalculationEnabled
+          );
+        });
+      }
 
       const mouseEventsButton = queryFirst<HTMLButtonElement>(
         '[data-control="mouse-events-toggle"]'
@@ -4247,6 +4289,9 @@ const main = async () => {
         applyRotateInterpolationToAll(isRotateInterpolationEnabled);
         applyOrbitInterpolationToAll();
         applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
+        spriteLayer.setInterpolationCalculation(
+          isInterpolationCalculationEnabled
+        );
         applyPseudoLodVisibility();
         applyLayerVisibility(isActive);
         reconcileSpriteVisibility();

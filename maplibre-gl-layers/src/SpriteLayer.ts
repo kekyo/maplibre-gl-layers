@@ -587,6 +587,39 @@ export const createSpriteLayer = <T = any>(
   const now = (): number =>
     typeof performance !== 'undefined' ? performance.now() : Date.now();
 
+  // Tracks interpolation clock so it can be paused without losing progress.
+  let interpolationCalculationEnabled = true;
+  let interpolationTimestamp: number | undefined;
+  let interpolationTimestampAnchor: number | undefined;
+
+  const resolveInterpolationTimestamp = (realTimestamp: number): number => {
+    const effectiveReal = Number.isFinite(realTimestamp)
+      ? realTimestamp
+      : now();
+    if (interpolationTimestamp === undefined) {
+      interpolationTimestamp = effectiveReal;
+    }
+    if (interpolationTimestampAnchor === undefined) {
+      interpolationTimestampAnchor = effectiveReal;
+      return interpolationTimestamp;
+    }
+    if (interpolationCalculationEnabled) {
+      interpolationTimestamp += effectiveReal - interpolationTimestampAnchor;
+    }
+    interpolationTimestampAnchor = effectiveReal;
+    return interpolationTimestamp;
+  };
+
+  const resetInterpolationTimestampAnchor = (realTimestamp?: number): void => {
+    const effectiveReal = Number.isFinite(realTimestamp)
+      ? realTimestamp
+      : now();
+    if (interpolationTimestamp === undefined) {
+      interpolationTimestamp = effectiveReal;
+    }
+    interpolationTimestampAnchor = effectiveReal;
+  };
+
   const scheduleTextGlyphQueueProcessing = (): void => {
     if (textGlyphQueueTimer) {
       return;
@@ -1522,15 +1555,12 @@ export const createSpriteLayer = <T = any>(
       return;
     }
 
-    const timestamp =
-      typeof performance !== 'undefined' &&
-      typeof performance.now === 'function'
-        ? // Prefer high-resolution timers when available for smoother animation progress.
-          performance.now()
-        : // Fall back to Date.now() in environments without the Performance API.
-          Date.now();
+    const realTimestamp = now();
+    const interpolationTimestamp = resolveInterpolationTimestamp(realTimestamp);
 
     const spriteStateArray = Array.from(sprites.values());
+    const shouldProcessInterpolation =
+      interpolationCalculationEnabled && spriteStateArray.length > 0;
     let frameCalculationHost: RenderCalculationHost<T> | null = null;
     const ensureCalculationHost = (): RenderCalculationHost<T> => {
       if (!frameCalculationHost) {
@@ -1547,10 +1577,10 @@ export const createSpriteLayer = <T = any>(
     };
 
     const interpolationParams: RenderInterpolationParams<T> | null =
-      spriteStateArray.length > 0
+      shouldProcessInterpolation
         ? {
             sprites: spriteStateArray,
-            timestamp,
+            timestamp: interpolationTimestamp,
             frameContext: {
               baseMetersPerPixel: resolvedScaling.metersPerPixel,
               spriteMinPixel: resolvedScaling.spriteMinPixel,
@@ -1845,7 +1875,7 @@ export const createSpriteLayer = <T = any>(
           processResult.interpolationResult.hasActiveInterpolation;
       }
 
-      if (hasActiveInterpolation) {
+      if (hasActiveInterpolation && interpolationCalculationEnabled) {
         scheduleRender();
       }
 
@@ -2626,6 +2656,7 @@ export const createSpriteLayer = <T = any>(
     const state = getImageState(sprite, subLayer, order);
     // Ignore updates targeting image slots that do not exist.
     if (!state) return false;
+    const interpolationAllowed = interpolationCalculationEnabled;
 
     // Apply updates for each provided attribute.
     if (imageUpdate.imageId !== undefined) {
@@ -2645,10 +2676,11 @@ export const createSpriteLayer = <T = any>(
           ? null
           : cloneInterpolationOptions(opacityInterpolationOption);
     }
-    const resolvedOpacityInterpolationOption =
-      opacityInterpolationOption === undefined
+    const resolvedOpacityInterpolationOption = interpolationAllowed
+      ? opacityInterpolationOption === undefined
         ? (state.opacityInterpolationOptions ?? null)
-        : opacityInterpolationOption;
+        : opacityInterpolationOption
+      : null;
     if (imageUpdate.opacity !== undefined) {
       // Update opacity; zero values will be filtered out during rendering.
       applyOpacityUpdate(
@@ -2685,18 +2717,28 @@ export const createSpriteLayer = <T = any>(
       state.anchor = cloneAnchor(imageUpdate.anchor);
     }
     // Optional interpolation payloads allow independent control over offset and rotation animations.
-    const offsetDegInterpolationOption = interpolationOptions?.offsetDeg;
-    const offsetMetersInterpolationOption = interpolationOptions?.offsetMeters;
+    const offsetDegInterpolationOption = interpolationAllowed
+      ? interpolationOptions?.offsetDeg
+      : null;
+    const offsetMetersInterpolationOption = interpolationAllowed
+      ? interpolationOptions?.offsetMeters
+      : null;
     // Pull out rotateDeg interpolation hints when the payload includes them.
     const rotateInterpolationOption = interpolationOptions?.rotateDeg;
     let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
     if (imageUpdate.offset !== undefined) {
       const clonedOffset = cloneOffset(imageUpdate.offset);
-      applyOffsetUpdate(state, clonedOffset, {
-        deg: offsetDegInterpolationOption,
-        meters: offsetMetersInterpolationOption,
-      });
+      applyOffsetUpdate(
+        state,
+        clonedOffset,
+        interpolationAllowed
+          ? {
+              deg: offsetDegInterpolationOption,
+              meters: offsetMetersInterpolationOption,
+            }
+          : undefined
+      );
     } else {
       if (offsetDegInterpolationOption === null) {
         // Explicit null clears any running angular interpolation.
@@ -2769,7 +2811,11 @@ export const createSpriteLayer = <T = any>(
       syncImageRotationChannel(
         state,
         // When a rotation override has been computed, pass it along (null clears interpolation); otherwise leave undefined.
-        hasRotationOverride ? (rotationOverride ?? null) : undefined
+        interpolationAllowed
+          ? hasRotationOverride
+            ? (rotationOverride ?? null)
+            : undefined
+          : null
       );
     }
 
@@ -2974,6 +3020,7 @@ export const createSpriteLayer = <T = any>(
       | null
       | undefined = undefined;
     let interpolationExplicitlySpecified = false;
+    const interpolationAllowed = interpolationCalculationEnabled;
 
     if (update.interpolation !== undefined) {
       interpolationExplicitlySpecified = true;
@@ -3025,7 +3072,9 @@ export const createSpriteLayer = <T = any>(
 
       const effectiveOptions =
         // Treat `undefined` as "no interpolation change" whereas explicit `null` disables interpolation.
-        optionsForLocation === undefined ? null : optionsForLocation;
+        !interpolationAllowed || optionsForLocation === undefined
+          ? null
+          : optionsForLocation;
 
       let handledByInterpolation = false;
 
@@ -3422,6 +3471,18 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
+  const setInterpolationCalculation = (moveable: boolean): void => {
+    const realTimestamp = now();
+    // Advance the interpolation clock to the moment of the toggle so progress up to
+    // this call is preserved.
+    resolveInterpolationTimestamp(realTimestamp);
+    interpolationCalculationEnabled = moveable;
+    resetInterpolationTimestampAnchor(realTimestamp);
+    if (moveable) {
+      scheduleRender();
+    }
+  };
+
   const setHitTestEnabled = (enabled: boolean): void => {
     const changed = hitTestController.setHitTestEnabled(enabled);
     if (!changed || !enabled || !map) {
@@ -3466,6 +3527,7 @@ export const createSpriteLayer = <T = any>(
     updateSprite,
     mutateSprites,
     updateForEach,
+    setInterpolationCalculation,
     setHitTestEnabled,
     on: addEventListener,
     off: removeEventListener,

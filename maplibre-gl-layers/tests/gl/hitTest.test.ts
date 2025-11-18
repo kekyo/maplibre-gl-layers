@@ -777,3 +777,136 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
     layer.onRemove?.(map as unknown as any, gl);
   });
 });
+
+describe('setInterpolationCalculation', () => {
+  it('resumes interpolation smoothly after pausing', async () => {
+    let currentTimestamp = 0;
+    const nowSpy = vi
+      .spyOn(performance, 'now')
+      .mockImplementation(() => currentTimestamp);
+    const advance = (ms: number) => {
+      currentTimestamp += ms;
+    };
+    const canvas = new FakeCanvas();
+    const map = new FakeMap(canvas);
+    const gl = new MockGLContext(canvas) as unknown as WebGLRenderingContext;
+    const layer = createSpriteLayer({ id: 'interpolation-layer' });
+
+    try {
+      await layer.onAdd?.(map as unknown as any, gl);
+      layer.addSprite('moving', {
+        location: { lng: 0, lat: 0 },
+        images: [],
+        interpolation: { durationMs: 1000, easing: { type: 'linear' } },
+      });
+      layer.updateSprite('moving', {
+        location: { lng: 10, lat: 0 },
+        interpolation: { durationMs: 1000, easing: { type: 'linear' } },
+      });
+      layer.render?.(gl, {} as any);
+
+      const state = layer.getSpriteState('moving') as unknown as {
+        interpolationState?: unknown;
+        location: { to?: { lng: number } };
+      };
+      expect(state?.interpolationState).toBeTruthy();
+
+      const currentLng = () =>
+        layer.getSpriteState('moving')?.location.current.lng ?? 0;
+
+      advance(400);
+      layer.render?.(gl, {} as any);
+      const progressed = currentLng();
+      expect(progressed).toBeGreaterThan(0);
+      expect(progressed).toBeLessThan(10);
+
+      layer.setInterpolationCalculation(false);
+
+      advance(400);
+      layer.render?.(gl, {} as any);
+      const paused = currentLng();
+      expect(paused).toBeCloseTo(progressed);
+
+      layer.setInterpolationCalculation(true);
+
+      advance(400);
+      layer.render?.(gl, {} as any);
+      const resumed = currentLng();
+      expect(resumed).toBeGreaterThan(paused);
+      expect(resumed).toBeLessThan(10);
+
+      advance(600);
+      layer.render?.(gl, {} as any);
+      expect(currentLng()).toBeCloseTo(10, 5);
+    } finally {
+      layer.onRemove?.(map as unknown as any, gl);
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('applies updates immediately while interpolation Calculation is disabled', async () => {
+    const canvas = new FakeCanvas();
+    const map = new FakeMap(canvas);
+    const gl = new MockGLContext(canvas) as unknown as WebGLRenderingContext;
+    const layer = createSpriteLayer({ id: 'interpolation-immediate' });
+    const bitmap = { width: 32, height: 32 } as unknown as ImageBitmap;
+
+    try {
+      await layer.onAdd?.(map as unknown as any, gl);
+      await layer.registerImage('marker', bitmap);
+
+      layer.addSprite('instant', {
+        location: { lng: 0, lat: 0 },
+        images: [
+          {
+            imageId: 'marker',
+            subLayer: 0,
+            order: 0,
+            interpolation: {
+              rotateDeg: { durationMs: 500, easing: { type: 'linear' } },
+              offsetDeg: { durationMs: 500, easing: { type: 'linear' } },
+              offsetMeters: { durationMs: 500, easing: { type: 'linear' } },
+            },
+          },
+        ],
+        interpolation: { durationMs: 500, easing: { type: 'linear' } },
+      });
+
+      layer.setInterpolationCalculation(false);
+
+      layer.updateSprite('instant', {
+        location: { lng: 5, lat: 6 },
+        interpolation: { durationMs: 1000, easing: { type: 'linear' } },
+      });
+
+      const spriteState = layer.getSpriteState('instant');
+      expect(spriteState?.location.current.lng).toBeCloseTo(5);
+      expect(spriteState?.location.current.lat).toBeCloseTo(6);
+      expect(spriteState?.location.from).toBeUndefined();
+      expect(spriteState?.location.to).toBeUndefined();
+
+      layer.updateSpriteImage('instant', 0, 0, {
+        rotateDeg: 45,
+        offset: { offsetMeters: 12, offsetDeg: 30 },
+        interpolation: {
+          rotateDeg: { durationMs: 1000, easing: { type: 'linear' } },
+          offsetDeg: { durationMs: 1000, easing: { type: 'linear' } },
+          offsetMeters: { durationMs: 1000, easing: { type: 'linear' } },
+        },
+      });
+
+      const imageState = spriteState?.images.get(0)?.get(0);
+      expect(imageState?.rotateDeg.current).toBeCloseTo(45);
+      expect(imageState?.rotateDeg.from).toBeUndefined();
+      expect(imageState?.rotateDeg.to).toBeUndefined();
+      expect(imageState?.offset.offsetMeters.current).toBeCloseTo(12);
+      expect(imageState?.offset.offsetMeters.from).toBeUndefined();
+      expect(imageState?.offset.offsetMeters.to).toBeUndefined();
+      expect(imageState?.offset.offsetDeg.current).toBeCloseTo(30);
+      expect(imageState?.offset.offsetDeg.from).toBeUndefined();
+      expect(imageState?.offset.offsetDeg.to).toBeUndefined();
+    } finally {
+      layer.onRemove?.(map as unknown as any, gl);
+    }
+  });
+});
