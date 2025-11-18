@@ -18,13 +18,13 @@ import type {
   SpriteTextureMagFilter,
   SpriteTextureMinFilter,
   SpriteInterpolationMode,
-  EasingFunction,
   SpriteScreenPoint,
   SpritePoint,
   SpriteEasingPresetName,
   SpriteImageLineAttributeState,
   SpriteImageState,
 } from './types';
+import type { EasingFunction } from './interpolation/easing';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
 import type { RgbaColor } from './utils/color';
 
@@ -488,7 +488,7 @@ export interface SpriteInterpolationState {
   readonly mode: SpriteInterpolationMode;
   readonly durationMs: number;
   readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasingPresetName | null;
+  readonly easingPreset: SpriteEasingPresetName;
   startTimestamp: number;
   readonly from: SpriteLocation;
   readonly to: SpriteLocation;
@@ -506,7 +506,7 @@ export interface SpriteInterpolationState {
 export interface DegreeInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasingPresetName | null;
+  readonly easingPreset: SpriteEasingPresetName;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;
@@ -516,7 +516,7 @@ export interface DegreeInterpolationState {
 export interface DistanceInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasingPresetName | null;
+  readonly easingPreset: SpriteEasingPresetName;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;

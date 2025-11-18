@@ -131,12 +131,7 @@ const resolveImageOffset = (
   };
 };
 
-const encodeEasingPresetId = (
-  preset: SpriteEasingPresetName | null
-): number => {
-  if (!preset) {
-    return -1;
-  }
+const encodeEasingPresetId = (preset: SpriteEasingPresetName): number => {
   return EASING_PRESET_IDS[preset] ?? -1;
 };
 
@@ -423,26 +418,7 @@ const processInterpolationsWithWasm = <TTag>(
     }
 
     if (state) {
-      if (state.easingPreset) {
-        spriteInterpolationWorkItems.push({ sprite, state });
-      } else {
-        const evaluation = evaluateInterpolation({
-          state,
-          timestamp,
-        });
-        if (state.startTimestamp < 0) {
-          state.startTimestamp = evaluation.effectiveStartTimestamp;
-        }
-        sprite.location.current = evaluation.location;
-        if (evaluation.completed) {
-          sprite.location.current = cloneSpriteLocation(state.to);
-          sprite.location.from = undefined;
-          sprite.location.to = undefined;
-          sprite.interpolationState = null;
-        } else {
-          hasActiveInterpolation = true;
-        }
-      }
+      spriteInterpolationWorkItems.push({ sprite, state });
     }
 
     const touchedImages: InternalSpriteImageState[] = [];
@@ -523,53 +499,23 @@ const processInterpolationsWithWasm = <TTag>(
     processedSprites.push({ sprite, touchedImages });
   }
 
-  const presetDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
-  const fallbackDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
-  for (const item of distanceInterpolationWorkItems) {
-    if (item.state.easingPreset) {
-      presetDistanceWorkItems.push(item);
-    } else {
-      fallbackDistanceWorkItems.push(item);
-    }
-  }
-
-  const presetDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
-  const fallbackDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
-  for (const item of degreeInterpolationWorkItems) {
-    if (item.state.easingPreset) {
-      presetDegreeWorkItems.push(item);
-    } else {
-      fallbackDegreeWorkItems.push(item);
-    }
-  }
-
-  const presetSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
-  const fallbackSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
-  for (const item of spriteInterpolationWorkItems) {
-    if (item.state.easingPreset) {
-      presetSpriteWorkItems.push(item);
-    } else {
-      fallbackSpriteWorkItems.push(item);
-    }
-  }
-
   const distanceRequests =
-    presetDistanceWorkItems.length > 0
-      ? presetDistanceWorkItems.map(({ state }) => ({
+    distanceInterpolationWorkItems.length > 0
+      ? distanceInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
   const degreeRequests =
-    presetDegreeWorkItems.length > 0
-      ? presetDegreeWorkItems.map(({ state }) => ({
+    degreeInterpolationWorkItems.length > 0
+      ? degreeInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
   const spriteRequests =
-    presetSpriteWorkItems.length > 0
-      ? presetSpriteWorkItems.map(({ state }) => ({
+    spriteInterpolationWorkItems.length > 0
+      ? spriteInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
@@ -592,10 +538,10 @@ const processInterpolationsWithWasm = <TTag>(
         sprite: [],
       };
 
-  if (presetDistanceWorkItems.length > 0) {
+  if (distanceRequests.length > 0) {
     if (
       applyDistanceInterpolationEvaluations(
-        presetDistanceWorkItems,
+        distanceInterpolationWorkItems,
         wasmResults.distance,
         timestamp
       )
@@ -604,21 +550,10 @@ const processInterpolationsWithWasm = <TTag>(
     }
   }
 
-  if (
-    fallbackDistanceWorkItems.length > 0 &&
-    applyDistanceInterpolationEvaluations(
-      fallbackDistanceWorkItems,
-      [],
-      timestamp
-    )
-  ) {
-    hasActiveInterpolation = true;
-  }
-
-  if (presetDegreeWorkItems.length > 0) {
+  if (degreeRequests.length > 0) {
     if (
       applyDegreeInterpolationEvaluations(
-        presetDegreeWorkItems,
+        degreeInterpolationWorkItems,
         wasmResults.degree,
         timestamp
       )
@@ -627,30 +562,16 @@ const processInterpolationsWithWasm = <TTag>(
     }
   }
 
-  if (
-    fallbackDegreeWorkItems.length > 0 &&
-    applyDegreeInterpolationEvaluations(fallbackDegreeWorkItems, [], timestamp)
-  ) {
-    hasActiveInterpolation = true;
-  }
-
-  if (presetSpriteWorkItems.length > 0) {
+  if (spriteRequests.length > 0) {
     if (
       applySpriteInterpolationEvaluations(
-        presetSpriteWorkItems,
+        spriteInterpolationWorkItems,
         wasmResults.sprite,
         timestamp
       )
     ) {
       hasActiveInterpolation = true;
     }
-  }
-
-  if (
-    fallbackSpriteWorkItems.length > 0 &&
-    applySpriteInterpolationEvaluations(fallbackSpriteWorkItems, [], timestamp)
-  ) {
-    hasActiveInterpolation = true;
   }
 
   for (const { sprite, touchedImages } of processedSprites) {

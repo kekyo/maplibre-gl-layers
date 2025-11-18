@@ -464,8 +464,8 @@ These are independent of sprite position interpolation and are controlled indivi
 - `offsetDeg` / `offsetMeters`: Offset direction and distance. Angle and distance can be controlled with separate timing and easing.
 - `opacity`: Fades automatically clipping values between 0.0 and 1.0. As the value approaches 0, rendering is suppressed, making it useful for LOD or highlight effects.
 
-Assign `durationMs` and an interpolation mode (`feedback`/`feedforward`) to each channel, along with an optional easing function.
-If no easing function is specified, simple linear interpolation is used.
+Assign `durationMs` and an interpolation mode (`feedback`/`feedforward`) to each channel, along with an optional easing preset (currently only `linear`).
+If no easing preset is specified, `linear` interpolation is used.
 Removing the setting or passing `null` immediately stops that channel.
 
 Below is an example applying interpolation to rotation, offset, and opacity:

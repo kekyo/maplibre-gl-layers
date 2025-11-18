@@ -1635,18 +1635,16 @@ describe('processInterpolationsInternal', () => {
     expect(sprite.interpolationState).not.toBeNull();
   });
 
-  it('falls back to local evaluation when no preset easing is available', () => {
+  it('routes distance interpolation through handlers when easing preset is linear', () => {
     const image = createImageState({
       imageHandle: 1,
       offset: { offsetMeters: 2, offsetDeg: 0 },
     });
-    const customEasing = (value: number): number => value;
     const { state: distanceState } = createDistanceInterpolationState({
       currentValue: 2,
       targetValue: 6,
-      options: { durationMs: 0, easing: customEasing },
+      options: { durationMs: 0 },
     });
-    expect(distanceState.easingPreset).toBeNull();
     image.offsetMetersInterpolationState = distanceState;
 
     const sprite = createSpriteState('sprite-2', [image]);
@@ -1667,8 +1665,8 @@ describe('processInterpolationsInternal', () => {
     );
 
     expect(result.hasActiveInterpolation).toBe(false);
-    expect(handlers.prepare).not.toHaveBeenCalled();
-    expect(handlers.evaluateDistance).not.toHaveBeenCalled();
+    expect(handlers.prepare).toHaveBeenCalledTimes(1);
+    expect(handlers.evaluateDistance).toHaveBeenCalledTimes(1);
     expect(image.offset.offsetMeters.current).toBe(6);
     expect(image.offsetMetersInterpolationState).toBeNull();
   });

@@ -92,12 +92,7 @@ export interface SpriteImageOriginLocation {
 /** Defines movement interpolation modes. */
 export type SpriteInterpolationMode = 'feedback' | 'feedforward';
 
-/** Easing function signature used to map interpolation progress. */
-export type EasingFunction = (progress: number) => number;
-
 export type SpriteEasingPresetName = 'linear';
-
-export type SpriteInterpolationEasing = EasingFunction | SpriteEasingPresetName;
 
 /** Options for interpolating values. */
 export interface SpriteInterpolationOptions {
@@ -105,8 +100,8 @@ export interface SpriteInterpolationOptions {
   mode?: SpriteInterpolationMode;
   /** Duration in milliseconds. */
   durationMs: number;
-  /** Easing mapping applied to progress values. Accepts preset names or custom functions. Defaults to linear. */
-  easing?: SpriteInterpolationEasing;
+  /** Easing preset name. Defaults to linear. */
+  easing?: SpriteEasingPresetName;
 }
 
 /** Interpolation configuration for rotateDeg and offsetDeg. */

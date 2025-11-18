@@ -1762,26 +1762,7 @@ export const processInterpolationsInternal = <TTag>(
   for (const sprite of sprites) {
     const state = sprite.interpolationState;
     if (state) {
-      if (state.easingPreset) {
-        spriteInterpolationWorkItems.push({ sprite, state });
-      } else {
-        const evaluation = evaluateInterpolation({
-          state,
-          timestamp,
-        });
-        if (state.startTimestamp < 0) {
-          state.startTimestamp = evaluation.effectiveStartTimestamp;
-        }
-        sprite.location.current = evaluation.location;
-        if (evaluation.completed) {
-          sprite.location.current = cloneSpriteLocation(state.to);
-          sprite.location.from = undefined;
-          sprite.location.to = undefined;
-          sprite.interpolationState = null;
-        } else {
-          hasActiveInterpolation = true;
-        }
-      }
+      spriteInterpolationWorkItems.push({ sprite, state });
     }
 
     sprite.images.forEach((orderMap) => {
@@ -1844,70 +1825,34 @@ export const processInterpolationsInternal = <TTag>(
     });
   }
 
-  const presetDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
-  const fallbackDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
-  if (distanceInterpolationWorkItems.length > 0) {
-    for (const item of distanceInterpolationWorkItems) {
-      if (item.state.easingPreset) {
-        presetDistanceWorkItems.push(item);
-      } else {
-        fallbackDistanceWorkItems.push(item);
-      }
-    }
-  }
-
-  const presetDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
-  const fallbackDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
-  if (degreeInterpolationWorkItems.length > 0) {
-    for (const item of degreeInterpolationWorkItems) {
-      if (item.state.easingPreset) {
-        presetDegreeWorkItems.push(item);
-      } else {
-        fallbackDegreeWorkItems.push(item);
-      }
-    }
-  }
-
-  const presetSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
-  const fallbackSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
-  if (spriteInterpolationWorkItems.length > 0) {
-    for (const item of spriteInterpolationWorkItems) {
-      if (item.state.easingPreset) {
-        presetSpriteWorkItems.push(item);
-      } else {
-        fallbackSpriteWorkItems.push(item);
-      }
-    }
-  }
-
   const distanceRequests =
-    presetDistanceWorkItems.length > 0
-      ? presetDistanceWorkItems.map(({ state }) => ({
+    distanceInterpolationWorkItems.length > 0
+      ? distanceInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
   const degreeRequests =
-    presetDegreeWorkItems.length > 0
-      ? presetDegreeWorkItems.map(({ state }) => ({
+    degreeInterpolationWorkItems.length > 0
+      ? degreeInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
   const spriteRequests =
-    presetSpriteWorkItems.length > 0
-      ? presetSpriteWorkItems.map(({ state }) => ({
+    spriteInterpolationWorkItems.length > 0
+      ? spriteInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
 
-  const hasPresetRequests =
+  const hasRequests =
     distanceRequests.length > 0 ||
     degreeRequests.length > 0 ||
     spriteRequests.length > 0;
 
-  if (hasPresetRequests) {
+  if (hasRequests) {
     evaluationHandlers.prepare?.({
       distance: distanceRequests,
       degree: degreeRequests,
@@ -1915,11 +1860,11 @@ export const processInterpolationsInternal = <TTag>(
     });
   }
 
-  if (presetDistanceWorkItems.length > 0) {
+  if (distanceRequests.length > 0) {
     const evaluations = evaluationHandlers.evaluateDistance(distanceRequests);
     if (
       applyDistanceInterpolationEvaluations(
-        presetDistanceWorkItems,
+        distanceInterpolationWorkItems,
         evaluations,
         timestamp
       )
@@ -1928,22 +1873,11 @@ export const processInterpolationsInternal = <TTag>(
     }
   }
 
-  if (
-    fallbackDistanceWorkItems.length > 0 &&
-    applyDistanceInterpolationEvaluations(
-      fallbackDistanceWorkItems,
-      [],
-      timestamp
-    )
-  ) {
-    hasActiveInterpolation = true;
-  }
-
-  if (presetDegreeWorkItems.length > 0) {
+  if (degreeRequests.length > 0) {
     const evaluations = evaluationHandlers.evaluateDegree(degreeRequests);
     if (
       applyDegreeInterpolationEvaluations(
-        presetDegreeWorkItems,
+        degreeInterpolationWorkItems,
         evaluations,
         timestamp
       )
@@ -1952,31 +1886,17 @@ export const processInterpolationsInternal = <TTag>(
     }
   }
 
-  if (
-    fallbackDegreeWorkItems.length > 0 &&
-    applyDegreeInterpolationEvaluations(fallbackDegreeWorkItems, [], timestamp)
-  ) {
-    hasActiveInterpolation = true;
-  }
-
-  if (presetSpriteWorkItems.length > 0) {
+  if (spriteRequests.length > 0) {
     const evaluations = evaluationHandlers.evaluateSprite(spriteRequests);
     if (
       applySpriteInterpolationEvaluations(
-        presetSpriteWorkItems,
+        spriteInterpolationWorkItems,
         evaluations,
         timestamp
       )
     ) {
       hasActiveInterpolation = true;
     }
-  }
-
-  if (
-    fallbackSpriteWorkItems.length > 0 &&
-    applySpriteInterpolationEvaluations(fallbackSpriteWorkItems, [], timestamp)
-  ) {
-    hasActiveInterpolation = true;
   }
 
   return {
@@ -2022,19 +1942,9 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
     };
   }
 
-  const presetOpacityWorkItems: DistanceInterpolationWorkItem[] = [];
-  const fallbackOpacityWorkItems: DistanceInterpolationWorkItem[] = [];
-  for (const item of opacityWorkItems) {
-    if (item.state.easingPreset) {
-      presetOpacityWorkItems.push(item);
-    } else {
-      fallbackOpacityWorkItems.push(item);
-    }
-  }
-
   const opacityRequests =
-    presetOpacityWorkItems.length > 0
-      ? presetOpacityWorkItems.map(({ state }) => ({
+    opacityWorkItems.length > 0
+      ? opacityWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
@@ -2050,28 +1960,17 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
 
   let hasActiveInterpolation = false;
 
-  if (presetOpacityWorkItems.length > 0) {
+  if (opacityRequests.length > 0) {
     const evaluations = evaluationHandlers.evaluateDistance(opacityRequests);
     if (
       applyDistanceInterpolationEvaluations(
-        presetOpacityWorkItems,
+        opacityWorkItems,
         evaluations,
         timestamp
       )
     ) {
       hasActiveInterpolation = true;
     }
-  }
-
-  if (
-    fallbackOpacityWorkItems.length > 0 &&
-    applyDistanceInterpolationEvaluations(
-      fallbackOpacityWorkItems,
-      [],
-      timestamp
-    )
-  ) {
-    hasActiveInterpolation = true;
   }
 
   return {
