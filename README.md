@@ -419,6 +419,7 @@ SpriteLayer can interpolate sprite positions to produce smooth animations. Consi
 - **Start and end locations** - Interpolation travels between these two points automatically.
 - **Duration** - The amount of time spent moving from start to end.
 - **Mode** - Either feedback or feed-forward.
+- **Curve** - Specified as an easing function type (described later).
 
 By default, when you update a sprite’s location it jumps immediately. Supplying interpolation options animates the movement instead.
 
@@ -464,8 +465,8 @@ These are independent of sprite position interpolation and are controlled indivi
 - `offsetDeg` / `offsetMeters`: Offset direction and distance. Angle and distance can be controlled with separate timing and easing.
 - `opacity`: Fades automatically clipping values between 0.0 and 1.0. As the value approaches 0, rendering is suppressed, making it useful for LOD or highlight effects.
 
-Assign `durationMs` and an interpolation mode (`feedback`/`feedforward`) to each channel, along with an optional easing preset (currently only `linear`).
-If no easing preset is specified, `linear` interpolation is used.
+Assign `durationMs` and an interpolation mode (`feedback`/`feedforward`) to each channel, along with an optional easing preset.
+
 Removing the setting or passing `null` immediately stops that channel.
 
 Below is an example applying interpolation to rotation, offset, and opacity:
@@ -504,6 +505,49 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
   opacity: 0,
   interpolation: {
     opacity: { durationMs: 800, },
+  },
+});
+```
+
+## Easing Functions
+
+Each interpolation specification can also specify an easing function for the interpolation curve.
+If no easing function is specified, `linear` is used. The available easing functions and their parameters are as follows:
+
+Available easing presets are:
+
+| Easing preset | Behavior | Adjustable parameters |
+|:---|:---|:---|
+| `linear` | Constant-speed interpolation. | (none) |
+| `ease` | General power ease for a gentle start/end. | `power` (3), `mode` (`in`\|`out`\|`in-out`, default: `in-out`) |
+| `exponential` | Exponential curve that accelerates/decelerates sharply. | `exponent` (5), `mode` (`in`\|`out`\|`in-out`, default: `in-out`) |
+| `quadratic` | Quadratic variant of the ease curve. | `mode` (`in`\|`out`\|`in-out`, default: `in-out`) |
+| `cubic` | Cubic variant of the ease curve. | `mode` (`in`\|`out`\|`in-out`, default: `in-out`) |
+| `sine` | Sinusoidal oscillation. | `mode` (`in`\|`out`\|`in-out`, default: `in-out`), `amplitude` (1, > 0) |
+| `bounce` | Bouncy curve that rebounds before settling. | `bounces` (3, > 0), `decay` (0.5, (0, 1]) |
+| `back` | Overshoots the target and returns. | `overshoot` (1.70158) |
+
+For example:
+
+```typescript
+// Example of specifying easing for interpolation
+spriteLayer.updateSpriteImage('vehicle-easing', 0, 0, {
+  // While rotating up to 90 degrees
+  rotateDeg: 90,
+  // Nearly transparent
+  opacity: 0.2,
+  interpolation: {
+    rotateDeg: {
+      durationMs: 600,
+      // Suddenly slowing down toward the end
+      easing: { type: 'bounce', bounces: 4, decay: 0.6 },
+    },
+    opacity: {
+      durationMs: 400,
+      mode: 'feedforward',
+      // Fade out gradually
+      easing: { type: 'ease', power: 2, mode: 'out' },
+    },
   },
 });
 ```
@@ -1095,7 +1139,6 @@ console.log(`Actual variant used: ${effectiveVariant}`);
 - Improves performance, reduces calculation costs
 - Improves minor interfaces
 - Adds route-oriented layer
-- Bug fixes
 
 ## Motivation
 
@@ -1106,6 +1149,12 @@ While this is beneficial in itself, it hinders dynamic handling of large numbers
 
 `maplibre-gl-layers` abandons immutability and unifies the API as imperative.
 Even if you wish to introduce immutability, you can easily achieve it by wrapping this API.
+
+## Discussions and Pull Requests
+
+For discussions, please refer to the [GitHub Discussions page](https://github.com/kekyo/maplibre-gl-layers/discussions). We have currently stopped issue-based discussions.
+
+Pull requests are welcome! Please submit them as diffs against the `develop` branch and squashed changes before send.
 
 ## License
 

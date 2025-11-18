@@ -83,8 +83,8 @@ In addition to images, you can render text alongside sprites and animate them to
 - Add multiple images and text to the same sprite, adjusting rotation, offset, scale, opacity, and more.
 - Animate sprite movement, rotation, and offsets with interpolation controls.
 - Control draw order via sub-layers and per-sprite ordering.
-- Bulk update API for many sprite states.
-- No package dependencies except MapLibre.
+- Fully imperative APIs. Updates with high-performance and extensible.
+- Accelerating computational processing with WASM and shaders.
 
 ### Requirements
 

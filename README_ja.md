@@ -442,7 +442,8 @@ SpriteLayerには、スプライトの移動を自動的に補間して、描画
 
 - 移動始点と終点: 補間はこの2点間を自動的に補間します。
 - 補間時間: 始点から終点に向かって補間を行う時、かかる時間を示します。
-- 補間の方法: フィードバックまたはフィードフォワード
+- 補間の方法: フィードバックまたはフィードフォワード。
+- 補間曲線: イージング関数種別として指定（後述）。
 
 通常、スプライトに新しい座標を指定した場合、画像は即座に指定した座標に移動します。しかし、移動にかかる時間・補間の方法を指定して新しい座標を与えると、これらのパラメータを使用して移動のアニメーションが行われます。
 
@@ -487,11 +488,10 @@ spriteLayer.updateSprite(SPRITE_ID, {
 `interpolation` は次のチャネルをサポートします。
 
 - `rotateDeg`: 画像の追加回転角。最短経路で補間され、完了後は最終角にスナップします。
-- `offsetDeg` / `offsetMeters`: オフセットの向きと距離。角度・距離を別々の時間やイージングプリセットで制御可能です。
+- `offsetDeg` / `offsetMeters`: オフセットの向きと距離。角度・距離を別々の時間で制御可能です。
 - `opacity`: 0.0〜1.0の値を自動的にクリップしながらフェードさせます。値が0に近づくと描画が抑制されるため、LODやハイライト演出に使えます。
 
-各チャネルに `durationMs` と補間モード（`feedback`/`feedforward`）、任意のイージングプリセット（現在は `linear` のみ）を与えます。
-イージングプリセットの指定が省略された場合は、`linear` となります。
+各チャネルに `durationMs` と補間モード（`feedback`/`feedforward`）、任意のイージング関数種別を与えます。
 設定を削除するか `null` を渡すとそのチャネルだけ即座に停止します。
 
 以下に、回転・オフセット・不透明度で補間を適用する例を示します:
@@ -530,6 +530,49 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
   opacity: 0,
   interpolation: {
     opacity: { durationMs: 800, },
+  },
+});
+```
+
+## イージング関数
+
+それぞれの補間指定には、イージング関数による補間曲線も指定できます。
+イージング関数の指定が省略された場合は `linear` となります。
+
+利用可能なイージング関数とパラメータは次のとおりです:
+
+| イージング関数名 | 挙動 | 指定可能なパラメータ |
+|:---|:---|:---|
+| `linear` | 一定速度で補間します。 | (なし) |
+| `ease` | 穏やかに加減速する累乗曲線。 | `power` (3), `mode` (`in`\|`out`\|`in-out`, 既定は `in-out`) |
+| `exponential` | 急峻に加減速する指数曲線。 | `exponent` (5), `mode` (`in`\|`out`\|`in-out`, 既定は `in-out`) |
+| `quadratic` | 2次曲線のイージング。 | `mode` (`in`\|`out`\|`in-out`, 既定は `in-out`) |
+| `cubic` | 3次曲線のイージング。 | `mode` (`in`\|`out`\|`in-out`, 既定は `in-out`) |
+| `sine` | サイン波状の揺れ。 | `mode` (`in`\|`out`\|`in-out`, 既定は `in-out`), `amplitude` (1, 0より大きい値) |
+| `bounce` | 反発させつつ減衰して収束します。 | `bounces` (3, 0より大きい値), `decay` (0.5, 0〜1の間) |
+| `back` | 目標を一度オーバーシュートして戻ります。 | `overshoot` (1.70158) |
+
+例えば以下のように指定します:
+
+```typescript
+// イージングを指定して補間する例
+spriteLayer.updateSpriteImage('vehicle-easing', 0, 0, {
+  // 90度まで回転しつつ
+  rotateDeg: 90,
+  // ほぼ透明に
+  opacity: 0.2,
+  interpolation: {
+    rotateDeg: {
+      durationMs: 600,
+      // 終盤で跳ねるように減速
+      easing: { type: 'bounce', bounces: 4, decay: 0.6 },
+    },
+    opacity: {
+      durationMs: 400,
+      mode: 'feedforward',
+      // 緩やかにフェードアウト
+      easing: { type: 'ease', power: 2, mode: 'out' },
+    },
   },
 });
 ```
@@ -1117,6 +1160,10 @@ MapLibreのFacilitiesは、いわゆるイミュータビリティ（不変）�
 それ自体は良いことなのですが、多量の座標点（スプライト）を動的に扱うには邪魔で、パフォーマンスが著しく低下します。
 
 `maplibre-gl-layers`ではイミュータビリティを捨てて、命令的なAPIで統一しています。イミュータビリティを導入したい場合でも、このAPIをラップして容易に実現できるでしょう。
+
+## ディスカッションとPR
+
+ディスカッションは、 [GitHubのディスカッションページ](https://github.com/kekyo/maplibre-gl-layers/discussions) を参照して下さい。現在はissueベースのディスカッションを取りやめています。
 
 ## ライセンス
 
