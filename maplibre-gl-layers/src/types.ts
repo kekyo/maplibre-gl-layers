@@ -92,7 +92,84 @@ export interface SpriteImageOriginLocation {
 /** Defines movement interpolation modes. */
 export type SpriteInterpolationMode = 'feedback' | 'feedforward';
 
-export type SpriteEasingPresetName = 'linear';
+export interface SpriteEasingLinear {
+  type: 'linear';
+}
+
+export interface SpriteEasingEaseIn {
+  type: 'ease-in';
+  /** Power applied to the easing curve. Defaults to 3. */
+  power?: number;
+}
+
+export interface SpriteEasingEaseOut {
+  type: 'ease-out';
+  /** Power applied to the easing curve. Defaults to 3. */
+  power?: number;
+}
+
+export interface SpriteEasingEaseInOut {
+  type: 'ease-in-out';
+  /** Power applied to the easing curve. Defaults to 3. */
+  power?: number;
+}
+
+export interface SpriteEasingExponential {
+  type: 'exponential';
+  /** Growth rate used by the exponential curve. Defaults to 5. */
+  exponent?: number;
+  /** Direction of the exponential curve. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
+}
+
+export interface SpriteEasingQuadratic {
+  type: 'quadratic';
+  /** Direction of the quadratic curve. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
+}
+
+export interface SpriteEasingCubic {
+  type: 'cubic';
+  /** Direction of the cubic curve. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
+}
+
+export interface SpriteEasingSine {
+  type: 'sine';
+  /** Direction of the sine ease. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
+  /** Multiplier applied to the sine amplitude. Defaults to 1. */
+  amplitude?: number;
+}
+
+export interface SpriteEasingBounce {
+  type: 'bounce';
+  /** Number of visible bounces before settling. Defaults to 3. */
+  bounces?: number;
+  /** Decay factor applied per bounce; range (0, 1]. Defaults to 0.5. */
+  decay?: number;
+}
+
+export interface SpriteEasingBack {
+  type: 'back';
+  /** Overshoot factor controlling how far past the target the curve goes. Defaults to 1.70158. */
+  overshoot?: number;
+}
+
+/** Union of supported easing definitions. */
+export type SpriteEasing =
+  | SpriteEasingLinear
+  | SpriteEasingEaseIn
+  | SpriteEasingEaseOut
+  | SpriteEasingEaseInOut
+  | SpriteEasingExponential
+  | SpriteEasingQuadratic
+  | SpriteEasingCubic
+  | SpriteEasingSine
+  | SpriteEasingBounce
+  | SpriteEasingBack;
+
+export type SpriteEasingType = SpriteEasing['type'];
 
 /** Options for interpolating values. */
 export interface SpriteInterpolationOptions {
@@ -100,8 +177,8 @@ export interface SpriteInterpolationOptions {
   mode?: SpriteInterpolationMode;
   /** Duration in milliseconds. */
   durationMs: number;
-  /** Easing preset name. Defaults to linear. */
-  easing?: SpriteEasingPresetName;
+  /** Easing definition. Defaults to linear. */
+  easing?: SpriteEasing;
 }
 
 /** Interpolation configuration for rotateDeg and offsetDeg. */
@@ -879,6 +956,7 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    * @param {boolean} enabled - When false, hit testing is skipped and the internal data structure is cleared.
    */
   readonly setHitTestEnabled: (enabled: boolean) => void;
+
   ////////////////////////////////////////////////////////////////////////////////
 
   /**

@@ -20,7 +20,7 @@ import type {
   SpriteInterpolationMode,
   SpriteScreenPoint,
   SpritePoint,
-  SpriteEasingPresetName,
+  SpriteEasing,
   SpriteImageLineAttributeState,
   SpriteImageState,
 } from './types';
@@ -488,7 +488,7 @@ export interface SpriteInterpolationState {
   readonly mode: SpriteInterpolationMode;
   readonly durationMs: number;
   readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasingPresetName;
+  readonly easingPreset: SpriteEasing;
   startTimestamp: number;
   readonly from: SpriteLocation;
   readonly to: SpriteLocation;
@@ -506,7 +506,7 @@ export interface SpriteInterpolationState {
 export interface DegreeInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasingPresetName;
+  readonly easingPreset: SpriteEasing;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;
@@ -516,7 +516,7 @@ export interface DegreeInterpolationState {
 export interface DistanceInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasingPresetName;
+  readonly easingPreset: SpriteEasing;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;

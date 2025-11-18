@@ -43,7 +43,8 @@ import type {
   SpriteLocation,
   SpritePoint,
   SpriteMode,
-  SpriteEasingPresetName,
+  SpriteEasing,
+  SpriteEasingType,
   SpriteImageOffset,
 } from '../types';
 import { prepareWasmHost, type BufferHolder, type WasmHost } from './wasmHost';
@@ -104,16 +105,84 @@ const WASM_CalculateSurfaceDepthKey_DISPLACEMENT_ELEMENT_COUNT =
 const WASM_CalculateSurfaceDepthKey_RESULT_ELEMENT_COUNT = 1;
 
 // Must match constants defined in wasm/param_layouts.h.
-const WASM_DISTANCE_INTERPOLATION_ITEM_LENGTH = 7;
+const WASM_DISTANCE_INTERPOLATION_ITEM_LENGTH = 10;
 const WASM_DISTANCE_INTERPOLATION_RESULT_LENGTH = 3;
-const WASM_DEGREE_INTERPOLATION_ITEM_LENGTH = 7;
+const WASM_DEGREE_INTERPOLATION_ITEM_LENGTH = 10;
 const WASM_DEGREE_INTERPOLATION_RESULT_LENGTH = 3;
-const WASM_SPRITE_INTERPOLATION_ITEM_LENGTH = 11;
+const WASM_SPRITE_INTERPOLATION_ITEM_LENGTH = 14;
 const WASM_SPRITE_INTERPOLATION_RESULT_LENGTH = 6;
 const WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
-const EASING_PRESET_IDS: Record<SpriteEasingPresetName, number> = {
+const EASING_PRESET_IDS: Record<SpriteEasingType, number> = {
   linear: 0,
+  'ease-in': 1,
+  'ease-out': 2,
+  'ease-in-out': 3,
+  exponential: 4,
+  quadratic: 5,
+  cubic: 6,
+  sine: 7,
+  bounce: 8,
+  back: 9,
+};
+
+type EncodedEasingPreset = {
+  readonly id: number;
+  readonly param0: number;
+  readonly param1: number;
+  readonly param2: number;
+};
+
+const encodeEasingPreset = (preset: SpriteEasing): EncodedEasingPreset => {
+  const id = EASING_PRESET_IDS[preset.type] ?? -1;
+  switch (preset.type) {
+    case 'ease-in':
+    case 'ease-out':
+    case 'ease-in-out':
+      return { id, param0: preset.power ?? 3, param1: 0, param2: 0 };
+    case 'exponential': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return {
+        id,
+        param0: preset.exponent ?? 5,
+        param1: mode,
+        param2: 0,
+      };
+    }
+    case 'quadratic': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return { id, param0: mode, param1: 0, param2: 0 };
+    }
+    case 'cubic': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return { id, param0: mode, param1: 0, param2: 0 };
+    }
+    case 'sine': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return {
+        id,
+        param0: mode,
+        param1: preset.amplitude ?? 1,
+        param2: 0,
+      };
+    }
+    case 'bounce':
+      return {
+        id,
+        param0: preset.bounces ?? 3,
+        param1: preset.decay ?? 0.5,
+        param2: 0,
+      };
+    case 'back':
+      return { id, param0: preset.overshoot ?? 1.70158, param1: 0, param2: 0 };
+    case 'linear':
+    default:
+      return { id, param0: 0, param1: 0, param2: 0 };
+  }
 };
 
 const MAX_MERCATOR_LATITUDE = 85.051129;
@@ -131,18 +200,14 @@ const resolveImageOffset = (
   };
 };
 
-const encodeEasingPresetId = (preset: SpriteEasingPresetName): number => {
-  return EASING_PRESET_IDS[preset] ?? -1;
-};
-
 const encodeDistanceInterpolationRequest = (
   buffer: Float64Array,
   cursor: number,
   request: DistanceInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const presetId = encodeEasingPresetId(state.easingPreset);
-  if (presetId < 0) {
+  const preset = encodeEasingPreset(state.easingPreset);
+  if (preset.id < 0) {
     throw new Error(
       'Distance interpolation request missing preset easing function.'
     );
@@ -153,7 +218,10 @@ const encodeDistanceInterpolationRequest = (
   buffer[cursor++] = state.finalValue;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
-  buffer[cursor++] = presetId;
+  buffer[cursor++] = preset.id;
+  buffer[cursor++] = preset.param0;
+  buffer[cursor++] = preset.param1;
+  buffer[cursor++] = preset.param2;
   return cursor;
 };
 
@@ -163,8 +231,8 @@ const encodeDegreeInterpolationRequest = (
   request: DegreeInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const presetId = encodeEasingPresetId(state.easingPreset);
-  if (presetId < 0) {
+  const preset = encodeEasingPreset(state.easingPreset);
+  if (preset.id < 0) {
     throw new Error(
       'Degree interpolation request missing preset easing function.'
     );
@@ -175,7 +243,10 @@ const encodeDegreeInterpolationRequest = (
   buffer[cursor++] = state.finalValue;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
-  buffer[cursor++] = presetId;
+  buffer[cursor++] = preset.id;
+  buffer[cursor++] = preset.param0;
+  buffer[cursor++] = preset.param1;
+  buffer[cursor++] = preset.param2;
   return cursor;
 };
 
@@ -185,8 +256,8 @@ const encodeSpriteInterpolationRequest = (
   request: SpriteInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const presetId = encodeEasingPresetId(state.easingPreset);
-  if (presetId < 0) {
+  const preset = encodeEasingPreset(state.easingPreset);
+  if (preset.id < 0) {
     throw new Error(
       'Sprite interpolation request missing preset easing function.'
     );
@@ -202,7 +273,10 @@ const encodeSpriteInterpolationRequest = (
   buffer[cursor++] = hasZ;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
-  buffer[cursor++] = presetId;
+  buffer[cursor++] = preset.id;
+  buffer[cursor++] = preset.param0;
+  buffer[cursor++] = preset.param1;
+  buffer[cursor++] = preset.param2;
   return cursor;
 };
 

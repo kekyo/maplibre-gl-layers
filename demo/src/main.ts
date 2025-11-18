@@ -34,6 +34,7 @@ import type {
   SpriteTextGlyphOptions,
   SpriteImageRegisterOptions,
   SpriteLayerInterface,
+  SpriteEasing,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -573,6 +574,79 @@ type PrimaryOpacityMode = 'show' | 'wave';
 /** Identifiers for the base maps available in the demo. */
 type BasemapId = 'osm' | 'carto';
 
+const EASING_OPTION_PRESETS = [
+  { key: 'off', label: 'OFF', easing: undefined },
+  {
+    key: 'linear',
+    label: 'Linear',
+    easing: { type: 'linear' } as SpriteEasing,
+  },
+  {
+    key: 'ease-in',
+    label: 'Ease In (pow 3)',
+    easing: { type: 'ease-in', power: 3 } as SpriteEasing,
+  },
+  {
+    key: 'ease-out',
+    label: 'Ease Out (pow 3)',
+    easing: { type: 'ease-out', power: 3 } as SpriteEasing,
+  },
+  {
+    key: 'ease-in-out',
+    label: 'Ease In-Out (pow 4)',
+    easing: { type: 'ease-in-out', power: 4 } as SpriteEasing,
+  },
+  {
+    key: 'exponential',
+    label: 'Exponential (steep)',
+    easing: {
+      type: 'exponential',
+      exponent: 6,
+      mode: 'in-out',
+    } as SpriteEasing,
+  },
+  {
+    key: 'quadratic',
+    label: 'Quadratic (in)',
+    easing: { type: 'quadratic', mode: 'in' } as SpriteEasing,
+  },
+  {
+    key: 'cubic',
+    label: 'Cubic (out)',
+    easing: { type: 'cubic', mode: 'out' } as SpriteEasing,
+  },
+  {
+    key: 'sine',
+    label: 'Sine (in-out, amp 1.2)',
+    easing: { type: 'sine', mode: 'in-out', amplitude: 1.2 } as SpriteEasing,
+  },
+  {
+    key: 'bounce',
+    label: 'Bounce (4x, 0.7)',
+    easing: { type: 'bounce', bounces: 4, decay: 0.7 } as SpriteEasing,
+  },
+  {
+    key: 'back',
+    label: 'Back (overshoot 2.2)',
+    easing: { type: 'back', overshoot: 2.2 } as SpriteEasing,
+  },
+] as const;
+
+type EasingOptionKey = (typeof EASING_OPTION_PRESETS)[number]['key'];
+
+const isEasingEnabled = (key: EasingOptionKey): boolean => key !== 'off';
+
+const resolveEasingOption = (key: EasingOptionKey): SpriteEasing | undefined =>
+  EASING_OPTION_PRESETS.find((entry) => entry.key === key)?.easing;
+
+const renderEasingOptions = (current: EasingOptionKey): string =>
+  EASING_OPTION_PRESETS.map(
+    (entry) =>
+      `<option value="${entry.key}"${
+        entry.key === current ? ' selected' : ''
+      }>${entry.label}</option>`
+  ).join('');
+
 /** Currently active animation mode, toggled from the control panel. */
 let currentAnimationMode: AnimationMode = 'random';
 /** Currently selected base map. */
@@ -581,8 +655,10 @@ let currentBasemapId: BasemapId = 'carto';
 let currentSpriteMode: SpriteMode = 'surface';
 /** Whether the sprite auto-rotates to face the direction of travel. */
 let isAutoRotationEnabled = true;
+/** Selected easing for movement interpolation. */
+let locationEasingKey: EasingOptionKey = 'linear';
 /** Enables movement interpolation; when false, updates happen per step only. */
-let isMovementInterpolationEnabled = true;
+let isMovementInterpolationEnabled = isEasingEnabled(locationEasingKey);
 let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
 let spriteScalingMode: 'standard' | 'unlimited' = 'unlimited';
 let showSpriteBorders = false;
@@ -590,11 +666,13 @@ let selectedSpriteId: string | null = null;
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
-let isRotateInterpolationEnabled = true;
+let rotateEasingKey: EasingOptionKey = 'exponential';
+let isRotateInterpolationEnabled = isEasingEnabled(rotateEasingKey);
 /** Interpolation mode applied to primary image rotation. */
 let rotateInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether opacity interpolation is active for primary images. */
-let isOpacityInterpolationEnabled = true;
+let opacityEasingKey: EasingOptionKey = 'linear';
+let isOpacityInterpolationEnabled = isEasingEnabled(opacityEasingKey);
 /** Opacity mode applied to primary images. */
 let primaryOpacityMode: PrimaryOpacityMode = 'show';
 /** Current index within the opacity wave sequence. */
@@ -614,9 +692,11 @@ let currentSecondaryImageType: SecondaryImageType = 'box';
 /** Whether leader lines are drawn for the secondary image. */
 let isSecondaryLeaderLineEnabled = false;
 /** Whether we interpolate the orbital angle of the secondary image. */
-let isOrbitDegInterpolationEnabled = true;
+let orbitDegEasingKey: EasingOptionKey = 'linear';
+let isOrbitDegInterpolationEnabled = isEasingEnabled(orbitDegEasingKey);
 /** Whether we interpolate the orbital distance of the secondary image. */
-let isOrbitMetersInterpolationEnabled = true;
+let orbitMetersEasingKey: EasingOptionKey = 'ease-in-out';
+let isOrbitMetersInterpolationEnabled = isEasingEnabled(orbitMetersEasingKey);
 /** Interpolation mode applied to orbital angle changes. */
 let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Interpolation mode applied to orbital distance changes. */
@@ -635,22 +715,12 @@ let updateSecondaryImageButtons: (() => void) | undefined;
 let updateSecondaryImageTypeButtons: (() => void) | undefined;
 /** UI updater for the secondary leader line toggle. */
 let updateSecondaryLeaderLineButton: (() => void) | undefined;
-/** UI updater for the rotate-interpolation toggle. */
-let updateRotateInterpolationButton: (() => void) | undefined;
 /** UI updater for the primary opacity buttons. */
 let updatePrimaryOpacityButtons: (() => void) | undefined;
-/** UI updater for the opacity interpolation toggle. */
-let updateOpacityInterpolationButton: (() => void) | undefined;
 /** UI updater for the pseudo LOD toggle. */
 let updatePseudoLodButton: (() => void) | undefined;
-/** UI updater for the orbit degree interpolation toggle. */
-let updateOrbitDegInterpolationButton: (() => void) | undefined;
-/** UI updater for the orbit meters interpolation toggle. */
-let updateOrbitMetersInterpolationButton: (() => void) | undefined;
 /** Rotation angle in degrees for secondary images. */
 let secondaryImageOrbitDegrees = 0;
-/** UI updater for the location interpolation toggle. */
-let updateLocationInterpolationButton: (() => void) | undefined;
 /** UI updater for the mouse-events monitoring toggle. */
 let updateMouseEventsButton: (() => void) | undefined;
 /** UI updater for the sprite border toggle. */
@@ -1049,18 +1119,17 @@ const createHud = () => {
           </button>
         </div>
         <div class="button-group">
-          <button
-            type="button"
-            class="toggle-button${isMovementInterpolationEnabled ? ' active' : ''}"
-            data-control="location-interpolation-toggle"
-            data-label="Move Interpolation"
-            data-active-text="On"
-            data-inactive-text="Off"
-            aria-pressed="${isMovementInterpolationEnabled}"
-            data-testid="toggle-location-interpolation"
+          <label class="range-label" for="location-easing-select">
+            Move Interpolation
+          </label>
+          <select
+            id="location-easing-select"
+            data-control="location-easing-select"
+            data-testid="select-location-easing"
+            aria-label="Move interpolation easing"
           >
-            Move Interpolation: ${isMovementInterpolationEnabled ? 'On' : 'Off'}
-          </button>
+            ${renderEasingOptions(locationEasingKey)}
+          </select>
         </div>
         <div>
           <button
@@ -1104,18 +1173,17 @@ const createHud = () => {
           </button>
         </div>
         <div>
-          <button
-            type="button"
-            class="toggle-button${isRotateInterpolationEnabled ? ' active' : ''}"
-            data-control="rotate-interpolation-toggle"
-            data-label="Rotate Interpolation"
-            data-active-text="On"
-            data-inactive-text="Off"
-            aria-pressed="${isRotateInterpolationEnabled}"
-            data-testid="toggle-rotate-interpolation"
+          <label class="range-label" for="rotate-easing-select">
+            Rotate Interpolation
+          </label>
+          <select
+            id="rotate-easing-select"
+            data-control="rotate-easing-select"
+            data-testid="select-rotate-easing"
+            aria-label="Rotate interpolation easing"
           >
-            Rotate Interpolation: ${isRotateInterpolationEnabled ? 'On' : 'Off'}
-          </button>
+            ${renderEasingOptions(rotateEasingKey)}
+          </select>
         </div>
         <div>
           <button
@@ -1169,20 +1237,17 @@ const createHud = () => {
           </button>
         </div>
         <div>
-          <button
-            type="button"
-            class="toggle-button${isOpacityInterpolationEnabled ? ' active' : ''}"
-            data-control="opacity-interpolation-toggle"
-            data-label="Opacity Interpolation"
-            data-active-text="On"
-            data-inactive-text="Off"
-            aria-pressed="${isOpacityInterpolationEnabled}"
-            data-testid="toggle-opacity-interpolation"
+          <label class="range-label" for="opacity-easing-select">
+            Opacity Interpolation
+          </label>
+          <select
+            id="opacity-easing-select"
+            data-control="opacity-easing-select"
+            data-testid="select-opacity-easing"
+            aria-label="Opacity interpolation easing"
           >
-            Opacity Interpolation: ${
-              isOpacityInterpolationEnabled ? 'On' : 'Off'
-            }
-          </button>
+            ${renderEasingOptions(opacityEasingKey)}
+          </select>
         </div>
         <div>
           <button
@@ -1286,20 +1351,17 @@ const createHud = () => {
           </button>
         </div>
         <div class="button-group">
-          <button
-            type="button"
-            class="toggle-button${isOrbitDegInterpolationEnabled ? ' active' : ''}"
-            data-control="orbit-deg-interpolation-toggle"
-            data-label="Orbit Degree Interpolation"
-            data-active-text="On"
-            data-inactive-text="Off"
-            aria-pressed="${isOrbitDegInterpolationEnabled}"
-            data-testid="toggle-orbit-deg-interpolation"
+          <label class="range-label" for="orbit-deg-easing-select">
+            Orbit Degree Interpolation
+          </label>
+          <select
+            id="orbit-deg-easing-select"
+            data-control="orbit-deg-easing-select"
+            data-testid="select-orbit-deg-easing"
+            aria-label="Orbit degree interpolation easing"
           >
-            Orbit Degree Interpolation: ${
-              isOrbitDegInterpolationEnabled ? 'On' : 'Off'
-            }
-          </button>
+            ${renderEasingOptions(orbitDegEasingKey)}
+          </select>
         </div>
         <!-- Orbit interpolation feedforward mode is ignored because it does not update values continuous.
         <div>
@@ -1328,20 +1390,17 @@ const createHud = () => {
         </div>
         -->
         <div class="button-group">
-          <button
-            type="button"
-            class="toggle-button${isOrbitMetersInterpolationEnabled ? ' active' : ''}"
-            data-control="orbit-meters-interpolation-toggle"
-            data-label="Orbit Meters Interpolation"
-            data-active-text="On"
-            data-inactive-text="Off"
-            aria-pressed="${isOrbitMetersInterpolationEnabled}"
-            data-testid="toggle-orbit-meters-interpolation"
+          <label class="range-label" for="orbit-meters-easing-select">
+            Orbit Meters Interpolation
+          </label>
+          <select
+            id="orbit-meters-easing-select"
+            data-control="orbit-meters-easing-select"
+            data-testid="select-orbit-meters-easing"
+            aria-label="Orbit meters interpolation easing"
           >
-            Orbit Meters Interpolation: ${
-              isOrbitMetersInterpolationEnabled ? 'On' : 'Off'
-            }
-          </button>
+            ${renderEasingOptions(orbitMetersEasingKey)}
+          </select>
         </div>
         <!-- Orbit interpolation feedforward mode is ignored because it does not update values continuous.
         <div>
@@ -2277,13 +2336,15 @@ const main = async () => {
      * Applies location interpolation settings across all sprites.
      */
     const applyLocationInterpolationToAll = () => {
+      const interpolation = isMovementInterpolationEnabled
+        ? {
+            mode: locationInterpolationMode,
+            durationMs: MOVEMENT_INTERVAL_MS,
+            easing: resolveEasingOption(locationEasingKey),
+          }
+        : null;
       spriteLayer.updateForEach((_sprite, update) => {
-        update.interpolation = isMovementInterpolationEnabled
-          ? {
-              mode: locationInterpolationMode,
-              durationMs: MOVEMENT_INTERVAL_MS,
-            }
-          : null;
+        update.interpolation = interpolation;
         return true;
       });
     };
@@ -2307,6 +2368,7 @@ const main = async () => {
                     rotateDeg: {
                       mode: rotateInterpolationMode,
                       durationMs: MOVEMENT_INTERVAL_MS,
+                      easing: resolveEasingOption(rotateEasingKey),
                     },
                   }
                 : { rotateDeg: null },
@@ -2335,12 +2397,14 @@ const main = async () => {
                   ? {
                       mode: orbitOffsetDegInterpolationMode,
                       durationMs: MOVEMENT_INTERVAL_MS,
+                      easing: resolveEasingOption(orbitDegEasingKey),
                     }
                   : null,
                 offsetMeters: isOrbitMetersInterpolationEnabled
                   ? {
                       mode: orbitOffsetMetersInterpolationMode,
                       durationMs: MOVEMENT_INTERVAL_MS,
+                      easing: resolveEasingOption(orbitMetersEasingKey),
                     }
                   : null,
               },
@@ -2359,6 +2423,7 @@ const main = async () => {
       const interpolation: SpriteImageInterpolationOptions = {
         opacity: {
           durationMs: MOVEMENT_INTERVAL_MS,
+          easing: resolveEasingOption(opacityEasingKey),
         },
       };
       const clearInterpolation: SpriteImageInterpolationOptions = {
@@ -2400,6 +2465,7 @@ const main = async () => {
                 imageUpdate.interpolation = {
                   opacity: {
                     durationMs: MOVEMENT_INTERVAL_MS,
+                    easing: resolveEasingOption(opacityEasingKey),
                   },
                 };
               }
@@ -2440,16 +2506,6 @@ const main = async () => {
         advancePrimaryOpacityWave(true);
       }
       updatePrimaryOpacityButtons?.();
-    };
-
-    const setOpacityInterpolationEnabled = (enabled: boolean): void => {
-      if (isOpacityInterpolationEnabled === enabled) {
-        return;
-      }
-      isOpacityInterpolationEnabled = enabled;
-      updateOpacityInterpolationButton?.();
-      applyOpacityInterpolationOptionsToAll();
-      applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
     };
 
     const resolveBorderColorForSprite = (spriteId: string): string | null => {
@@ -2899,6 +2955,7 @@ const main = async () => {
         rotateDeg: {
           mode: rotateInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
+          easing: resolveEasingOption(rotateEasingKey),
         },
       };
     };
@@ -2923,12 +2980,14 @@ const main = async () => {
         options.offsetDeg = {
           mode: orbitOffsetDegInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
+          easing: resolveEasingOption(orbitDegEasingKey),
         };
       }
       if (isOrbitMetersInterpolationEnabled) {
         options.offsetMeters = {
           mode: orbitOffsetMetersInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
+          easing: resolveEasingOption(orbitMetersEasingKey),
         };
       }
       return options;
@@ -3839,80 +3898,50 @@ const main = async () => {
         });
       }
 
-      const locationInterpolationToggleButton = queryFirst<HTMLButtonElement>(
-        '[data-control="location-interpolation-toggle"]'
+      const locationEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="location-easing-select"]'
       );
-      if (locationInterpolationToggleButton) {
-        updateLocationInterpolationButton = () => {
-          setToggleButtonState(
-            locationInterpolationToggleButton,
-            isMovementInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateLocationInterpolationButton();
-        locationInterpolationToggleButton.addEventListener('click', () => {
-          isMovementInterpolationEnabled = !isMovementInterpolationEnabled;
-          updateLocationInterpolationButton?.();
+      if (locationEasingSelect) {
+        locationEasingSelect.addEventListener('change', () => {
+          const nextKey = locationEasingSelect.value as EasingOptionKey;
+          locationEasingKey = nextKey;
+          isMovementInterpolationEnabled = isEasingEnabled(nextKey);
           applyLocationInterpolationToAll();
         });
       }
 
-      const orbitDegInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="orbit-deg-interpolation-toggle"]'
+      const orbitDegEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="orbit-deg-easing-select"]'
       );
-      if (orbitDegInterpolationButton) {
-        updateOrbitDegInterpolationButton = () => {
-          setToggleButtonState(
-            orbitDegInterpolationButton,
-            isOrbitDegInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateOrbitDegInterpolationButton();
-        orbitDegInterpolationButton.addEventListener('click', () => {
-          isOrbitDegInterpolationEnabled = !isOrbitDegInterpolationEnabled;
-          updateOrbitDegInterpolationButton?.();
+      if (orbitDegEasingSelect) {
+        orbitDegEasingSelect.addEventListener('change', () => {
+          const nextKey = orbitDegEasingSelect.value as EasingOptionKey;
+          orbitDegEasingKey = nextKey;
+          isOrbitDegInterpolationEnabled = isEasingEnabled(nextKey);
           applyOrbitInterpolationToAll();
         });
       }
 
-      const orbitMetersInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="orbit-meters-interpolation-toggle"]'
+      const orbitMetersEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="orbit-meters-easing-select"]'
       );
-      if (orbitMetersInterpolationButton) {
-        updateOrbitMetersInterpolationButton = () => {
-          setToggleButtonState(
-            orbitMetersInterpolationButton,
-            isOrbitMetersInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateOrbitMetersInterpolationButton();
-        orbitMetersInterpolationButton.addEventListener('click', () => {
-          isOrbitMetersInterpolationEnabled =
-            !isOrbitMetersInterpolationEnabled;
-          updateOrbitMetersInterpolationButton?.();
+      if (orbitMetersEasingSelect) {
+        orbitMetersEasingSelect.addEventListener('change', () => {
+          const nextKey = orbitMetersEasingSelect.value as EasingOptionKey;
+          orbitMetersEasingKey = nextKey;
+          isOrbitMetersInterpolationEnabled = isEasingEnabled(nextKey);
           applyOrbitInterpolationToAll();
         });
       }
 
-      const rotateInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="rotate-interpolation-toggle"]'
+      const rotateEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="rotate-easing-select"]'
       );
-      if (rotateInterpolationButton) {
-        // Rotation interpolation toggle exists only when the layer has enough space.
-        updateRotateInterpolationButton = () => {
-          setToggleButtonState(
-            rotateInterpolationButton,
-            isRotateInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateRotateInterpolationButton();
-        rotateInterpolationButton.addEventListener('click', () => {
-          isRotateInterpolationEnabled = !isRotateInterpolationEnabled;
-          updateRotateInterpolationButton?.();
+      if (rotateEasingSelect) {
+        rotateEasingSelect.addEventListener('change', () => {
+          const nextKey = rotateEasingSelect.value as EasingOptionKey;
+          rotateEasingKey = nextKey;
+          isRotateInterpolationEnabled = isEasingEnabled(nextKey);
           applyRotateInterpolationToAll(isRotateInterpolationEnabled);
         });
       }
@@ -3947,20 +3976,15 @@ const main = async () => {
         });
       }
 
-      const opacityInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="opacity-interpolation-toggle"]'
+      const opacityEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="opacity-easing-select"]'
       );
-      if (opacityInterpolationButton) {
-        updateOpacityInterpolationButton = () => {
-          setToggleButtonState(
-            opacityInterpolationButton,
-            isOpacityInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateOpacityInterpolationButton();
-        opacityInterpolationButton.addEventListener('click', () => {
-          setOpacityInterpolationEnabled(!isOpacityInterpolationEnabled);
+      if (opacityEasingSelect) {
+        opacityEasingSelect.addEventListener('change', () => {
+          const nextKey = opacityEasingSelect.value as EasingOptionKey;
+          opacityEasingKey = nextKey;
+          isOpacityInterpolationEnabled = isEasingEnabled(nextKey);
+          applyOpacityInterpolationOptionsToAll();
         });
       }
 
@@ -4354,6 +4378,7 @@ const main = async () => {
             ? {
                 mode: locationInterpolationMode,
                 durationMs: MOVEMENT_INTERVAL_MS,
+                easing: resolveEasingOption(locationEasingKey),
               }
             : null;
         }

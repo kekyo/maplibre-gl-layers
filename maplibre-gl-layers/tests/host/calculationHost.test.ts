@@ -1581,7 +1581,7 @@ describe('processInterpolationsInternal', () => {
     const { state: distanceState } = createDistanceInterpolationState({
       currentValue: 0,
       targetValue: 10,
-      options: { durationMs: 1000, easing: 'linear' },
+      options: { durationMs: 1000, easing: { type: 'linear' } },
     });
     image.offsetMetersInterpolationState = distanceState;
 
@@ -1590,7 +1590,7 @@ describe('processInterpolationsInternal', () => {
       currentLocation,
       lastCommandLocation: currentLocation,
       nextCommandLocation: { lng: 10, lat: 0 },
-      options: { durationMs: 1000, easing: 'linear' },
+      options: { durationMs: 1000, easing: { type: 'linear' } },
     });
     const sprite = createSpriteState('sprite-1', [image], {
       location: { current: currentLocation, from: undefined, to: undefined },

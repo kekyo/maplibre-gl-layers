@@ -364,13 +364,16 @@ const resolveSpriteImageLineAttribute = (
  * @param {SpriteInterpolationOptions} options - Options provided by the user.
  * @returns {SpriteInterpolationOptions} Cloned options object.
  */
+const cloneEasing = (easing?: SpriteInterpolationOptions['easing']) =>
+  easing ? { ...easing } : easing;
+
 const cloneInterpolationOptions = (
   options: SpriteInterpolationOptions
 ): SpriteInterpolationOptions => {
   return {
     mode: options.mode,
     durationMs: options.durationMs,
-    easing: options.easing,
+    easing: cloneEasing(options.easing),
   };
 };
 

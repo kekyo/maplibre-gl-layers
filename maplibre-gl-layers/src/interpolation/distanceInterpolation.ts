@@ -4,10 +4,7 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type {
-  SpriteEasingPresetName,
-  SpriteInterpolationOptions,
-} from '../types';
+import type { SpriteEasing, SpriteInterpolationOptions } from '../types';
 import { resolveEasing, type EasingFunction } from './easing';
 import type {
   DistanceInterpolationEvaluationParams,
@@ -29,7 +26,7 @@ const normalizeOptions = (
 ): {
   durationMs: number;
   easing: EasingFunction;
-  easingPreset: SpriteEasingPresetName;
+  easingPreset: SpriteEasing;
   mode: 'feedback' | 'feedforward';
 } => {
   const resolved = resolveEasing(options.easing);

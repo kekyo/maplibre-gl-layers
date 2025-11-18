@@ -32,11 +32,11 @@ constexpr std::size_t RESULT_ITEM_STRIDE =
 
 // Interpolation batch layouts mirrored in TypeScript (src/wasmCalculationHost.ts).
 constexpr std::size_t INTERPOLATION_BATCH_HEADER_LENGTH = 1;
-constexpr std::size_t DISTANCE_INTERPOLATION_ITEM_LENGTH = 7;
+constexpr std::size_t DISTANCE_INTERPOLATION_ITEM_LENGTH = 10;
 constexpr std::size_t DISTANCE_INTERPOLATION_RESULT_LENGTH = 3;
-constexpr std::size_t DEGREE_INTERPOLATION_ITEM_LENGTH = 7;
+constexpr std::size_t DEGREE_INTERPOLATION_ITEM_LENGTH = 10;
 constexpr std::size_t DEGREE_INTERPOLATION_RESULT_LENGTH = 3;
-constexpr std::size_t SPRITE_INTERPOLATION_ITEM_LENGTH = 11;
+constexpr std::size_t SPRITE_INTERPOLATION_ITEM_LENGTH = 14;
 constexpr std::size_t SPRITE_INTERPOLATION_RESULT_LENGTH = 6;
 constexpr std::size_t PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
