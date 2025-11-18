@@ -115,9 +115,7 @@ const WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
 const EASING_PRESET_IDS: Record<SpriteEasingType, number> = {
   linear: 0,
-  'ease-in': 1,
-  'ease-out': 2,
-  'ease-in-out': 3,
+  ease: 1,
   exponential: 4,
   quadratic: 5,
   cubic: 6,
@@ -136,10 +134,11 @@ type EncodedEasingPreset = {
 const encodeEasingPreset = (preset: SpriteEasing): EncodedEasingPreset => {
   const id = EASING_PRESET_IDS[preset.type] ?? -1;
   switch (preset.type) {
-    case 'ease-in':
-    case 'ease-out':
-    case 'ease-in-out':
-      return { id, param0: preset.power ?? 3, param1: 0, param2: 0 };
+    case 'ease': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return { id, param0: preset.power ?? 3, param1: mode, param2: 0 };
+    }
     case 'exponential': {
       const mode =
         preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;

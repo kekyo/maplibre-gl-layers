@@ -17,15 +17,23 @@ describe('resolveEasing', () => {
     expect(resolved.easing(0.25)).toBeCloseTo(0.25);
   });
 
-  it('applies custom power for ease-in/out/in-out', () => {
-    const easedIn = resolveEasing({ type: 'ease-in', power: 2 }).easing;
+  it('applies custom power and mode for ease', () => {
+    const easedIn = resolveEasing({
+      type: 'ease',
+      mode: 'in',
+      power: 2,
+    }).easing;
     expect(easedIn(0.5)).toBeCloseTo(0.25);
 
-    const easedOut = resolveEasing({ type: 'ease-out', power: 4 }).easing;
+    const easedOut = resolveEasing({
+      type: 'ease',
+      mode: 'out',
+      power: 4,
+    }).easing;
     expect(easedOut(0.5)).toBeCloseTo(1 - 0.5 ** 4);
 
     const easedBoth = resolveEasing({
-      type: 'ease-in-out',
+      type: 'ease',
       power: 2,
     }).easing;
     expect(easedBoth(0.25)).toBeCloseTo(0.125);

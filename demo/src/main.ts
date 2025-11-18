@@ -584,17 +584,17 @@ const EASING_OPTION_PRESETS = [
   {
     key: 'ease-in',
     label: 'Ease In (pow 3)',
-    easing: { type: 'ease-in', power: 3 } as SpriteEasing,
+    easing: { type: 'ease', mode: 'in', power: 3 } as SpriteEasing,
   },
   {
     key: 'ease-out',
     label: 'Ease Out (pow 3)',
-    easing: { type: 'ease-out', power: 3 } as SpriteEasing,
+    easing: { type: 'ease', mode: 'out', power: 3 } as SpriteEasing,
   },
   {
     key: 'ease-in-out',
     label: 'Ease In-Out (pow 4)',
-    easing: { type: 'ease-in-out', power: 4 } as SpriteEasing,
+    easing: { type: 'ease', mode: 'in-out', power: 4 } as SpriteEasing,
   },
   {
     key: 'exponential',

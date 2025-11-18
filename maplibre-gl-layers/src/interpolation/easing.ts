@@ -9,9 +9,7 @@ import type {
   SpriteEasingBack,
   SpriteEasingBounce,
   SpriteEasingCubic,
-  SpriteEasingEaseIn,
-  SpriteEasingEaseInOut,
-  SpriteEasingEaseOut,
+  SpriteEasingEase,
   SpriteEasingExponential,
   SpriteEasingLinear,
   SpriteEasingQuadratic,
@@ -19,6 +17,7 @@ import type {
 } from '../types';
 
 export type EasingFunction = (progress: number) => number;
+type EasingMode = 'in' | 'out' | 'in-out';
 
 const clampProgress = (progress: number): number => {
   if (!Number.isFinite(progress)) {
@@ -50,9 +49,9 @@ const normalizePower = (
 };
 
 const normalizeMode = (
-  mode: SpriteEasingExponential['mode'] | undefined,
-  fallback: NonNullable<SpriteEasingExponential['mode']>
-): NonNullable<SpriteEasingExponential['mode']> => {
+  mode: EasingMode | undefined,
+  fallback: EasingMode
+): EasingMode => {
   if (mode === 'in' || mode === 'out' || mode === 'in-out') {
     return mode;
   }
@@ -62,10 +61,7 @@ const normalizeMode = (
 const toBounded = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
 
-const createPowerEasing = (
-  power: number,
-  mode: 'in' | 'out' | 'in-out'
-): EasingFunction => {
+const createPowerEasing = (power: number, mode: EasingMode): EasingFunction => {
   switch (mode) {
     case 'in':
       return (progress: number) => {
@@ -91,7 +87,7 @@ const createPowerEasing = (
 
 const createExponentialEasing = (
   exponent: number,
-  mode: NonNullable<SpriteEasingExponential['mode']>
+  mode: EasingMode
 ): EasingFunction => {
   const safeExp = exponent > 0 ? exponent : 5;
   const denom = Math.expm1(safeExp);
@@ -131,7 +127,7 @@ const createExponentialEasing = (
 };
 
 const createSineEasing = (
-  mode: NonNullable<SpriteEasingSine['mode']>,
+  mode: EasingMode,
   amplitude: number
 ): EasingFunction => {
   const amp = amplitude;
@@ -196,20 +192,11 @@ export const resolveEasing = (easing?: SpriteEasing): ResolvedEasing => {
       const preset: SpriteEasingLinear = { type: 'linear' };
       return { easing: linearEasing, preset };
     }
-    case 'ease-in': {
+    case 'ease': {
       const power = normalizePower(easing.power, 3);
-      const preset: SpriteEasingEaseIn = { type: 'ease-in', power };
-      return { easing: createPowerEasing(power, 'in'), preset };
-    }
-    case 'ease-out': {
-      const power = normalizePower(easing.power, 3);
-      const preset: SpriteEasingEaseOut = { type: 'ease-out', power };
-      return { easing: createPowerEasing(power, 'out'), preset };
-    }
-    case 'ease-in-out': {
-      const power = normalizePower(easing.power, 3);
-      const preset: SpriteEasingEaseInOut = { type: 'ease-in-out', power };
-      return { easing: createPowerEasing(power, 'in-out'), preset };
+      const mode = normalizeMode(easing.mode, 'in-out');
+      const preset: SpriteEasingEase = { type: 'ease', power, mode };
+      return { easing: createPowerEasing(power, mode), preset };
     }
     case 'exponential': {
       const exponent = normalizePower(easing.exponent, 5);

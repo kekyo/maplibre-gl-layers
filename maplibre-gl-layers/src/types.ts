@@ -96,22 +96,12 @@ export interface SpriteEasingLinear {
   type: 'linear';
 }
 
-export interface SpriteEasingEaseIn {
-  type: 'ease-in';
+export interface SpriteEasingEase {
+  type: 'ease';
   /** Power applied to the easing curve. Defaults to 3. */
   power?: number;
-}
-
-export interface SpriteEasingEaseOut {
-  type: 'ease-out';
-  /** Power applied to the easing curve. Defaults to 3. */
-  power?: number;
-}
-
-export interface SpriteEasingEaseInOut {
-  type: 'ease-in-out';
-  /** Power applied to the easing curve. Defaults to 3. */
-  power?: number;
+  /** Direction of the easing curve. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
 }
 
 export interface SpriteEasingExponential {
@@ -159,9 +149,7 @@ export interface SpriteEasingBack {
 /** Union of supported easing definitions. */
 export type SpriteEasing =
   | SpriteEasingLinear
-  | SpriteEasingEaseIn
-  | SpriteEasingEaseOut
-  | SpriteEasingEaseInOut
+  | SpriteEasingEase
   | SpriteEasingExponential
   | SpriteEasingQuadratic
   | SpriteEasingCubic

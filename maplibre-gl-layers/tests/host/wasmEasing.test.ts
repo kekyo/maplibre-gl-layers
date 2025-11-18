@@ -28,7 +28,7 @@ describe('wasm easing presets', () => {
 
   it('applies ease-out easing with custom power on wasm', () => {
     const wasm = prepareWasmHost();
-    const preset = { type: 'ease-out', power: 2 } as const;
+    const preset = { type: 'ease', mode: 'out', power: 2 } as const;
     const state: DistanceInterpolationState = {
       durationMs: 1000,
       easing: (t) => t,

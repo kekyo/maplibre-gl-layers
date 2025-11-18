@@ -121,16 +121,15 @@ static inline double applyEasingPreset(double progress,
     case 0:  // linear
     default:
       return t;
-    case 1: {  // ease-in (power param0)
+    case 1: {  // ease (power param0, mode param1)
       const double power = param0 > 0.0 ? param0 : 3.0;
-      return std::pow(t, power);
-    }
-    case 2: {  // ease-out (power param0)
-      const double power = param0 > 0.0 ? param0 : 3.0;
-      return 1.0 - std::pow(1.0 - t, power);
-    }
-    case 3: {  // ease-in-out (power param0)
-      const double power = param0 > 0.0 ? param0 : 3.0;
+      const int mode = decodeMode(param1);
+      if (mode == 1) {
+        return std::pow(t, power);
+      }
+      if (mode == 2) {
+        return 1.0 - std::pow(1.0 - t, power);
+      }
       if (t < 0.5) {
         const double x = t * 2.0;
         return 0.5 * std::pow(x, power);
