@@ -108,7 +108,7 @@ const INITIAL_NUMBER_OF_SPRITES = isTestMode ? 1 : 1000;
 const MOVEMENT_INTERVAL_MS = 1000;
 
 /** Opacity waving sequence */
-const PRIMARY_OPACITY_SEQUENCE = [0.6, 0.3, 0.6, 1.0] as const;
+const PRIMARY_OPACITY_WAVING_SEQUENCE = [0.4, 1.0] as const;
 
 /** Minimum pseudo LOD distance in meters applied when enabled. */
 const PSEUDO_LOD_DISTANCE_MIN_METERS = 5000;
@@ -666,12 +666,12 @@ let selectedSpriteId: string | null = null;
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
-let rotateEasingKey: EasingOptionKey = 'exponential';
+let rotateEasingKey: EasingOptionKey = 'cubic';
 let isRotateInterpolationEnabled = isEasingEnabled(rotateEasingKey);
 /** Interpolation mode applied to primary image rotation. */
 let rotateInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether opacity interpolation is active for primary images. */
-let opacityEasingKey: EasingOptionKey = 'linear';
+let opacityEasingKey: EasingOptionKey = 'ease-in-out';
 let isOpacityInterpolationEnabled = isEasingEnabled(opacityEasingKey);
 /** Opacity mode applied to primary images. */
 let primaryOpacityMode: PrimaryOpacityMode = 'show';
@@ -695,7 +695,7 @@ let isSecondaryLeaderLineEnabled = false;
 let orbitDegEasingKey: EasingOptionKey = 'linear';
 let isOrbitDegInterpolationEnabled = isEasingEnabled(orbitDegEasingKey);
 /** Whether we interpolate the orbital distance of the secondary image. */
-let orbitMetersEasingKey: EasingOptionKey = 'ease-in-out';
+let orbitMetersEasingKey: EasingOptionKey = 'exponential';
 let isOrbitMetersInterpolationEnabled = isEasingEnabled(orbitMetersEasingKey);
 /** Interpolation mode applied to orbital angle changes. */
 let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
@@ -2487,10 +2487,10 @@ const main = async () => {
         return;
       }
       const value =
-        PRIMARY_OPACITY_SEQUENCE[primaryOpacityWaveIndex] ??
-        PRIMARY_OPACITY_SEQUENCE[0];
+        PRIMARY_OPACITY_WAVING_SEQUENCE[primaryOpacityWaveIndex] ??
+        PRIMARY_OPACITY_WAVING_SEQUENCE[0];
       primaryOpacityWaveIndex =
-        (primaryOpacityWaveIndex + 1) % PRIMARY_OPACITY_SEQUENCE.length;
+        (primaryOpacityWaveIndex + 1) % PRIMARY_OPACITY_WAVING_SEQUENCE.length;
       applyPrimaryOpacityValue(value, true);
     };
 
