@@ -281,6 +281,11 @@ export interface SpriteInit<TTag> {
   /** Initial location. */
   location: SpriteLocation;
   /**
+   * Marks the sprite as invalidated initially, causing interpolation parameters to be
+   * ignored until the first update drives the value again.
+   */
+  invalidate?: boolean;
+  /**
    * Pseudo LOD threshold for the sprite. When the camera distance exceeds this value,
    * all images attached to the sprite become invisible.
    */
@@ -318,13 +323,15 @@ export type SpriteInitCollection<TTag> =
  * Interpolated values.
  * @param T - Value type.
  */
-export interface InterpolatedValues<T> {
+export interface SpriteInterpolatedValues<T> {
   /** Current time value. */
   readonly current: T;
   /** Requested value. */
   readonly from: T | undefined;
   /** Will be reached value. */
   readonly to: T | undefined;
+  /** Marks whether the value was invalidated due to visibility changes. */
+  readonly invalidated: boolean | undefined;
 }
 
 /**
@@ -332,9 +339,9 @@ export interface InterpolatedValues<T> {
  */
 export interface SpriteImageInterpolatedOffset {
   /** Distance from the anchor in meters. */
-  readonly offsetMeters: InterpolatedValues<number>;
+  readonly offsetMeters: SpriteInterpolatedValues<number>;
   /** Heading describing the offset direction in degrees. */
-  readonly offsetDeg: InterpolatedValues<number>;
+  readonly offsetDeg: SpriteInterpolatedValues<number>;
 }
 
 /**
@@ -354,13 +361,13 @@ export interface SpriteImageLineAttributeState {
  * @property {number} order - Ordering slot within the sub-layer.
  * @property {string} imageId - Identifier of the registered image or glyph.
  * @property {SpriteMode} mode - Rendering mode applied to the image.
- * @property {InterpolatedValues<number>} opacity - Opacity multiplier applied when rendering, with interpolation metadata.
+ * @property {SpriteInterpolatedValues<number>} opacity - Opacity multiplier applied when rendering, with interpolation metadata.
  * @property {number} scale - Scale factor converting pixels to meters.
  * @property {Readonly<SpriteAnchor>} anchor - Anchor coordinates resolved for the image.
  * @property {SpriteImageInterpolatedOffset} offset - Offset applied relative to the anchor point, with interpolation metadata.
  * @property {SpriteImageLineAttributeState | undefined} border - Border line attribute.
  * @property {SpriteImageLineAttributeState | undefined} leaderLine - Leader line attribute.
- * @property {InterpolatedValues<number>} rotateDeg - Additional rotation in degrees plus interpolation metadata.
+ * @property {SpriteInterpolatedValues<number>} rotateDeg - Additional rotation in degrees plus interpolation metadata.
  * @property {boolean} autoRotation - Indicates whether auto-rotation is active.
  * @property {number} autoRotationMinDistanceMeters - Minimum travel distance before auto-rotation updates.
  * @property {number} resolvedBaseRotateDeg - Internal base rotation resolved for the current frame.
@@ -381,7 +388,7 @@ export interface SpriteImageState {
   /** Anchor coordinates resolved for the image. */
   readonly anchor: Readonly<SpriteAnchor>;
   /** Opacity multiplier applied when rendering. */
-  readonly opacity: InterpolatedValues<number>;
+  readonly opacity: SpriteInterpolatedValues<number>;
   /** Offset applied relative to the anchor point. */
   readonly offset: SpriteImageInterpolatedOffset;
   /** Optional border rendered around the image. */
@@ -392,7 +399,7 @@ export interface SpriteImageState {
    * Additional rotation in degrees with interpolation metadata.
    * `from`/`to` are `undefined` when no rotation animation is running.
    */
-  readonly rotateDeg: InterpolatedValues<number>;
+  readonly rotateDeg: SpriteInterpolatedValues<number>;
   /** Indicates whether auto-rotation is active. */
   readonly autoRotation: boolean;
   /** Minimum travel distance before auto-rotation updates. */
@@ -424,7 +431,7 @@ export interface SpriteCurrentState<TTag> {
    * Location information including current, source, and destination coordinates.
    * `from`/`to` are `undefined` when interpolation is inactive.
    */
-  readonly location: InterpolatedValues<Readonly<SpriteLocation>>;
+  readonly location: SpriteInterpolatedValues<Readonly<SpriteLocation>>;
   /** Current image states, grouped by sub-layer and order. */
   readonly images: ReadonlyMap<number, ReadonlyMap<number, SpriteImageState>>;
   /** Optional tag value; null indicates no tag. */

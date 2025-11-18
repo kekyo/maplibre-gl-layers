@@ -43,7 +43,7 @@ import type {
   PreparedDrawSpriteImageParams,
   RenderInterpolationParams,
   MutableSpriteImageInterpolatedOffset,
-  MutableInterpolatedValues,
+  MutableSpriteInterpolatedValues,
   ResolvedSpriteImageLineAttribute,
 } from '../../src/internalTypes';
 import {
@@ -107,7 +107,7 @@ type FakeProjectionHostOptions = {
 
 const isMutableInterpolatedValues = <TValue>(
   value: unknown
-): value is MutableInterpolatedValues<TValue> => {
+): value is MutableSpriteInterpolatedValues<TValue> => {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -226,8 +226,8 @@ const resolveMutableOffset = (
 };
 
 const resolveOpacityState = (
-  value?: MutableInterpolatedValues<number> | number
-): MutableInterpolatedValues<number> => {
+  value?: MutableSpriteInterpolatedValues<number> | number
+): MutableSpriteInterpolatedValues<number> => {
   if (isMutableInterpolatedValues<number>(value)) {
     const candidate = value;
     return {
@@ -250,9 +250,9 @@ type ImageStateOverrides = Partial<
     'opacity' | 'offset' | 'rotateDeg' | 'border' | 'borderPixelWidth'
   >
 > & {
-  opacity?: MutableInterpolatedValues<number> | number;
+  opacity?: MutableSpriteInterpolatedValues<number> | number;
   offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset;
-  rotateDeg?: MutableInterpolatedValues<number> | number;
+  rotateDeg?: MutableSpriteInterpolatedValues<number> | number;
   border?:
     | ResolvedSpriteImageLineAttribute
     | SpriteImageLineAttribute

@@ -267,11 +267,11 @@ export const applyAutoRotation = <T>(
 
 /**
  * Clones an optional origin location descriptor to avoid mutating caller state.
- * @param {SpriteImageOriginLocation} [origin] - Source origin definition.
+ * @param {SpriteImageOriginLocation} origin - Source origin definition.
  * @returns {SpriteImageOriginLocation | undefined} Deep clone of the origin or `undefined` when absent.
  */
 const cloneOriginLocation = (
-  origin?: SpriteImageOriginLocation
+  origin: SpriteImageOriginLocation | undefined
 ): SpriteImageOriginLocation | undefined => {
   if (!origin) {
     return undefined;
@@ -288,10 +288,10 @@ const cloneOriginLocation = (
 
 /**
  * Clones a sprite anchor, defaulting to the origin when none supplied.
- * @param {SpriteAnchor} [anchor] - Anchor to clone.
+ * @param {SpriteAnchor} anchor - Anchor to clone.
  * @returns {SpriteAnchor} Safe copy for mutation within the layer state.
  */
-const cloneAnchor = (anchor?: SpriteAnchor): SpriteAnchor => {
+const cloneAnchor = (anchor: SpriteAnchor | undefined): SpriteAnchor => {
   if (!anchor) {
     return { ...DEFAULT_ANCHOR };
   }
@@ -300,10 +300,12 @@ const cloneAnchor = (anchor?: SpriteAnchor): SpriteAnchor => {
 
 /**
  * Clones an image offset, applying defaults when missing.
- * @param {SpriteImageOffset} [offset] - Offset definition to copy.
+ * @param {SpriteImageOffset | undefined} offset - Offset definition to copy.
  * @returns {SpriteImageOffset} Cloned offset structure.
  */
-const cloneOffset = (offset?: SpriteImageOffset): SpriteImageOffset => {
+const cloneOffset = (
+  offset: SpriteImageOffset | undefined
+): SpriteImageOffset => {
   if (!offset) {
     return { ...DEFAULT_IMAGE_OFFSET };
   }
@@ -314,7 +316,8 @@ const cloneOffset = (offset?: SpriteImageOffset): SpriteImageOffset => {
 };
 
 const createInterpolatedOffsetState = (
-  offset?: SpriteImageOffset
+  offset: SpriteImageOffset | undefined,
+  invalidated: boolean
 ): MutableSpriteImageInterpolatedOffset => {
   const base = offset ? cloneOffset(offset) : { ...DEFAULT_IMAGE_OFFSET };
   return {
@@ -322,11 +325,13 @@ const createInterpolatedOffsetState = (
       current: base.offsetMeters,
       from: undefined,
       to: undefined,
+      invalidated,
     },
     offsetDeg: {
       current: base.offsetDeg,
       from: undefined,
       to: undefined,
+      invalidated,
     },
   };
 };
@@ -342,7 +347,7 @@ const resolveBorderWidthMeters = (width?: number): number => {
 };
 
 const resolveSpriteImageLineAttribute = (
-  border?: SpriteImageLineAttribute | null
+  border: SpriteImageLineAttribute | null | undefined
 ): ResolvedSpriteImageLineAttribute | undefined => {
   if (!border) {
     return undefined;
@@ -395,13 +400,15 @@ const sanitizeVisibilityDistanceMeters = (
  * @param {number} subLayer - Sub-layer index the image belongs to.
  * @param {number} order - Ordering slot within the sub-layer.
  * @param {SpriteOriginReference} originReference - Encode/Decode origin reference.
+ * @param {boolean} invalidated - Initially invalidate state.
  * @returns {InternalSpriteImageState} Normalized internal state ready for rendering.
  */
 export const createImageStateFromInit = (
   imageInit: SpriteImageDefinitionInit,
   subLayer: number,
   order: number,
-  originReference: SpriteOriginReference
+  originReference: SpriteOriginReference,
+  invalidated: boolean
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
@@ -423,6 +430,7 @@ export const createImageStateFromInit = (
       current: initialOpacity,
       from: undefined,
       to: undefined,
+      invalidated,
     },
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
@@ -430,11 +438,12 @@ export const createImageStateFromInit = (
     borderPixelWidth: 0,
     leaderLine: resolveSpriteImageLineAttribute(imageInit.leaderLine),
     leaderLinePixelWidth: 0,
-    offset: createInterpolatedOffsetState(initialOffset),
+    offset: createInterpolatedOffsetState(initialOffset, invalidated),
     rotateDeg: {
       current: initialRotateDeg,
       from: undefined,
       to: undefined,
+      invalidated,
     },
     rotationCommandDeg: initialRotateDeg,
     displayedRotateDeg: initialRotateDeg,
@@ -883,6 +892,86 @@ export const createSpriteLayer = <T = any>(
    */
   const sprites = new Map<string, InternalSpriteCurrentState<T>>();
 
+  const invalidateImageInterpolationState = <TTag>(
+    sprite: InternalSpriteCurrentState<TTag>,
+    image: InternalSpriteImageState
+  ): void => {
+    const baseRotation = image.resolvedBaseRotateDeg ?? 0;
+    const displayedRotation = Number.isFinite(image.displayedRotateDeg)
+      ? image.displayedRotateDeg
+      : baseRotation + image.rotationCommandDeg;
+    const manualRotation = normalizeAngleDeg(displayedRotation - baseRotation);
+
+    image.rotationInterpolationState = null;
+    image.offsetDegInterpolationState = null;
+    image.offsetMetersInterpolationState = null;
+    image.opacityInterpolationState = null;
+
+    image.rotateDeg.current = manualRotation;
+    image.rotateDeg.from = undefined;
+    image.rotateDeg.to = undefined;
+    image.rotateDeg.invalidated = true;
+
+    image.rotationCommandDeg = manualRotation;
+    image.displayedRotateDeg = displayedRotation;
+    image.lastCommandRotateDeg = normalizeAngleDeg(displayedRotation);
+
+    image.offset.offsetDeg.from = undefined;
+    image.offset.offsetDeg.to = undefined;
+    image.offset.offsetDeg.invalidated = true;
+    image.lastCommandOffsetDeg = image.offset.offsetDeg.current;
+
+    image.offset.offsetMeters.from = undefined;
+    image.offset.offsetMeters.to = undefined;
+    image.offset.offsetMeters.invalidated = true;
+    image.lastCommandOffsetMeters = image.offset.offsetMeters.current;
+
+    image.opacity.from = undefined;
+    image.opacity.to = undefined;
+    image.opacity.invalidated = true;
+    image.opacityTargetValue = image.opacity.current;
+    image.lastCommandOpacity = image.opacity.current;
+    image.lodLastCommandOpacity = image.opacity.current;
+
+    updateImageInterpolationDirtyState(sprite, image);
+  };
+
+  const invalidateSpriteInterpolationState = <TTag>(
+    sprite: InternalSpriteCurrentState<TTag>
+  ): void => {
+    sprite.location.from = undefined;
+    sprite.location.to = undefined;
+    sprite.location.invalidated = true;
+    sprite.interpolationState = null;
+    sprite.pendingInterpolationOptions = null;
+    sprite.lastCommandLocation = cloneSpriteLocation(sprite.location.current);
+    sprite.lastAutoRotationLocation = cloneSpriteLocation(
+      sprite.location.current
+    );
+    sprite.interpolationDirty = false;
+
+    sprite.images.forEach((orderMap) => {
+      orderMap.forEach((image) => {
+        invalidateImageInterpolationState(sprite, image);
+      });
+    });
+  };
+
+  const invalidateAllInterpolations = (): void => {
+    sprites.forEach((sprite) => invalidateSpriteInterpolationState(sprite));
+  };
+
+  const updateVisibilityState = (): void => {
+    const visible = resolveDocumentVisibility();
+    if (visible === mapVisible) {
+      return;
+    }
+    mapVisible = visible;
+    if (!visible) {
+      invalidateAllInterpolations();
+    }
+  };
+
   /**
    * Updates image handle for every sprite image referencing the specified identifier.
    * @param imageId Image identifier.
@@ -1073,6 +1162,19 @@ export const createSpriteLayer = <T = any>(
 
   let canvasElement: HTMLCanvasElement | undefined;
   const inputListenerDisposers: Array<() => void> = [];
+  let mapVisible =
+    typeof document !== 'undefined'
+      ? document.visibilityState !== 'hidden'
+      : true;
+
+  const resolveDocumentVisibility = (): boolean => {
+    const doc =
+      canvasElement?.ownerDocument ??
+      (typeof document !== 'undefined' ? document : undefined);
+    return doc ? doc.visibilityState !== 'hidden' : true;
+  };
+
+  const isLayerVisible = (): boolean => mapVisible;
 
   /**
    * Determines if any listeners are registered for the specified event.
@@ -1482,6 +1584,24 @@ export const createSpriteLayer = <T = any>(
         registerDisposer(() => {
           canvasElement?.removeEventListener('mousemove', mouseMoveListener);
         });
+      }
+
+      const visibilityTarget =
+        canvasElement.ownerDocument ??
+        (typeof document !== 'undefined' ? document : undefined);
+      if (visibilityTarget) {
+        const visibilityListener = () => updateVisibilityState();
+        visibilityTarget.addEventListener(
+          'visibilitychange',
+          visibilityListener
+        );
+        registerDisposer(() => {
+          visibilityTarget.removeEventListener(
+            'visibilitychange',
+            visibilityListener
+          );
+        });
+        updateVisibilityState();
       }
     }
 
@@ -2184,6 +2304,8 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    const initialInvalidated = (init.invalidate ?? false) || !isLayerVisible();
+
     // Build internal image state map.
     const imagesInit = init.images ?? [];
     // Each initial image definition will be normalized into internal state maps below.
@@ -2193,7 +2315,8 @@ export const createSpriteLayer = <T = any>(
         imageInit,
         imageInit.subLayer,
         imageInit.order,
-        originReference
+        originReference,
+        initialInvalidated
       );
       state.imageHandle = resolveImageHandle(state.imageId);
       let inner = images.get(imageInit.subLayer);
@@ -2275,6 +2398,7 @@ export const createSpriteLayer = <T = any>(
         current: currentLocation,
         from: undefined,
         to: undefined,
+        invalidated: initialInvalidated,
       },
       images,
       // Tags default to null to simplify downstream comparisons.
@@ -2534,7 +2658,8 @@ export const createSpriteLayer = <T = any>(
       imageInit,
       subLayer,
       order,
-      originReference
+      originReference,
+      !isLayerVisible() || sprite.location.invalidated === true
     );
     state.imageHandle = resolveImageHandle(state.imageId);
 
@@ -2656,7 +2781,9 @@ export const createSpriteLayer = <T = any>(
     const state = getImageState(sprite, subLayer, order);
     // Ignore updates targeting image slots that do not exist.
     if (!state) return false;
-    const interpolationAllowed = interpolationCalculationEnabled;
+    const mapCurrentlyVisible = isLayerVisible();
+    const interpolationAllowed =
+      interpolationCalculationEnabled && mapCurrentlyVisible;
 
     // Apply updates for each provided attribute.
     if (imageUpdate.imageId !== undefined) {
@@ -2676,7 +2803,9 @@ export const createSpriteLayer = <T = any>(
           ? null
           : cloneInterpolationOptions(opacityInterpolationOption);
     }
-    const resolvedOpacityInterpolationOption = interpolationAllowed
+    const allowOpacityInterpolation =
+      interpolationAllowed && !state.opacity.invalidated;
+    const resolvedOpacityInterpolationOption = allowOpacityInterpolation
       ? opacityInterpolationOption === undefined
         ? (state.opacityInterpolationOptions ?? null)
         : opacityInterpolationOption
@@ -2690,6 +2819,9 @@ export const createSpriteLayer = <T = any>(
       );
       state.opacityTargetValue = state.lastCommandOpacity;
       state.lodLastCommandOpacity = state.lastCommandOpacity;
+      if (mapCurrentlyVisible && state.opacity.invalidated) {
+        state.opacity.invalidated = false;
+      }
     } else if (opacityInterpolationOption === null) {
       clearOpacityInterpolation(state);
     }
@@ -2717,28 +2849,40 @@ export const createSpriteLayer = <T = any>(
       state.anchor = cloneAnchor(imageUpdate.anchor);
     }
     // Optional interpolation payloads allow independent control over offset and rotation animations.
-    const offsetDegInterpolationOption = interpolationAllowed
+    const allowOffsetDegInterpolation =
+      interpolationAllowed && !state.offset.offsetDeg.invalidated;
+    const allowOffsetMetersInterpolation =
+      interpolationAllowed && !state.offset.offsetMeters.invalidated;
+    const offsetDegInterpolationOption = allowOffsetDegInterpolation
       ? interpolationOptions?.offsetDeg
       : null;
-    const offsetMetersInterpolationOption = interpolationAllowed
+    const offsetMetersInterpolationOption = allowOffsetMetersInterpolation
       ? interpolationOptions?.offsetMeters
       : null;
     // Pull out rotateDeg interpolation hints when the payload includes them.
-    const rotateInterpolationOption = interpolationOptions?.rotateDeg;
+    const allowRotateInterpolation =
+      interpolationAllowed && !state.rotateDeg.invalidated;
+    const rotateInterpolationOption = allowRotateInterpolation
+      ? interpolationOptions?.rotateDeg
+      : null;
     let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
     if (imageUpdate.offset !== undefined) {
       const clonedOffset = cloneOffset(imageUpdate.offset);
-      applyOffsetUpdate(
-        state,
-        clonedOffset,
-        interpolationAllowed
-          ? {
-              deg: offsetDegInterpolationOption,
-              meters: offsetMetersInterpolationOption,
-            }
-          : undefined
-      );
+      applyOffsetUpdate(state, clonedOffset, {
+        deg: allowOffsetDegInterpolation ? offsetDegInterpolationOption : null,
+        meters: allowOffsetMetersInterpolation
+          ? offsetMetersInterpolationOption
+          : null,
+      });
+      if (mapCurrentlyVisible) {
+        if (state.offset.offsetDeg.invalidated) {
+          state.offset.offsetDeg.invalidated = false;
+        }
+        if (state.offset.offsetMeters.invalidated) {
+          state.offset.offsetMeters.invalidated = false;
+        }
+      }
     } else {
       if (offsetDegInterpolationOption === null) {
         // Explicit null clears any running angular interpolation.
@@ -2817,6 +2961,9 @@ export const createSpriteLayer = <T = any>(
             : undefined
           : null
       );
+      if (mapCurrentlyVisible && state.rotateDeg.invalidated) {
+        state.rotateDeg.invalidated = false;
+      }
     }
 
     updateImageInterpolationDirtyState(sprite, state);
@@ -3020,7 +3167,11 @@ export const createSpriteLayer = <T = any>(
       | null
       | undefined = undefined;
     let interpolationExplicitlySpecified = false;
-    const interpolationAllowed = interpolationCalculationEnabled;
+    const mapCurrentlyVisible = isLayerVisible();
+    const interpolationAllowed =
+      interpolationCalculationEnabled &&
+      mapCurrentlyVisible &&
+      !sprite.location.invalidated;
 
     if (update.interpolation !== undefined) {
       interpolationExplicitlySpecified = true;
@@ -3119,6 +3270,10 @@ export const createSpriteLayer = <T = any>(
         sprite.interpolationState = null;
         sprite.location.from = undefined;
         sprite.location.to = undefined;
+      }
+
+      if (mapCurrentlyVisible && sprite.location.invalidated) {
+        sprite.location.invalidated = false;
       }
 
       sprite.pendingInterpolationOptions = null;

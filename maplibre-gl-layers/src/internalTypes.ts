@@ -23,6 +23,8 @@ import type {
   SpriteEasing,
   SpriteImageLineAttributeState,
   SpriteImageState,
+  SpriteInterpolatedValues,
+  SpriteImageInterpolatedOffset,
 } from './types';
 import type { EasingFunction } from './interpolation/easing';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
@@ -213,18 +215,21 @@ export interface SpriteMercatorCoordinate {
 }
 
 /**
- * Mutable counterpart to {@link InterpolatedValues}, used internally so SpriteLayer
+ * Mutable counterpart to {@link SpriteInterpolatedValues}, used internally so SpriteLayer
  * can reuse object references while still exposing readonly snapshots publicly.
  */
-export interface MutableInterpolatedValues<T> {
+export interface MutableSpriteInterpolatedValues<T>
+  extends SpriteInterpolatedValues<T> {
   current: T;
   from: T | undefined;
   to: T | undefined;
+  invalidated: boolean | undefined;
 }
 
-export interface MutableSpriteImageInterpolatedOffset {
-  offsetMeters: MutableInterpolatedValues<number>;
-  offsetDeg: MutableInterpolatedValues<number>;
+export interface MutableSpriteImageInterpolatedOffset
+  extends SpriteImageInterpolatedOffset {
+  offsetMeters: MutableSpriteInterpolatedValues<number>;
+  offsetDeg: MutableSpriteInterpolatedValues<number>;
 }
 
 export interface Releasable {
@@ -684,7 +689,7 @@ export interface InternalSpriteImageState extends SpriteImageState {
   imageId: string;
   imageHandle: number;
   mode: SpriteMode;
-  opacity: MutableInterpolatedValues<number>;
+  opacity: MutableSpriteInterpolatedValues<number>;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
   border: ResolvedSpriteImageLineAttribute | undefined;
@@ -692,7 +697,7 @@ export interface InternalSpriteImageState extends SpriteImageState {
   leaderLine: ResolvedSpriteImageLineAttribute | undefined;
   leaderLinePixelWidth: number;
   offset: MutableSpriteImageInterpolatedOffset;
-  rotateDeg: MutableInterpolatedValues<number>;
+  rotateDeg: MutableSpriteInterpolatedValues<number>;
   rotationCommandDeg: number;
   displayedRotateDeg: number;
   autoRotation: boolean;
@@ -731,7 +736,7 @@ export interface InternalSpriteCurrentState<TTag> {
   handle: IdHandle;
   isEnabled: boolean;
   visibilityDistanceMeters?: number;
-  location: MutableInterpolatedValues<Readonly<SpriteLocation>>;
+  location: MutableSpriteInterpolatedValues<Readonly<SpriteLocation>>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
   interpolationState: InternalSpriteInterpolationState | null;
