@@ -11,13 +11,29 @@
  * buffers, and helper utilities for compiling and linking WebGL shader programs.
  */
 
-import type { SpriteAnchor, SpriteScreenPoint } from '../types';
 import type {
+  SpriteAnchor,
+  SpriteScreenPoint,
+  SpriteTextureFilteringOptions,
+  SpriteTextureMagFilter,
+  SpriteTextureMinFilter,
+} from '../types';
+import type {
+  ImageHandleBufferController,
   PreparedDrawSpriteImageParams,
+  RegisteredImage,
   Releasable,
+  ResolvedTextureFilteringOptions,
   SurfaceShaderInputs,
 } from '../internalTypes';
+import type {
+  AtlasManager,
+  AtlasOperationQueue,
+  AtlasPageState,
+} from './atlas';
 import { DEG2RAD, UV_CORNERS } from '../const';
+import type { RgbaColor } from '../utils/color';
+import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from '../default';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -36,10 +52,20 @@ export const UV_OFFSET = POSITION_COMPONENT_COUNT * FLOAT_SIZE;
 /** Vertex count required to draw one sprite as two triangles. */
 export const QUAD_VERTEX_COUNT = 6;
 
+/** Initial vertex data for a unit quad. */
+export const INITIAL_QUAD_VERTICES = new Float32Array(
+  QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
+);
+
+/** Scratch buffer rewritten for each draw call. */
+export const QUAD_VERTEX_SCRATCH = new Float32Array(
+  QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
+);
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 /** Shared vertex shader that converts screen-space vertices when requested. */
-export const VERTEX_SHADER_SOURCE = `
+const VERTEX_SHADER_SOURCE = `
 attribute vec4 a_position;
 attribute vec2 a_uv;
 uniform vec2 u_screenToClipScale;
@@ -94,7 +120,7 @@ void main() {
 ` as const;
 
 /** Fragment shader that applies texture sampling and opacity. */
-export const FRAGMENT_SHADER_SOURCE = `
+const FRAGMENT_SHADER_SOURCE = `
 precision mediump float;
 uniform sampler2D u_texture;
 uniform float u_opacity;
@@ -105,18 +131,8 @@ void main() {
 }
 ` as const;
 
-/** Initial vertex data for a unit quad. */
-export const INITIAL_QUAD_VERTICES = new Float32Array(
-  QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
-);
-
-/** Scratch buffer rewritten for each draw call. */
-export const QUAD_VERTEX_SCRATCH = new Float32Array(
-  QUAD_VERTEX_COUNT * VERTEX_COMPONENT_COUNT
-);
-
-/** Vertex shader for debug hit-test outline rendering using screen coordinates. */
-export const DEBUG_OUTLINE_VERTEX_SHADER_SOURCE = `
+/** Vertex shader for sprite-border outline rendering using screen coordinates. */
+const BORDER_OUTLINE_VERTEX_SHADER_SOURCE = `
 attribute vec4 a_position;
 uniform vec2 u_screenToClipScale;
 uniform vec2 u_screenToClipOffset;
@@ -127,8 +143,8 @@ void main() {
 }
 ` as const;
 
-/** Fragment shader emitting a solid color for debug outlines. */
-export const DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE = `
+/** Fragment shader emitting a solid color for border outlines. */
+const BORDER_OUTLINE_FRAGMENT_SHADER_SOURCE = `
 precision mediump float;
 uniform vec4 u_color;
 void main() {
@@ -136,23 +152,36 @@ void main() {
 }
 ` as const;
 
-/** Number of vertices required to outline a quad using LINE_LOOP. */
-export const DEBUG_OUTLINE_VERTEX_COUNT = 4;
+/** Maximum vertex count when drawing a quad outline as four edge quads (two triangles per edge). */
+const BORDER_OUTLINE_MAX_VERTEX_COUNT =
+  4 /* edges */ * 2 /* triangles */ * 3; /* vertices */
+
 /** Components per debug outline vertex (clipPosition.xyzw). */
-export const DEBUG_OUTLINE_POSITION_COMPONENT_COUNT = 4;
+const BORDER_OUTLINE_POSITION_COMPONENT_COUNT = 4;
+
 /** Stride in bytes for debug outline vertices. */
-export const DEBUG_OUTLINE_VERTEX_STRIDE =
-  DEBUG_OUTLINE_POSITION_COMPONENT_COUNT * FLOAT_SIZE;
+const BORDER_OUTLINE_VERTEX_STRIDE =
+  BORDER_OUTLINE_POSITION_COMPONENT_COUNT * FLOAT_SIZE;
+
 /** Scratch buffer reused when emitting debug outlines. */
-export const DEBUG_OUTLINE_VERTEX_SCRATCH = new Float32Array(
-  DEBUG_OUTLINE_VERTEX_COUNT * DEBUG_OUTLINE_POSITION_COMPONENT_COUNT
+const BORDER_OUTLINE_VERTEX_SCRATCH = new Float32Array(
+  BORDER_OUTLINE_MAX_VERTEX_COUNT * BORDER_OUTLINE_POSITION_COMPONENT_COUNT
 );
-/** Solid red RGBA color used for debug outlines. */
-export const DEBUG_OUTLINE_COLOR: readonly [number, number, number, number] = [
-  1.0, 0.0, 0.0, 1.0,
-];
+
+/** Components per leader line vertex (clipPosition.xyzw). */
+const LEADER_LINE_POSITION_COMPONENT_COUNT = 4;
+/** Vertex count when drawing a single thick line as two triangles. */
+const LEADER_LINE_VERTEX_COUNT = 6;
+/** Stride in bytes for leader line vertices. */
+const LEADER_LINE_VERTEX_STRIDE =
+  LEADER_LINE_POSITION_COMPONENT_COUNT * FLOAT_SIZE;
+/** Scratch buffer reused when emitting leader line quads. */
+const LEADER_LINE_VERTEX_SCRATCH = new Float32Array(
+  LEADER_LINE_VERTEX_COUNT * LEADER_LINE_POSITION_COMPONENT_COUNT
+);
+
 /** Corner traversal order used when outlining a quad without crossing diagonals. */
-export const DEBUG_OUTLINE_CORNER_ORDER = [0, 1, 3, 2] as const;
+export const BORDER_OUTLINE_CORNER_ORDER = [0, 1, 3, 2] as const;
 
 /** Base corner definitions used when expanding billboards in shaders. */
 export const BILLBOARD_BASE_CORNERS: ReadonlyArray<readonly [number, number]> =
@@ -763,7 +792,7 @@ export const createSpriteDrawProgram = <TTag>(
   };
 };
 
-export interface DebugOutlineRenderer extends Releasable {
+export interface BorderOutlineRenderer extends Releasable {
   begin(
     screenToClipScaleX: number,
     screenToClipScaleY: number,
@@ -776,18 +805,20 @@ export interface DebugOutlineRenderer extends Releasable {
       SpriteScreenPoint,
       SpriteScreenPoint,
       SpriteScreenPoint,
-    ]
+    ],
+    color: RgbaColor,
+    lineWidth: number
   ): void;
   end(): void;
 }
 
-export const createDebugOutlineRenderer = (
+export const createBorderOutlineRenderer = (
   glContext: WebGLRenderingContext
-): DebugOutlineRenderer => {
+): BorderOutlineRenderer => {
   const program = createShaderProgram(
     glContext,
-    DEBUG_OUTLINE_VERTEX_SHADER_SOURCE,
-    DEBUG_OUTLINE_FRAGMENT_SHADER_SOURCE
+    BORDER_OUTLINE_VERTEX_SHADER_SOURCE,
+    BORDER_OUTLINE_FRAGMENT_SHADER_SOURCE
   );
 
   const attribPositionLocation = glContext.getAttribLocation(
@@ -796,7 +827,7 @@ export const createDebugOutlineRenderer = (
   );
   if (attribPositionLocation === -1) {
     glContext.deleteProgram(program);
-    throw new Error('Failed to acquire debug attribute location.');
+    throw new Error('Failed to acquire outline attribute location.');
   }
 
   const uniformColorLocation = glContext.getUniformLocation(program, 'u_color');
@@ -814,18 +845,18 @@ export const createDebugOutlineRenderer = (
     !uniformScreenToClipOffsetLocation
   ) {
     glContext.deleteProgram(program);
-    throw new Error('Failed to acquire debug uniforms.');
+    throw new Error('Failed to acquire outline uniforms.');
   }
 
   const vertexBuffer = glContext.createBuffer();
   if (!vertexBuffer) {
     glContext.deleteProgram(program);
-    throw new Error('Failed to create debug vertex buffer.');
+    throw new Error('Failed to create outline vertex buffer.');
   }
   glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
   glContext.bufferData(
     glContext.ARRAY_BUFFER,
-    DEBUG_OUTLINE_VERTEX_SCRATCH,
+    BORDER_OUTLINE_VERTEX_SCRATCH,
     glContext.DYNAMIC_DRAW
   );
   glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
@@ -843,21 +874,14 @@ export const createDebugOutlineRenderer = (
     glContext.enableVertexAttribArray(attribPositionLocation);
     glContext.vertexAttribPointer(
       attribPositionLocation,
-      DEBUG_OUTLINE_POSITION_COMPONENT_COUNT,
+      BORDER_OUTLINE_POSITION_COMPONENT_COUNT,
       glContext.FLOAT,
       false,
-      DEBUG_OUTLINE_VERTEX_STRIDE,
+      BORDER_OUTLINE_VERTEX_STRIDE,
       0
     );
     glContext.disable(glContext.DEPTH_TEST);
     glContext.depthMask(false);
-    glContext.uniform4f(
-      uniformColorLocation,
-      DEBUG_OUTLINE_COLOR[0],
-      DEBUG_OUTLINE_COLOR[1],
-      DEBUG_OUTLINE_COLOR[2],
-      DEBUG_OUTLINE_COLOR[3]
-    );
     glContext.uniform2f(
       uniformScreenToClipScaleLocation,
       screenToClipScaleX,
@@ -868,7 +892,26 @@ export const createDebugOutlineRenderer = (
       screenToClipOffsetX,
       screenToClipOffsetY
     );
+    glContext.lineWidth(1);
     active = true;
+  };
+
+  const currentColor = [Number.NaN, Number.NaN, Number.NaN, Number.NaN];
+
+  const applyColor = (color: RgbaColor): void => {
+    const [r, g, b, a] = color;
+    if (
+      currentColor[0] !== r ||
+      currentColor[1] !== g ||
+      currentColor[2] !== b ||
+      currentColor[3] !== a
+    ) {
+      glContext.uniform4f(uniformColorLocation, r, g, b, a);
+      currentColor[0] = r;
+      currentColor[1] = g;
+      currentColor[2] = b;
+      currentColor[3] = a;
+    }
   };
 
   const drawOutline = (
@@ -877,31 +920,92 @@ export const createDebugOutlineRenderer = (
       SpriteScreenPoint,
       SpriteScreenPoint,
       SpriteScreenPoint,
-    ]
+    ],
+    color: RgbaColor,
+    lineWidth: number
   ): void => {
     if (!active) {
       return;
     }
-    let writeOffset = 0;
-    for (const cornerIndex of DEBUG_OUTLINE_CORNER_ORDER) {
-      const corner = corners[cornerIndex]!;
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.x;
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = corner.y;
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
-      DEBUG_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+    applyColor(color);
+
+    // gl.lineWidth is clamped to 1px on many platforms, so build a quad ring in
+    // screen space to visualize thicker borders.
+    const halfWidth =
+      Number.isFinite(lineWidth) && lineWidth > 0 ? lineWidth / 2 : 0;
+    if (halfWidth <= 0) {
+      return;
     }
+
+    // Determine winding to pick outward normals correctly.
+    let signedArea = 0;
+    for (let i = 0; i < BORDER_OUTLINE_CORNER_ORDER.length; i++) {
+      const a = corners[BORDER_OUTLINE_CORNER_ORDER[i]!]!;
+      const b = corners[BORDER_OUTLINE_CORNER_ORDER[(i + 1) % 4]!]!;
+      signedArea += a.x * b.y - b.x * a.y;
+    }
+    const isCcw = signedArea >= 0;
+
+    let writeOffset = 0;
+    const emitVertex = (point: SpriteScreenPoint): void => {
+      BORDER_OUTLINE_VERTEX_SCRATCH[writeOffset++] = point.x;
+      BORDER_OUTLINE_VERTEX_SCRATCH[writeOffset++] = point.y;
+      BORDER_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 0;
+      BORDER_OUTLINE_VERTEX_SCRATCH[writeOffset++] = 1;
+    };
+
+    for (let i = 0; i < BORDER_OUTLINE_CORNER_ORDER.length; i++) {
+      const start = corners[BORDER_OUTLINE_CORNER_ORDER[i]!]!;
+      const end = corners[BORDER_OUTLINE_CORNER_ORDER[(i + 1) % 4]!]!;
+
+      const dirX = end.x - start.x;
+      const dirY = end.y - start.y;
+      const length = Math.hypot(dirX, dirY);
+      if (length <= 0) {
+        continue;
+      }
+
+      // outward normal (right-hand for CCW, left-hand for CW)
+      const normalX = (isCcw ? dirY : -dirY) / length;
+      const normalY = (isCcw ? -dirX : dirX) / length;
+      const offsetX = normalX * halfWidth;
+      const offsetY = normalY * halfWidth;
+
+      const v0 = { x: start.x + offsetX, y: start.y + offsetY };
+      const v1 = { x: end.x + offsetX, y: end.y + offsetY };
+      const v2 = { x: end.x - offsetX, y: end.y - offsetY };
+      const v3 = { x: start.x - offsetX, y: start.y - offsetY };
+
+      // Two triangles per edge quad.
+      emitVertex(v0);
+      emitVertex(v1);
+      emitVertex(v2);
+      emitVertex(v0);
+      emitVertex(v2);
+      emitVertex(v3);
+    }
+
+    const vertexCount = writeOffset / BORDER_OUTLINE_POSITION_COMPONENT_COUNT;
+    if (vertexCount <= 0) {
+      return;
+    }
+
     glContext.bufferSubData(
       glContext.ARRAY_BUFFER,
       0,
-      DEBUG_OUTLINE_VERTEX_SCRATCH
+      BORDER_OUTLINE_VERTEX_SCRATCH
     );
-    glContext.drawArrays(glContext.LINE_LOOP, 0, DEBUG_OUTLINE_VERTEX_COUNT);
+    glContext.drawArrays(glContext.TRIANGLES, 0, vertexCount);
   };
 
   const end = (): void => {
     if (!active) {
       return;
     }
+    currentColor[0] = Number.NaN;
+    currentColor[1] = Number.NaN;
+    currentColor[2] = Number.NaN;
+    currentColor[3] = Number.NaN;
     glContext.depthMask(true);
     glContext.enable(glContext.DEPTH_TEST);
     glContext.disableVertexAttribArray(attribPositionLocation);
@@ -921,4 +1025,493 @@ export const createDebugOutlineRenderer = (
     end,
     release,
   };
+};
+
+export interface LeaderLineRenderer extends Releasable {
+  begin(
+    screenToClipScaleX: number,
+    screenToClipScaleY: number,
+    screenToClipOffsetX: number,
+    screenToClipOffsetY: number
+  ): void;
+  drawLine(
+    from: Readonly<SpriteScreenPoint>,
+    to: Readonly<SpriteScreenPoint>,
+    color: RgbaColor,
+    lineWidth: number
+  ): void;
+  end(): void;
+}
+
+export const createLeaderLineRenderer = (
+  glContext: WebGLRenderingContext
+): LeaderLineRenderer => {
+  const program = createShaderProgram(
+    glContext,
+    BORDER_OUTLINE_VERTEX_SHADER_SOURCE,
+    BORDER_OUTLINE_FRAGMENT_SHADER_SOURCE
+  );
+
+  const attribPositionLocation = glContext.getAttribLocation(
+    program,
+    'a_position'
+  );
+  if (attribPositionLocation === -1) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire leader line attribute location.');
+  }
+
+  const uniformColorLocation = glContext.getUniformLocation(program, 'u_color');
+  const uniformScreenToClipScaleLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipScale'
+  );
+  const uniformScreenToClipOffsetLocation = glContext.getUniformLocation(
+    program,
+    'u_screenToClipOffset'
+  );
+  if (
+    !uniformColorLocation ||
+    !uniformScreenToClipScaleLocation ||
+    !uniformScreenToClipOffsetLocation
+  ) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to acquire leader line uniforms.');
+  }
+
+  const vertexBuffer = glContext.createBuffer();
+  if (!vertexBuffer) {
+    glContext.deleteProgram(program);
+    throw new Error('Failed to create leader line vertex buffer.');
+  }
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+  glContext.bufferData(
+    glContext.ARRAY_BUFFER,
+    LEADER_LINE_VERTEX_SCRATCH,
+    glContext.DYNAMIC_DRAW
+  );
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+
+  let active = false;
+
+  const begin = (
+    screenToClipScaleX: number,
+    screenToClipScaleY: number,
+    screenToClipOffsetX: number,
+    screenToClipOffsetY: number
+  ): void => {
+    glContext.useProgram(program);
+    glContext.bindBuffer(glContext.ARRAY_BUFFER, vertexBuffer);
+    glContext.enableVertexAttribArray(attribPositionLocation);
+    glContext.vertexAttribPointer(
+      attribPositionLocation,
+      LEADER_LINE_POSITION_COMPONENT_COUNT,
+      glContext.FLOAT,
+      false,
+      LEADER_LINE_VERTEX_STRIDE,
+      0
+    );
+    glContext.disable(glContext.DEPTH_TEST);
+    glContext.depthMask(false);
+    glContext.uniform2f(
+      uniformScreenToClipScaleLocation,
+      screenToClipScaleX,
+      screenToClipScaleY
+    );
+    glContext.uniform2f(
+      uniformScreenToClipOffsetLocation,
+      screenToClipOffsetX,
+      screenToClipOffsetY
+    );
+    active = true;
+  };
+
+  const currentColor = [Number.NaN, Number.NaN, Number.NaN, Number.NaN];
+  const applyColor = (color: RgbaColor): void => {
+    const [r, g, b, a] = color;
+    if (
+      currentColor[0] !== r ||
+      currentColor[1] !== g ||
+      currentColor[2] !== b ||
+      currentColor[3] !== a
+    ) {
+      glContext.uniform4f(uniformColorLocation, r, g, b, a);
+      currentColor[0] = r;
+      currentColor[1] = g;
+      currentColor[2] = b;
+      currentColor[3] = a;
+    }
+  };
+
+  const drawLine = (
+    from: Readonly<SpriteScreenPoint>,
+    to: Readonly<SpriteScreenPoint>,
+    color: RgbaColor,
+    lineWidth: number
+  ): void => {
+    if (!active) {
+      return;
+    }
+    if (!Number.isFinite(lineWidth) || lineWidth <= 0) {
+      return;
+    }
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy);
+    if (length <= 0) {
+      return;
+    }
+    applyColor(color);
+    const halfWidth = lineWidth / 2;
+    const nx = (-dy / length) * halfWidth;
+    const ny = (dx / length) * halfWidth;
+
+    const v0 = { x: from.x + nx, y: from.y + ny };
+    const v1 = { x: to.x + nx, y: to.y + ny };
+    const v2 = { x: to.x - nx, y: to.y - ny };
+    const v3 = { x: from.x - nx, y: from.y - ny };
+
+    let offset = 0;
+    const emitVertex = (pt: { x: number; y: number }) => {
+      LEADER_LINE_VERTEX_SCRATCH[offset++] = pt.x;
+      LEADER_LINE_VERTEX_SCRATCH[offset++] = pt.y;
+      LEADER_LINE_VERTEX_SCRATCH[offset++] = 0;
+      LEADER_LINE_VERTEX_SCRATCH[offset++] = 1;
+    };
+
+    emitVertex(v0);
+    emitVertex(v1);
+    emitVertex(v2);
+    emitVertex(v0);
+    emitVertex(v2);
+    emitVertex(v3);
+
+    glContext.bufferSubData(
+      glContext.ARRAY_BUFFER,
+      0,
+      LEADER_LINE_VERTEX_SCRATCH
+    );
+    glContext.drawArrays(glContext.TRIANGLES, 0, LEADER_LINE_VERTEX_COUNT);
+  };
+
+  const end = (): void => {
+    if (!active) {
+      return;
+    }
+    currentColor[0] = Number.NaN;
+    currentColor[1] = Number.NaN;
+    currentColor[2] = Number.NaN;
+    currentColor[3] = Number.NaN;
+    glContext.disableVertexAttribArray(attribPositionLocation);
+    glContext.bindBuffer(glContext.ARRAY_BUFFER, null);
+    active = false;
+  };
+
+  const release = (): void => {
+    end();
+    glContext.deleteBuffer(vertexBuffer);
+    glContext.deleteProgram(program);
+  };
+
+  return {
+    begin,
+    drawLine,
+    end,
+    release,
+  };
+};
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+/** List of acceptable minification filters exposed to callers. */
+const MIN_FILTER_VALUES: readonly SpriteTextureMinFilter[] = [
+  'nearest',
+  'linear',
+  'nearest-mipmap-nearest',
+  'nearest-mipmap-linear',
+  'linear-mipmap-nearest',
+  'linear-mipmap-linear',
+] as const;
+
+/** List of acceptable magnification filters. */
+const MAG_FILTER_VALUES: readonly SpriteTextureMagFilter[] = [
+  'nearest',
+  'linear',
+] as const;
+
+/** Minification filters that require mipmaps to produce complete textures. */
+const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> =
+  new Set<SpriteTextureMinFilter>([
+    'nearest-mipmap-nearest',
+    'nearest-mipmap-linear',
+    'linear-mipmap-nearest',
+    'linear-mipmap-linear',
+  ]);
+
+const filterRequiresMipmaps = (filter: SpriteTextureMinFilter): boolean =>
+  MIPMAP_MIN_FILTERS.has(filter);
+
+export const resolveTextureFilteringOptions = (
+  options?: SpriteTextureFilteringOptions
+): ResolvedTextureFilteringOptions => {
+  const minCandidate = options?.minFilter;
+  const minFilter: SpriteTextureMinFilter = MIN_FILTER_VALUES.includes(
+    minCandidate as SpriteTextureMinFilter
+  )
+    ? (minCandidate as SpriteTextureMinFilter)
+    : DEFAULT_TEXTURE_FILTERING_OPTIONS.minFilter!;
+
+  const magCandidate = options?.magFilter;
+  const magFilter: SpriteTextureMagFilter = MAG_FILTER_VALUES.includes(
+    magCandidate as SpriteTextureMagFilter
+  )
+    ? (magCandidate as SpriteTextureMagFilter)
+    : DEFAULT_TEXTURE_FILTERING_OPTIONS.magFilter!;
+
+  let generateMipmaps =
+    options?.generateMipmaps ??
+    DEFAULT_TEXTURE_FILTERING_OPTIONS.generateMipmaps!;
+  if (filterRequiresMipmaps(minFilter)) {
+    generateMipmaps = true;
+  }
+
+  let maxAnisotropy =
+    options?.maxAnisotropy ?? DEFAULT_TEXTURE_FILTERING_OPTIONS.maxAnisotropy!;
+  if (!Number.isFinite(maxAnisotropy) || maxAnisotropy < 1) {
+    maxAnisotropy = 1;
+  }
+
+  return {
+    minFilter,
+    magFilter,
+    generateMipmaps,
+    maxAnisotropy,
+  };
+};
+
+const ANISOTROPY_EXTENSION_NAMES = [
+  'EXT_texture_filter_anisotropic',
+  'WEBKIT_EXT_texture_filter_anisotropic',
+  'MOZ_EXT_texture_filter_anisotropic',
+] as const;
+
+export const resolveAnisotropyExtension = (
+  glContext: WebGLRenderingContext
+): EXT_texture_filter_anisotropic | undefined => {
+  for (const name of ANISOTROPY_EXTENSION_NAMES) {
+    const extension = glContext.getExtension(name);
+    if (extension) {
+      return extension as EXT_texture_filter_anisotropic;
+    }
+  }
+  return undefined;
+};
+
+const resolveGlMinFilter = (
+  glContext: WebGLRenderingContext,
+  filter: SpriteTextureMinFilter
+): number => {
+  switch (filter) {
+    case 'nearest':
+      return glContext.NEAREST;
+    case 'nearest-mipmap-nearest':
+      return glContext.NEAREST_MIPMAP_NEAREST;
+    case 'nearest-mipmap-linear':
+      return glContext.NEAREST_MIPMAP_LINEAR;
+    case 'linear-mipmap-nearest':
+      return glContext.LINEAR_MIPMAP_NEAREST;
+    case 'linear-mipmap-linear':
+      return glContext.LINEAR_MIPMAP_LINEAR;
+    case 'linear':
+    default:
+      return glContext.LINEAR;
+  }
+};
+
+const resolveGlMagFilter = (
+  glContext: WebGLRenderingContext,
+  filter: SpriteTextureMagFilter
+): number => {
+  switch (filter) {
+    case 'nearest':
+      return glContext.NEAREST;
+    case 'linear':
+    default:
+      return glContext.LINEAR;
+  }
+};
+
+const isPowerOfTwo = (value: number): boolean =>
+  value > 0 && (value & (value - 1)) === 0;
+
+export interface EnsureTexturesParams {
+  readonly glContext: WebGLRenderingContext | undefined;
+  readonly atlasQueue: AtlasOperationQueue;
+  readonly atlasManager: AtlasManager;
+  readonly atlasPageTextures: Map<number, WebGLTexture>;
+  readonly atlasNeedsUpload: boolean;
+  readonly resolvedTextureFiltering: ResolvedTextureFilteringOptions;
+  readonly anisotropyExtension: EXT_texture_filter_anisotropic | undefined;
+  readonly maxSupportedAnisotropy: number;
+  readonly images: ReadonlyMap<string, RegisteredImage>;
+  readonly imageHandleBuffersController: ImageHandleBufferController;
+  readonly atlasPageIndexNone: number;
+  readonly shouldUploadAtlasPages: (
+    pageStates?: readonly AtlasPageState[]
+  ) => boolean;
+}
+
+/**
+ * Creates or refreshes WebGL textures for registered images.
+ * Processes only queued entries to avoid unnecessary work.
+ * Intended to run just before drawing; returns immediately if the GL context is unavailable.
+ * Ensures registerImage calls outside the render loop sync on the next frame.
+ * @returns {boolean} Updated atlas upload requirement flag.
+ */
+export const ensureTextures = ({
+  glContext,
+  atlasQueue,
+  atlasManager,
+  atlasPageTextures,
+  atlasNeedsUpload,
+  resolvedTextureFiltering,
+  anisotropyExtension,
+  maxSupportedAnisotropy,
+  images,
+  imageHandleBuffersController,
+  atlasPageIndexNone,
+  shouldUploadAtlasPages,
+}: EnsureTexturesParams): boolean => {
+  if (!glContext) {
+    return atlasNeedsUpload;
+  }
+  atlasQueue.flushPending();
+  if (!atlasNeedsUpload) {
+    return atlasNeedsUpload;
+  }
+
+  const pages = atlasManager.getPages();
+  const activePageIndices = new Set<number>();
+  pages.forEach((page) => activePageIndices.add(page.index));
+
+  atlasPageTextures.forEach((texture, pageIndex) => {
+    if (!activePageIndices.has(pageIndex)) {
+      glContext.deleteTexture(texture);
+      atlasPageTextures.delete(pageIndex);
+    }
+  });
+
+  pages.forEach((page) => {
+    const requiresUpload =
+      page.needsUpload || !atlasPageTextures.has(page.index);
+    if (!requiresUpload) {
+      return;
+    }
+
+    let texture = atlasPageTextures.get(page.index);
+    let isNewTexture = false;
+    if (!texture) {
+      texture = glContext.createTexture();
+      if (!texture) {
+        throw new Error('Failed to create texture.');
+      }
+      atlasPageTextures.set(page.index, texture);
+      isNewTexture = true;
+    }
+    glContext.bindTexture(glContext.TEXTURE_2D, texture);
+    if (isNewTexture) {
+      glContext.texParameteri(
+        glContext.TEXTURE_2D,
+        glContext.TEXTURE_WRAP_S,
+        glContext.CLAMP_TO_EDGE
+      );
+      glContext.texParameteri(
+        glContext.TEXTURE_2D,
+        glContext.TEXTURE_WRAP_T,
+        glContext.CLAMP_TO_EDGE
+      );
+    }
+    glContext.pixelStorei(glContext.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
+    glContext.texImage2D(
+      glContext.TEXTURE_2D,
+      0,
+      glContext.RGBA,
+      glContext.RGBA,
+      glContext.UNSIGNED_BYTE,
+      page.canvas as TexImageSource
+    );
+
+    let minFilterEnum = resolveGlMinFilter(
+      glContext,
+      resolvedTextureFiltering.minFilter
+    );
+    const magFilterEnum = resolveGlMagFilter(
+      glContext,
+      resolvedTextureFiltering.magFilter
+    );
+
+    let usedMipmaps = false;
+    if (resolvedTextureFiltering.generateMipmaps) {
+      const isWebGL2 =
+        typeof WebGL2RenderingContext !== 'undefined' &&
+        glContext instanceof WebGL2RenderingContext;
+      const canUseMipmaps =
+        isWebGL2 || (isPowerOfTwo(page.width) && isPowerOfTwo(page.height));
+      if (canUseMipmaps) {
+        glContext.generateMipmap(glContext.TEXTURE_2D);
+        usedMipmaps = true;
+      } else {
+        minFilterEnum = glContext.LINEAR;
+      }
+    }
+
+    if (
+      !usedMipmaps &&
+      filterRequiresMipmaps(resolvedTextureFiltering.minFilter)
+    ) {
+      minFilterEnum = glContext.LINEAR;
+    }
+
+    glContext.texParameteri(
+      glContext.TEXTURE_2D,
+      glContext.TEXTURE_MIN_FILTER,
+      minFilterEnum
+    );
+    glContext.texParameteri(
+      glContext.TEXTURE_2D,
+      glContext.TEXTURE_MAG_FILTER,
+      magFilterEnum
+    );
+
+    if (
+      usedMipmaps &&
+      anisotropyExtension &&
+      resolvedTextureFiltering.maxAnisotropy > 1
+    ) {
+      const ext = anisotropyExtension;
+      const targetAnisotropy = Math.min(
+        resolvedTextureFiltering.maxAnisotropy,
+        maxSupportedAnisotropy
+      );
+      if (targetAnisotropy > 1) {
+        glContext.texParameterf(
+          glContext.TEXTURE_2D,
+          ext.TEXTURE_MAX_ANISOTROPY_EXT,
+          targetAnisotropy
+        );
+      }
+    }
+
+    atlasManager.markPageClean(page.index);
+  });
+
+  images.forEach((image) => {
+    if (image.atlasPageIndex !== atlasPageIndexNone) {
+      image.texture = atlasPageTextures.get(image.atlasPageIndex);
+    } else {
+      image.texture = undefined;
+    }
+  });
+  imageHandleBuffersController.markDirty(images);
+  return shouldUploadAtlasPages(pages);
 };

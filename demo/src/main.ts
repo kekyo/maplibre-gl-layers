@@ -4,6 +4,11 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
+/**
+ * URL: http://localhost:5173/maplibre-gl-layers/?test=1
+ * `test=n`: Show testable automation page, `n` is initial progression directive [1:up, 2:right, 3:down, 4:left].
+ */
+
 import './style.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -29,8 +34,63 @@ import type {
   SpriteTextGlyphOptions,
   SpriteImageRegisterOptions,
   SpriteLayerInterface,
+  SpriteEasing,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+type TestScenarioDirection = 'up' | 'right' | 'down' | 'left';
+
+type TestScenario = {
+  id: number | null;
+  direction: TestScenarioDirection | null;
+};
+
+const resolveTestScenario = (): TestScenario => {
+  if (typeof window === 'undefined') {
+    // Running outside the browser—no query string to inspect.
+    return { id: null, direction: null };
+  }
+
+  const rawValue = new URL(window.location.href).searchParams.get('test');
+  if (!rawValue) {
+    // No test parameter supplied.
+    return { id: null, direction: null };
+  }
+
+  const parsedValue = Number(rawValue);
+  if (!Number.isFinite(parsedValue)) {
+    // Ignore malformed, non-numeric values so the demo behaves normally.
+    return { id: null, direction: null };
+  }
+
+  const testId = Math.trunc(parsedValue);
+  const direction: TestScenarioDirection | null = (() => {
+    switch (testId) {
+      case 1:
+        return 'up';
+      case 2:
+        return 'right';
+      case 3:
+        return 'down';
+      case 4:
+        return 'left';
+      default:
+        return null;
+    }
+  })();
+
+  return {
+    id: testId,
+    direction,
+  };
+};
+
+const testScenario = resolveTestScenario();
+const isTestMode = testScenario.id !== null;
+
+/////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Maximum number of sprites shown simultaneously in the demo scene.
@@ -40,22 +100,20 @@ const MAX_NUMBER_OF_SPRITES = 10000;
 /**
  * Initial number of sprites to display when the demo loads.
  */
-const INITIAL_NUMBER_OF_SPRITES = 1000;
+const INITIAL_NUMBER_OF_SPRITES = isTestMode ? 1 : 1000;
 
 /**
  * Interval in milliseconds between movement updates.
  */
-const MOVEMENT_INTERVAL_MS = 500;
+const MOVEMENT_INTERVAL_MS = 1000;
 
-const PRIMARY_OPACITY_SEQUENCE = [0.6, 0.3, 0.6, 1.0] as const;
+/** Opacity waving sequence */
+const PRIMARY_OPACITY_WAVING_SEQUENCE = [0.4, 1.0] as const;
 
 /** Minimum pseudo LOD distance in meters applied when enabled. */
 const PSEUDO_LOD_DISTANCE_MIN_METERS = 5000;
 /** Maximum pseudo LOD distance in meters applied when enabled. */
 const PSEUDO_LOD_DISTANCE_MAX_METERS = 20000;
-
-/** Identifier assigned to the sprite layer instance registered with MapLibre. */
-const SPRITE_LAYER_ID = 'demo-sprite';
 
 /**
  * Center position used as the demo origin.
@@ -68,7 +126,7 @@ const STARTUP_CENTER = {
 /** Initial camera state shared between the UI and map creation. */
 const INITIAL_CAMERA_STATE = {
   zoom: 14.5,
-  pitch: 45,
+  pitch: isTestMode ? 0 : 45,
   bearing: 0,
 } as const;
 
@@ -94,22 +152,10 @@ const mapSourceSpecification: SourceSpecifications = {
   },
 };
 
-interface SpriteDemoDebugState {
-  mapLoaded: boolean;
-  spritesReady: boolean;
-  spriteLimit: number;
-  activeSpriteCount: number;
-  mapInstance?: Map;
-  spriteLayer?: unknown;
-}
-
-declare global {
-  interface Window {
-    __spriteDemo?: SpriteDemoDebugState;
-  }
-}
-
 /////////////////////////////////////////////////////////////////////////////////////////
+
+/** Identifier assigned to the sprite layer instance registered with MapLibre. */
+const SPRITE_LAYER_ID = 'demo-sprite';
 
 /**
  * @typedef {Object} IconSpec
@@ -188,6 +234,11 @@ const SECONDARY_SUB_LAYER = 10;
 
 /** Default scale multiplier applied to the orbiting secondary image. */
 const SECONDARY_IMAGE_SCALE = 0.5;
+/** Leader line style applied to secondary images when enabled. */
+const SECONDARY_LEADER_LINE_STYLE = {
+  color: '#00aa00',
+  widthMeters: 4,
+} as const;
 /** Distance in meters that secondary images orbit from their primary marker. */
 const SECONDARY_ORBIT_RADIUS_METERS = 180;
 /** Angular increment in degrees applied to the orbiting image during each step. */
@@ -211,7 +262,19 @@ const MOVEMENT_SPEED_SCALE_MAX = 3;
 /** Slider increment for the movement speed control. */
 const MOVEMENT_SPEED_SCALE_STEP = 0.05;
 /** Default movement speed multiplier. */
-const DEFAULT_MOVEMENT_SPEED_SCALE = 1;
+const DEFAULT_MOVEMENT_SPEED_SCALE = isTestMode ? 0 : 1;
+/** Step vector magnitude applied to the deterministic test sprite. */
+const TEST_MOVEMENT_DELTA = 0.00005;
+/** Direction vectors used when the deterministic test sprite is enabled. */
+const TEST_DIRECTION_DELTAS: Record<
+  TestScenarioDirection,
+  { readonly dx: number; readonly dy: number }
+> = {
+  up: { dx: 0, dy: TEST_MOVEMENT_DELTA },
+  right: { dx: TEST_MOVEMENT_DELTA, dy: 0 },
+  down: { dx: 0, dy: -TEST_MOVEMENT_DELTA },
+  left: { dx: -TEST_MOVEMENT_DELTA, dy: 0 },
+};
 
 /** Fraction of the icon height occupied by the arrow head near the top edge. */
 const ARROW_HEAD_TOP_FRACTION = 0.085;
@@ -220,6 +283,14 @@ const BILLBOARD_PRIMARY_ANCHOR_Y = 1 - 2 * ARROW_HEAD_TOP_FRACTION;
 
 /** Interaction states that control if and how the secondary image orbits the primary marker. */
 type SecondaryOrbitMode = 'hidden' | 'center' | 'shift' | 'orbit';
+
+/** Sprite border color */
+const BORDER_COLOR = '#c00000';
+/** Sprite border color when selected */
+const BORDER_COLOR_SELECTED = '#a0a000';
+
+/** Sprite border width in pixel */
+const BORDER_WIDTH_METERS = 2;
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -503,31 +574,105 @@ type PrimaryOpacityMode = 'show' | 'wave';
 /** Identifiers for the base maps available in the demo. */
 type BasemapId = 'osm' | 'carto';
 
+const EASING_OPTION_PRESETS = [
+  { key: 'off', label: 'OFF', easing: undefined },
+  {
+    key: 'linear',
+    label: 'Linear',
+    easing: { type: 'linear' } as SpriteEasing,
+  },
+  {
+    key: 'ease-in',
+    label: 'Ease In (pow 3)',
+    easing: { type: 'ease', mode: 'in', power: 3 } as SpriteEasing,
+  },
+  {
+    key: 'ease-out',
+    label: 'Ease Out (pow 3)',
+    easing: { type: 'ease', mode: 'out', power: 3 } as SpriteEasing,
+  },
+  {
+    key: 'ease-in-out',
+    label: 'Ease In-Out (pow 4)',
+    easing: { type: 'ease', mode: 'in-out', power: 4 } as SpriteEasing,
+  },
+  {
+    key: 'exponential',
+    label: 'Exponential (steep)',
+    easing: {
+      type: 'exponential',
+      exponent: 6,
+      mode: 'in-out',
+    } as SpriteEasing,
+  },
+  {
+    key: 'quadratic',
+    label: 'Quadratic (in)',
+    easing: { type: 'quadratic', mode: 'in' } as SpriteEasing,
+  },
+  {
+    key: 'cubic',
+    label: 'Cubic (out)',
+    easing: { type: 'cubic', mode: 'out' } as SpriteEasing,
+  },
+  {
+    key: 'sine',
+    label: 'Sine (in-out, amp 1.2)',
+    easing: { type: 'sine', mode: 'in-out', amplitude: 1.2 } as SpriteEasing,
+  },
+  {
+    key: 'bounce',
+    label: 'Bounce (4x, 0.7)',
+    easing: { type: 'bounce', bounces: 4, decay: 0.7 } as SpriteEasing,
+  },
+  {
+    key: 'back',
+    label: 'Back (overshoot 2.2)',
+    easing: { type: 'back', overshoot: 2.2 } as SpriteEasing,
+  },
+] as const;
+
+type EasingOptionKey = (typeof EASING_OPTION_PRESETS)[number]['key'];
+
+const isEasingEnabled = (key: EasingOptionKey): boolean => key !== 'off';
+
+const resolveEasingOption = (key: EasingOptionKey): SpriteEasing | undefined =>
+  EASING_OPTION_PRESETS.find((entry) => entry.key === key)?.easing;
+
+const renderEasingOptions = (current: EasingOptionKey): string =>
+  EASING_OPTION_PRESETS.map(
+    (entry) =>
+      `<option value="${entry.key}"${
+        entry.key === current ? ' selected' : ''
+      }>${entry.label}</option>`
+  ).join('');
+
 /** Currently active animation mode, toggled from the control panel. */
 let currentAnimationMode: AnimationMode = 'random';
 /** Currently selected base map. */
-const prefersDarkScheme =
-  typeof window !== 'undefined'
-    ? window.matchMedia?.('(prefers-color-scheme: dark)').matches
-    : false;
-let currentBasemapId: BasemapId = prefersDarkScheme ? 'carto' : 'osm';
+let currentBasemapId: BasemapId = 'carto';
 /** Sprite rendering mode, toggled between billboard and surface. */
 let currentSpriteMode: SpriteMode = 'surface';
 /** Whether the sprite auto-rotates to face the direction of travel. */
 let isAutoRotationEnabled = true;
+/** Selected easing for movement interpolation. */
+let locationEasingKey: EasingOptionKey = 'linear';
 /** Enables movement interpolation; when false, updates happen per step only. */
-let isMovementInterpolationEnabled = true;
+let isMovementInterpolationEnabled = isEasingEnabled(locationEasingKey);
 let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
-let spriteScalingMode: 'standard' | 'unlimited' = 'standard';
-let showDebugBounds = false;
+let spriteScalingMode: 'standard' | 'unlimited' = 'unlimited';
+let showSpriteBorders = false;
+let selectedSpriteId: string | null = null;
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
-let isRotateInterpolationEnabled = true;
+let rotateEasingKey: EasingOptionKey = 'cubic';
+let isRotateInterpolationEnabled = isEasingEnabled(rotateEasingKey);
 /** Interpolation mode applied to primary image rotation. */
 let rotateInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether opacity interpolation is active for primary images. */
-let isOpacityInterpolationEnabled = true;
+let opacityEasingKey: EasingOptionKey = 'ease-in-out';
+let isOpacityInterpolationEnabled = isEasingEnabled(opacityEasingKey);
 /** Opacity mode applied to primary images. */
 let primaryOpacityMode: PrimaryOpacityMode = 'show';
 /** Current index within the opacity wave sequence. */
@@ -544,10 +689,14 @@ let movementSpeedScale = DEFAULT_MOVEMENT_SPEED_SCALE;
 let currentSecondaryImageOrbitMode: SecondaryOrbitMode = 'hidden';
 /** Currently selected secondary image type. */
 let currentSecondaryImageType: SecondaryImageType = 'box';
+/** Whether leader lines are drawn for the secondary image. */
+let isSecondaryLeaderLineEnabled = false;
 /** Whether we interpolate the orbital angle of the secondary image. */
-let isOrbitDegInterpolationEnabled = true;
+let orbitDegEasingKey: EasingOptionKey = 'linear';
+let isOrbitDegInterpolationEnabled = isEasingEnabled(orbitDegEasingKey);
 /** Whether we interpolate the orbital distance of the secondary image. */
-let isOrbitMetersInterpolationEnabled = true;
+let orbitMetersEasingKey: EasingOptionKey = 'exponential';
+let isOrbitMetersInterpolationEnabled = isEasingEnabled(orbitMetersEasingKey);
 /** Interpolation mode applied to orbital angle changes. */
 let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Interpolation mode applied to orbital distance changes. */
@@ -564,29 +713,27 @@ let isSecondaryImageReady = false;
 let updateSecondaryImageButtons: (() => void) | undefined;
 /** UI updater for secondary image type buttons. */
 let updateSecondaryImageTypeButtons: (() => void) | undefined;
-/** UI updater for the rotate-interpolation toggle. */
-let updateRotateInterpolationButton: (() => void) | undefined;
+/** UI updater for the secondary leader line toggle. */
+let updateSecondaryLeaderLineButton: (() => void) | undefined;
 /** UI updater for the primary opacity buttons. */
 let updatePrimaryOpacityButtons: (() => void) | undefined;
-/** UI updater for the opacity interpolation toggle. */
-let updateOpacityInterpolationButton: (() => void) | undefined;
 /** UI updater for the pseudo LOD toggle. */
 let updatePseudoLodButton: (() => void) | undefined;
-/** UI updater for the orbit degree interpolation toggle. */
-let updateOrbitDegInterpolationButton: (() => void) | undefined;
-/** UI updater for the orbit meters interpolation toggle. */
-let updateOrbitMetersInterpolationButton: (() => void) | undefined;
 /** Rotation angle in degrees for secondary images. */
 let secondaryImageOrbitDegrees = 0;
-/** UI updater for the location interpolation toggle. */
-let updateLocationInterpolationButton: (() => void) | undefined;
 /** UI updater for the mouse-events monitoring toggle. */
 let updateMouseEventsButton: (() => void) | undefined;
-/** UI updater for the debug bounds toggle. */
-let updateDebugBoundsButton: (() => void) | undefined;
+/** UI updater for the sprite border toggle. */
+let updateSpriteBordersButton: (() => void) | undefined;
+/** Clears any selected sprite highlight and resets the detail panel. */
+let clearSpriteSelection: () => void = () => {};
+/** Marks a sprite as selected and updates highlighting. */
+let selectSprite: (spriteId: string) => void = () => {};
+/** Timestamp of the last sprite click to suppress map click clearing. */
+let lastSpriteClickAt = 0;
 
 const shouldEnableHitTesting = () =>
-  isMouseEventsMonitoringEnabled || showDebugBounds;
+  isMouseEventsMonitoringEnabled || showSpriteBorders;
 
 /**
  * Template that builds the application HUD.
@@ -760,7 +907,7 @@ const createHud = () => {
         </div>
       </section>
       <section id="selected-sprite" data-testid="section-selected-sprite">
-        <div class="toggle-button-row">
+        <div>
           <button
             type="button"
             class="toggle-button${isMouseEventsMonitoringEnabled ? ' active' : ''}"
@@ -771,16 +918,6 @@ const createHud = () => {
             aria-pressed="${isMouseEventsMonitoringEnabled}"
             data-testid="toggle-mouse-events"
           >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
-          <button
-            type="button"
-            class="toggle-button${showDebugBounds ? ' active' : ''}"
-            data-control="debug-bounds-toggle"
-            data-label="Debug Bounds"
-            data-active-text="ON"
-            data-inactive-text="OFF"
-            aria-pressed="${showDebugBounds}"
-            data-testid="toggle-debug-bounds"
-          >Debug Bounds: ${showDebugBounds ? 'ON' : 'OFF'}</button>
         </div>
         <p
           class="status-placeholder"
@@ -845,8 +982,8 @@ const createHud = () => {
               data-selected-field="tag"
               data-testid="selected-tag"
             >--</span>
-      </div>
-    </div>
+          </div>
+        </div>
       </section>
     </aside>
     <aside id="controls" data-testid="panel-controls">
@@ -887,37 +1024,15 @@ const createHud = () => {
         >
           Sprite Layer
         </button>
-      </div>
-      <div class="control-group" data-testid="group-movement-loop">
-        <h1>Move Location</h1>
-        <label class="range-label" for="movement-speed-slider">
-          Speed
-          <span
-            class="range-value"
-            data-status="movement-speed"
-            data-testid="status-movement-speed"
-          >${formatMovementSpeedScale(DEFAULT_MOVEMENT_SPEED_SCALE)}</span>
-        </label>
-        <input
-          type="range"
-          id="movement-speed-slider"
-          class="range-input"
-          min="${MOVEMENT_SPEED_SCALE_MIN}"
-          max="${MOVEMENT_SPEED_SCALE_MAX}"
-          step="${MOVEMENT_SPEED_SCALE_STEP}"
-          value="${DEFAULT_MOVEMENT_SPEED_SCALE}"
-          data-control="movement-speed"
-          data-testid="slider-movement-speed"
-          aria-valuemin="${MOVEMENT_SPEED_SCALE_MIN}"
-          aria-valuemax="${MOVEMENT_SPEED_SCALE_MAX}"
-          aria-valuenow="${DEFAULT_MOVEMENT_SPEED_SCALE}"
-          aria-label="Sprite movement speed"
-        />
-        <button type="button" class="toggle-button${currentAnimationMode === 'random' ? ' active' : ''}" data-control="animation-mode" data-option="random" data-label="Random Walk" aria-pressed="${currentAnimationMode === 'random'}" data-testid="toggle-animation-random">
-          Random Walk
-        </button>
-        <button type="button" class="toggle-button${currentAnimationMode === 'linear' ? ' active' : ''}" data-control="animation-mode" data-option="linear" data-label="Linear Loop" aria-pressed="${currentAnimationMode === 'linear'}" data-testid="toggle-animation-linear">
-          Linear Loop
+        <button
+          type="button"
+          class="toggle-button active"
+          data-control="interpolation-movement-toggle"
+          data-label="Interpolation Calculation"
+          aria-pressed="true"
+          data-testid="toggle-interpolation-movement"
+        >
+          Interpolation Calculation: ON
         </button>
       </div>
       <div class="control-group" data-testid="group-sprite-count">
@@ -951,36 +1066,80 @@ const createHud = () => {
           aria-valuenow="${INITIAL_NUMBER_OF_SPRITES}"
           aria-label="Active sprite count limit"
         />
-        <button
-          type="button"
-          class="toggle-button${currentSpriteMode === 'billboard' ? ' active' : ''}"
-          data-control="sprite-mode-toggle"
-          data-label="Sprite Mode"
-          data-active-text="Billboard"
-          data-inactive-text="Surface"
-          aria-pressed="${currentSpriteMode === 'billboard'}"
-          data-testid="toggle-sprite-mode"
-        >
-          Sprite Mode: ${
-            currentSpriteMode === 'billboard' ? 'Billboard' : 'Surface'
-          }
-        </button>
-      </div>
-      <div class="control-group" data-testid="group-location-interpolation">
-        <h1>Location interpolation</h1>
         <div>
           <button
             type="button"
-            class="toggle-button${isMovementInterpolationEnabled ? ' active' : ''}"
-            data-control="location-interpolation-toggle"
-            data-label="Move Interpolation"
-            data-active-text="On"
-            data-inactive-text="Off"
-            aria-pressed="${isMovementInterpolationEnabled}"
-            data-testid="toggle-location-interpolation"
+            class="toggle-button${currentSpriteMode === 'billboard' ? ' active' : ''}"
+            data-control="sprite-mode-toggle"
+            data-label="Sprite Mode"
+            data-active-text="Billboard"
+            data-inactive-text="Surface"
+            aria-pressed="${currentSpriteMode === 'billboard'}"
+            data-testid="toggle-sprite-mode"
           >
-            Move Interpolation: ${isMovementInterpolationEnabled ? 'On' : 'Off'}
+            Sprite Mode: ${
+              currentSpriteMode === 'billboard' ? 'Billboard' : 'Surface'
+            }
           </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="toggle-button${showSpriteBorders ? ' active' : ''}"
+            data-control="sprite-borders-toggle"
+            data-label="Sprite Borders"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${showSpriteBorders}"
+            data-testid="toggle-sprite-borders"
+          >Sprite Borders: ${showSpriteBorders ? 'ON' : 'OFF'}</button>
+        </div>
+      </div>
+      <div class="control-group" data-testid="group-movement-loop">
+        <h1>Move Location</h1>
+        <label class="range-label" for="movement-speed-slider">
+          Speed
+          <span
+            class="range-value"
+            data-status="movement-speed"
+            data-testid="status-movement-speed"
+          >${formatMovementSpeedScale(DEFAULT_MOVEMENT_SPEED_SCALE)}</span>
+        </label>
+        <input
+          type="range"
+          id="movement-speed-slider"
+          class="range-input"
+          min="${MOVEMENT_SPEED_SCALE_MIN}"
+          max="${MOVEMENT_SPEED_SCALE_MAX}"
+          step="${MOVEMENT_SPEED_SCALE_STEP}"
+          value="${DEFAULT_MOVEMENT_SPEED_SCALE}"
+          data-control="movement-speed"
+          data-testid="slider-movement-speed"
+          aria-valuemin="${MOVEMENT_SPEED_SCALE_MIN}"
+          aria-valuemax="${MOVEMENT_SPEED_SCALE_MAX}"
+          aria-valuenow="${DEFAULT_MOVEMENT_SPEED_SCALE}"
+          aria-label="Sprite movement speed"
+        />
+        <div>
+          <button type="button" class="toggle-button${currentAnimationMode === 'random' ? ' active' : ''}" data-control="animation-mode" data-option="random" data-label="Random Walk" aria-pressed="${currentAnimationMode === 'random'}" data-testid="toggle-animation-random">
+            Random Walk
+          </button>
+          <button type="button" class="toggle-button${currentAnimationMode === 'linear' ? ' active' : ''}" data-control="animation-mode" data-option="linear" data-label="Linear Loop" aria-pressed="${currentAnimationMode === 'linear'}" data-testid="toggle-animation-linear">
+            Linear Loop
+          </button>
+        </div>
+        <div class="button-group">
+          <label class="range-label" for="location-easing-select">
+            Move Interpolation
+          </label>
+          <select
+            id="location-easing-select"
+            data-control="location-easing-select"
+            data-testid="select-location-easing"
+            aria-label="Move interpolation easing"
+          >
+            ${renderEasingOptions(locationEasingKey)}
+          </select>
         </div>
         <div>
           <button
@@ -1024,18 +1183,17 @@ const createHud = () => {
           </button>
         </div>
         <div>
-          <button
-            type="button"
-            class="toggle-button${isRotateInterpolationEnabled ? ' active' : ''}"
-            data-control="rotate-interpolation-toggle"
-            data-label="Rotate Interpolation"
-            data-active-text="On"
-            data-inactive-text="Off"
-            aria-pressed="${isRotateInterpolationEnabled}"
-            data-testid="toggle-rotate-interpolation"
+          <label class="range-label" for="rotate-easing-select">
+            Rotate Interpolation
+          </label>
+          <select
+            id="rotate-easing-select"
+            data-control="rotate-easing-select"
+            data-testid="select-rotate-easing"
+            aria-label="Rotate interpolation easing"
           >
-            Rotate Interpolation: ${isRotateInterpolationEnabled ? 'On' : 'Off'}
-          </button>
+            ${renderEasingOptions(rotateEasingKey)}
+          </select>
         </div>
         <div>
           <button
@@ -1089,20 +1247,17 @@ const createHud = () => {
           </button>
         </div>
         <div>
-          <button
-            type="button"
-            class="toggle-button${isOpacityInterpolationEnabled ? ' active' : ''}"
-            data-control="opacity-interpolation-toggle"
-            data-label="Opacity Interpolation"
-            data-active-text="On"
-            data-inactive-text="Off"
-            aria-pressed="${isOpacityInterpolationEnabled}"
-            data-testid="toggle-opacity-interpolation"
+          <label class="range-label" for="opacity-easing-select">
+            Opacity Interpolation
+          </label>
+          <select
+            id="opacity-easing-select"
+            data-control="opacity-easing-select"
+            data-testid="select-opacity-easing"
+            aria-label="Opacity interpolation easing"
           >
-            Opacity Interpolation: ${
-              isOpacityInterpolationEnabled ? 'On' : 'Off'
-            }
-          </button>
+            ${renderEasingOptions(opacityEasingKey)}
+          </select>
         </div>
         <div>
           <button
@@ -1191,21 +1346,32 @@ const createHud = () => {
             Orbit
           </button>
         </div>
-        <div class="secondary-interpolation-group">
+        <div>
           <button
             type="button"
-            class="toggle-button${isOrbitDegInterpolationEnabled ? ' active' : ''}"
-            data-control="orbit-deg-interpolation-toggle"
-            data-label="Orbit Degree Interpolation"
+            class="toggle-button${isSecondaryLeaderLineEnabled ? ' active' : ''}"
+            data-control="secondary-leader-line-toggle"
+            data-label="Leader Line"
             data-active-text="On"
             data-inactive-text="Off"
-            aria-pressed="${isOrbitDegInterpolationEnabled}"
-            data-testid="toggle-orbit-deg-interpolation"
+            aria-pressed="${isSecondaryLeaderLineEnabled}"
+            data-testid="toggle-secondary-leader-line"
           >
-            Orbit Degree Interpolation: ${
-              isOrbitDegInterpolationEnabled ? 'On' : 'Off'
-            }
+            Leader Line: ${isSecondaryLeaderLineEnabled ? 'On' : 'Off'}
           </button>
+        </div>
+        <div class="button-group">
+          <label class="range-label" for="orbit-deg-easing-select">
+            Orbit Degree Interpolation
+          </label>
+          <select
+            id="orbit-deg-easing-select"
+            data-control="orbit-deg-easing-select"
+            data-testid="select-orbit-deg-easing"
+            aria-label="Orbit degree interpolation easing"
+          >
+            ${renderEasingOptions(orbitDegEasingKey)}
+          </select>
         </div>
         <!-- Orbit interpolation feedforward mode is ignored because it does not update values continuous.
         <div>
@@ -1233,21 +1399,18 @@ const createHud = () => {
           </button>
         </div>
         -->
-        <div class="secondary-interpolation-group">
-          <button
-            type="button"
-            class="toggle-button${isOrbitMetersInterpolationEnabled ? ' active' : ''}"
-            data-control="orbit-meters-interpolation-toggle"
-            data-label="Orbit Meters Interpolation"
-            data-active-text="On"
-            data-inactive-text="Off"
-            aria-pressed="${isOrbitMetersInterpolationEnabled}"
-            data-testid="toggle-orbit-meters-interpolation"
+        <div class="button-group">
+          <label class="range-label" for="orbit-meters-easing-select">
+            Orbit Meters Interpolation
+          </label>
+          <select
+            id="orbit-meters-easing-select"
+            data-control="orbit-meters-easing-select"
+            data-testid="select-orbit-meters-easing"
+            aria-label="Orbit meters interpolation easing"
           >
-            Orbit Meters Interpolation: ${
-              isOrbitMetersInterpolationEnabled ? 'On' : 'Off'
-            }
-          </button>
+            ${renderEasingOptions(orbitMetersEasingKey)}
+          </select>
         </div>
         <!-- Orbit interpolation feedforward mode is ignored because it does not update values continuous.
         <div>
@@ -1399,6 +1562,21 @@ const createHud = () => {
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////
+
+interface SpriteDemoDebugState {
+  mapLoaded: boolean;
+  spritesReady: boolean;
+  spriteLimit: number;
+  activeSpriteCount: number;
+  mapInstance?: Map;
+  spriteLayer?: unknown;
+}
+
+declare global {
+  interface Window {
+    __spriteDemo?: SpriteDemoDebugState;
+  }
+}
 
 /**
  * Application entry point.
@@ -1596,6 +1774,15 @@ const main = async () => {
       | SpriteLayerHoverEvent<DemoSpriteTag>
       | SpriteLayerClickEvent<DemoSpriteTag>
   ) => {
+    // Keep the detail panel pinned to the selected sprite even while hovering others.
+    if (
+      selectedSpriteId &&
+      event.type === 'spritehover' &&
+      event.sprite?.spriteId !== selectedSpriteId
+    ) {
+      return;
+    }
+
     const spriteState = event.sprite;
     const imageState = event.image;
 
@@ -1683,6 +1870,10 @@ const main = async () => {
     requestedCalculationVariant;
 
   const clearSpriteDetails = () => {
+    if (selectedSpriteId) {
+      // Preserve the selected sprite details until selection is cleared.
+      return;
+    }
     renderSpriteDetails({
       type: 'spritehover',
       sprite: undefined,
@@ -1691,6 +1882,22 @@ const main = async () => {
       originalEvent: new MouseEvent('mousemove'),
     });
   };
+
+  const handleMapClick = () => {
+    const now =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - lastSpriteClickAt < 32) {
+      // Ignore the map click immediately following a sprite click.
+      return;
+    }
+    if (!selectedSpriteId) {
+      return;
+    }
+    clearSpriteSelection();
+    clearSpriteDetails();
+  };
+
+  map.on('click', handleMapClick);
 
   const attachSpriteMouseEvents = () => {
     if (!spriteLayer) {
@@ -1723,6 +1930,7 @@ const main = async () => {
       attachSpriteMouseEvents();
     } else {
       detachSpriteMouseEvents();
+      clearSpriteSelection();
       clearSpriteDetails();
     }
     updateMouseEventsButton?.();
@@ -1736,85 +1944,19 @@ const main = async () => {
   const handleSpriteClick = (
     event: SpriteLayerClickEvent<DemoSpriteTag>
   ): void => {
+    lastSpriteClickAt =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
     const spriteState = event.sprite;
-    if (!spriteState) {
+    const imageState = event.image;
+
+    if (!spriteState || !imageState) {
+      clearSpriteSelection();
       renderSpriteDetails(event);
       return;
     }
 
-    const currentTag = spriteState.tag;
-    if (!currentTag) {
-      return;
-    }
-
-    const normalizeProgress = (progress: number): number => {
-      if (!Number.isFinite(progress)) {
-        return 0;
-      }
-      let value = progress % 1;
-      if (value < 0) {
-        value += 1;
-      }
-      return value;
-    };
-
-    const invertedTag: DemoSpriteTag = {
-      ...currentTag,
-      dx: -currentTag.dx,
-      dy: -currentTag.dy,
-      lastStepLng: -currentTag.lastStepLng,
-      lastStepLat: -currentTag.lastStepLat,
-      worldLng: spriteState.location.current.lng,
-      worldLat: spriteState.location.current.lat,
-    };
-
-    if (currentTag.path) {
-      const path = currentTag.path;
-      const invertedSpeed = path.speed === 0 ? path.speed : -path.speed;
-      let progress = path.progress;
-      const pathVectorLng = path.endLng - path.startLng;
-      const pathVectorLat = path.endLat - path.startLat;
-      const pathLengthSq =
-        pathVectorLng * pathVectorLng + pathVectorLat * pathVectorLat;
-      if (pathLengthSq > 0) {
-        const originToCurrentLng =
-          spriteState.location.current.lng - path.startLng;
-        const originToCurrentLat =
-          spriteState.location.current.lat - path.startLat;
-        progress =
-          (originToCurrentLng * pathVectorLng +
-            originToCurrentLat * pathVectorLat) /
-          pathLengthSq;
-      }
-      invertedTag.path = {
-        ...path,
-        speed: invertedSpeed,
-        progress: normalizeProgress(progress),
-      };
-      // Keep linear-mode step vectors aligned with the updated direction.
-      invertedTag.dx = -currentTag.dx;
-      invertedTag.dy = -currentTag.dy;
-    }
-
-    // Ensure the sprite keeps moving even when the vector collapses due to floating point error.
-    if (
-      Math.abs(invertedTag.dx) < EPSILON_DELTA &&
-      Math.abs(invertedTag.dy) < EPSILON_DELTA
-    ) {
-      const baseMagnitude = Math.max(
-        Math.hypot(currentTag.dx, currentTag.dy),
-        0.0001
-      );
-      const angle = Math.random() * Math.PI * 2;
-      invertedTag.dx = Math.cos(angle) * baseMagnitude;
-      invertedTag.dy = Math.sin(angle) * baseMagnitude;
-      invertedTag.lastStepLng = invertedTag.dx * MOVEMENT_STEP_FACTOR;
-      invertedTag.lastStepLat = invertedTag.dy * MOVEMENT_STEP_FACTOR;
-    }
-
-    spriteLayer.updateSprite(spriteState.spriteId, {
-      tag: invertedTag,
-    });
+    selectSprite(spriteState.spriteId);
+    renderSpriteDetails(event);
   };
 
   if (typeof window !== 'undefined') {
@@ -1849,7 +1991,6 @@ const main = async () => {
           generateMipmaps: true,
           maxAnisotropy: 4,
         },
-        showDebugBounds,
       });
 
     /**
@@ -1889,6 +2030,7 @@ const main = async () => {
     applyBasemapVisibility();
 
     let isActive = true;
+    let isInterpolationCalculationEnabled = true;
     let spriteVisibilityLimit = INITIAL_NUMBER_OF_SPRITES;
     let lastVisibleSpriteCount = 0;
     let syncSpritePoolWithLimit: (targetSize: number) => {
@@ -1929,6 +2071,31 @@ const main = async () => {
       latRadius = latExtent / 2;
     };
     updateMovementExtents(spriteVisibilityLimit);
+
+    const applyTestSpritePreset = (
+      tag: DemoSpriteTag
+    ): { lng: number; lat: number } => {
+      // Keep the deterministic sprite anchored at the center for reliable automated checks.
+      tag.dx = 0;
+      tag.dy = 0;
+      tag.path = undefined;
+      tag.lastStepLng = 0;
+      tag.lastStepLat = 0;
+      tag.worldLng = STARTUP_CENTER.lng;
+      tag.worldLat = STARTUP_CENTER.lat;
+
+      const direction = testScenario.direction
+        ? TEST_DIRECTION_DELTAS[testScenario.direction]
+        : null;
+      if (direction) {
+        tag.dx = direction.dx;
+        tag.dy = direction.dy;
+        tag.lastStepLng = direction.dx * MOVEMENT_STEP_FACTOR;
+        tag.lastStepLat = direction.dy * MOVEMENT_STEP_FACTOR;
+      }
+
+      return { lng: STARTUP_CENTER.lng, lat: STARTUP_CENTER.lat };
+    };
 
     /**
      * Enables or disables sprites so only the desired number render while honoring the current activity flag.
@@ -2180,13 +2347,15 @@ const main = async () => {
      * Applies location interpolation settings across all sprites.
      */
     const applyLocationInterpolationToAll = () => {
+      const interpolation = isMovementInterpolationEnabled
+        ? {
+            mode: locationInterpolationMode,
+            durationMs: MOVEMENT_INTERVAL_MS,
+            easing: resolveEasingOption(locationEasingKey),
+          }
+        : null;
       spriteLayer.updateForEach((_sprite, update) => {
-        update.interpolation = isMovementInterpolationEnabled
-          ? {
-              mode: locationInterpolationMode,
-              durationMs: MOVEMENT_INTERVAL_MS,
-            }
-          : null;
+        update.interpolation = interpolation;
         return true;
       });
     };
@@ -2210,6 +2379,7 @@ const main = async () => {
                     rotateDeg: {
                       mode: rotateInterpolationMode,
                       durationMs: MOVEMENT_INTERVAL_MS,
+                      easing: resolveEasingOption(rotateEasingKey),
                     },
                   }
                 : { rotateDeg: null },
@@ -2238,12 +2408,14 @@ const main = async () => {
                   ? {
                       mode: orbitOffsetDegInterpolationMode,
                       durationMs: MOVEMENT_INTERVAL_MS,
+                      easing: resolveEasingOption(orbitDegEasingKey),
                     }
                   : null,
                 offsetMeters: isOrbitMetersInterpolationEnabled
                   ? {
                       mode: orbitOffsetMetersInterpolationMode,
                       durationMs: MOVEMENT_INTERVAL_MS,
+                      easing: resolveEasingOption(orbitMetersEasingKey),
                     }
                   : null,
               },
@@ -2262,6 +2434,7 @@ const main = async () => {
       const interpolation: SpriteImageInterpolationOptions = {
         opacity: {
           durationMs: MOVEMENT_INTERVAL_MS,
+          easing: resolveEasingOption(opacityEasingKey),
         },
       };
       const clearInterpolation: SpriteImageInterpolationOptions = {
@@ -2303,6 +2476,7 @@ const main = async () => {
                 imageUpdate.interpolation = {
                   opacity: {
                     durationMs: MOVEMENT_INTERVAL_MS,
+                    easing: resolveEasingOption(opacityEasingKey),
                   },
                 };
               }
@@ -2324,10 +2498,10 @@ const main = async () => {
         return;
       }
       const value =
-        PRIMARY_OPACITY_SEQUENCE[primaryOpacityWaveIndex] ??
-        PRIMARY_OPACITY_SEQUENCE[0];
+        PRIMARY_OPACITY_WAVING_SEQUENCE[primaryOpacityWaveIndex] ??
+        PRIMARY_OPACITY_WAVING_SEQUENCE[0];
       primaryOpacityWaveIndex =
-        (primaryOpacityWaveIndex + 1) % PRIMARY_OPACITY_SEQUENCE.length;
+        (primaryOpacityWaveIndex + 1) % PRIMARY_OPACITY_WAVING_SEQUENCE.length;
       applyPrimaryOpacityValue(value, true);
     };
 
@@ -2345,14 +2519,80 @@ const main = async () => {
       updatePrimaryOpacityButtons?.();
     };
 
-    const setOpacityInterpolationEnabled = (enabled: boolean): void => {
-      if (isOpacityInterpolationEnabled === enabled) {
+    const resolveBorderColorForSprite = (spriteId: string): string | null => {
+      if (selectedSpriteId && spriteId === selectedSpriteId) {
+        return BORDER_COLOR_SELECTED;
+      }
+      if (showSpriteBorders) {
+        return BORDER_COLOR;
+      }
+      return null;
+    };
+
+    const createBorderUpdateForSprite = (
+      spriteId: string
+    ): SpriteImageDefinitionUpdate => {
+      const color = resolveBorderColorForSprite(spriteId);
+      if (!color) {
+        return { border: null };
+      }
+      return {
+        border: { color, widthMeters: BORDER_WIDTH_METERS },
+      };
+    };
+
+    const resolveSpriteBorderDefinition = (spriteId: string) => {
+      const color = resolveBorderColorForSprite(spriteId);
+      if (!color) {
+        return undefined;
+      }
+      return {
+        border: { color, widthMeters: BORDER_WIDTH_METERS },
+      };
+    };
+
+    const applySpriteBordersToAll = (): void => {
+      if (!spriteLayer) {
         return;
       }
-      isOpacityInterpolationEnabled = enabled;
-      updateOpacityInterpolationButton?.();
-      applyOpacityInterpolationOptionsToAll();
-      applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
+      spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        const borderUpdate = createBorderUpdateForSprite(sprite.spriteId);
+        sprite.images.forEach((orderMap) => {
+          orderMap.forEach((image) => {
+            spriteUpdate.updateImage(image.subLayer, image.order, borderUpdate);
+          });
+        });
+        return true;
+      });
+      spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
+    };
+
+    const renderPlaceholderDetails = () => {
+      renderSpriteDetails({
+        type: 'spritehover',
+        sprite: undefined,
+        image: undefined,
+        screenPoint: { x: 0, y: 0 },
+        originalEvent: new MouseEvent('mousemove'),
+      });
+    };
+
+    clearSpriteSelection = (): void => {
+      if (!selectedSpriteId) {
+        renderPlaceholderDetails();
+        return;
+      }
+      selectedSpriteId = null;
+      applySpriteBordersToAll();
+      renderPlaceholderDetails();
+    };
+
+    selectSprite = (spriteId: string): void => {
+      if (selectedSpriteId === spriteId) {
+        return;
+      }
+      selectedSpriteId = spriteId;
+      applySpriteBordersToAll();
     };
 
     /**
@@ -2620,6 +2860,30 @@ const main = async () => {
     };
 
     /**
+     * Enables or disables leader lines for all secondary images.
+     * @param {boolean} enabled - Whether to draw leader lines.
+     */
+    const setSecondaryLeaderLineEnabled = (enabled: boolean): void => {
+      isSecondaryLeaderLineEnabled = enabled;
+      updateSecondaryLeaderLineButton?.();
+      if (!isSecondaryImageReady) {
+        return;
+      }
+      spriteLayer.updateForEach((sprite, update) => {
+        const subLayerImages = sprite.images.get(SECONDARY_SUB_LAYER);
+        if (!subLayerImages) {
+          return true;
+        }
+        subLayerImages.forEach((imageState) => {
+          update.updateImage(imageState.subLayer, imageState.order, {
+            leaderLine: enabled ? { ...SECONDARY_LEADER_LINE_STYLE } : null,
+          });
+        });
+        return true;
+      });
+    };
+
+    /**
      * Pre-registers every primary arrow image variant so sprite creation can reuse cached textures.
      */
     const registerPrimaryArrowImages = async (): Promise<void> => {
@@ -2647,6 +2911,10 @@ const main = async () => {
       isSecondaryImageReady = true;
       updateSecondaryImageButtons?.();
       updateSecondaryImageTypeButtons?.();
+      updateSecondaryLeaderLineButton?.();
+      if (isSecondaryLeaderLineEnabled) {
+        setSecondaryLeaderLineEnabled(true);
+      }
     };
 
     // Expand the movement extent based on sprite count.
@@ -2698,6 +2966,7 @@ const main = async () => {
         rotateDeg: {
           mode: rotateInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
+          easing: resolveEasingOption(rotateEasingKey),
         },
       };
     };
@@ -2722,12 +2991,14 @@ const main = async () => {
         options.offsetDeg = {
           mode: orbitOffsetDegInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
+          easing: resolveEasingOption(orbitDegEasingKey),
         };
       }
       if (isOrbitMetersInterpolationEnabled) {
         options.offsetMeters = {
           mode: orbitOffsetMetersInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
+          easing: resolveEasingOption(orbitMetersEasingKey),
         };
       }
       return options;
@@ -2832,10 +3103,18 @@ const main = async () => {
      */
     const reinitializeMovement = () => {
       spriteLayer.updateForEach((sprite, update) => {
+        const tag = sprite.tag as DemoSpriteTag | undefined;
+        if (!tag) {
+          return true;
+        }
+        if (isTestMode && tag.orderIndex === 0) {
+          update.location = applyTestSpritePreset(tag);
+          return true;
+        }
         update.location = initializeMovementState(
           STARTUP_CENTER,
           currentAnimationMode,
-          sprite.tag!
+          tag
         );
         return true;
       });
@@ -2963,6 +3242,27 @@ const main = async () => {
         });
       }
 
+      const secondaryLeaderLineButton = queryFirst<HTMLButtonElement>(
+        '[data-control="secondary-leader-line-toggle"]'
+      );
+      if (secondaryLeaderLineButton) {
+        updateSecondaryLeaderLineButton = () => {
+          setToggleButtonState(
+            secondaryLeaderLineButton,
+            isSecondaryLeaderLineEnabled,
+            'binary'
+          );
+          secondaryLeaderLineButton.disabled = !isSecondaryImageReady;
+        };
+        updateSecondaryLeaderLineButton();
+        secondaryLeaderLineButton.addEventListener('click', () => {
+          if (!isSecondaryImageReady) {
+            return;
+          }
+          setSecondaryLeaderLineEnabled(!isSecondaryLeaderLineEnabled);
+        });
+      }
+
       updateSpriteCountUI?.(lastVisibleSpriteCount, spriteVisibilityLimit);
 
       const cameraZoomStatusEl = queryFirst<HTMLElement>(
@@ -3070,6 +3370,18 @@ const main = async () => {
       }
 
       let updateAutoRotationButton: (() => void) | undefined;
+      let updateInterpolationCalculationButton: (() => void) | undefined;
+
+      const setInterpolationCalculationEnabled = (enabled: boolean): void => {
+        if (isInterpolationCalculationEnabled === enabled) {
+          updateInterpolationCalculationButton?.();
+          return;
+        }
+        isInterpolationCalculationEnabled = enabled;
+        spriteLayer?.setInterpolationCalculation(enabled);
+        updateInterpolationCalculationButton?.();
+      };
+
       const setAutoRotationEnabled = (enabled: boolean) => {
         if (isAutoRotationEnabled === enabled) {
           // No change—still refresh the UI so it reflects the existing state.
@@ -3093,6 +3405,25 @@ const main = async () => {
         updateSpriteLayerToggle();
       });
 
+      const interpolationCalculationButton = queryFirst<HTMLButtonElement>(
+        '[data-control="interpolation-movement-toggle"]'
+      );
+      if (interpolationCalculationButton) {
+        updateInterpolationCalculationButton = () => {
+          setToggleButtonState(
+            interpolationCalculationButton,
+            isInterpolationCalculationEnabled,
+            'binary'
+          );
+        };
+        updateInterpolationCalculationButton();
+        interpolationCalculationButton.addEventListener('click', () => {
+          setInterpolationCalculationEnabled(
+            !isInterpolationCalculationEnabled
+          );
+        });
+      }
+
       const mouseEventsButton = queryFirst<HTMLButtonElement>(
         '[data-control="mouse-events-toggle"]'
       );
@@ -3110,18 +3441,22 @@ const main = async () => {
         });
       }
 
-      const debugBoundsButton = queryFirst<HTMLButtonElement>(
-        '[data-control="debug-bounds-toggle"]'
+      const spriteBordersButton = queryFirst<HTMLButtonElement>(
+        '[data-control="sprite-borders-toggle"]'
       );
-      if (debugBoundsButton) {
-        updateDebugBoundsButton = () => {
-          setToggleButtonState(debugBoundsButton, showDebugBounds, 'binary');
+      if (spriteBordersButton) {
+        updateSpriteBordersButton = () => {
+          setToggleButtonState(
+            spriteBordersButton,
+            showSpriteBorders,
+            'binary'
+          );
         };
-        updateDebugBoundsButton();
-        debugBoundsButton.addEventListener('click', () => {
-          showDebugBounds = !showDebugBounds;
-          updateDebugBoundsButton?.();
-          void rebuildSpriteLayer();
+        updateSpriteBordersButton();
+        spriteBordersButton.addEventListener('click', () => {
+          showSpriteBorders = !showSpriteBorders;
+          updateSpriteBordersButton?.();
+          applySpriteBordersToAll();
         });
       }
 
@@ -3605,80 +3940,50 @@ const main = async () => {
         });
       }
 
-      const locationInterpolationToggleButton = queryFirst<HTMLButtonElement>(
-        '[data-control="location-interpolation-toggle"]'
+      const locationEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="location-easing-select"]'
       );
-      if (locationInterpolationToggleButton) {
-        updateLocationInterpolationButton = () => {
-          setToggleButtonState(
-            locationInterpolationToggleButton,
-            isMovementInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateLocationInterpolationButton();
-        locationInterpolationToggleButton.addEventListener('click', () => {
-          isMovementInterpolationEnabled = !isMovementInterpolationEnabled;
-          updateLocationInterpolationButton?.();
+      if (locationEasingSelect) {
+        locationEasingSelect.addEventListener('change', () => {
+          const nextKey = locationEasingSelect.value as EasingOptionKey;
+          locationEasingKey = nextKey;
+          isMovementInterpolationEnabled = isEasingEnabled(nextKey);
           applyLocationInterpolationToAll();
         });
       }
 
-      const orbitDegInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="orbit-deg-interpolation-toggle"]'
+      const orbitDegEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="orbit-deg-easing-select"]'
       );
-      if (orbitDegInterpolationButton) {
-        updateOrbitDegInterpolationButton = () => {
-          setToggleButtonState(
-            orbitDegInterpolationButton,
-            isOrbitDegInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateOrbitDegInterpolationButton();
-        orbitDegInterpolationButton.addEventListener('click', () => {
-          isOrbitDegInterpolationEnabled = !isOrbitDegInterpolationEnabled;
-          updateOrbitDegInterpolationButton?.();
+      if (orbitDegEasingSelect) {
+        orbitDegEasingSelect.addEventListener('change', () => {
+          const nextKey = orbitDegEasingSelect.value as EasingOptionKey;
+          orbitDegEasingKey = nextKey;
+          isOrbitDegInterpolationEnabled = isEasingEnabled(nextKey);
           applyOrbitInterpolationToAll();
         });
       }
 
-      const orbitMetersInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="orbit-meters-interpolation-toggle"]'
+      const orbitMetersEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="orbit-meters-easing-select"]'
       );
-      if (orbitMetersInterpolationButton) {
-        updateOrbitMetersInterpolationButton = () => {
-          setToggleButtonState(
-            orbitMetersInterpolationButton,
-            isOrbitMetersInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateOrbitMetersInterpolationButton();
-        orbitMetersInterpolationButton.addEventListener('click', () => {
-          isOrbitMetersInterpolationEnabled =
-            !isOrbitMetersInterpolationEnabled;
-          updateOrbitMetersInterpolationButton?.();
+      if (orbitMetersEasingSelect) {
+        orbitMetersEasingSelect.addEventListener('change', () => {
+          const nextKey = orbitMetersEasingSelect.value as EasingOptionKey;
+          orbitMetersEasingKey = nextKey;
+          isOrbitMetersInterpolationEnabled = isEasingEnabled(nextKey);
           applyOrbitInterpolationToAll();
         });
       }
 
-      const rotateInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="rotate-interpolation-toggle"]'
+      const rotateEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="rotate-easing-select"]'
       );
-      if (rotateInterpolationButton) {
-        // Rotation interpolation toggle exists only when the layer has enough space.
-        updateRotateInterpolationButton = () => {
-          setToggleButtonState(
-            rotateInterpolationButton,
-            isRotateInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateRotateInterpolationButton();
-        rotateInterpolationButton.addEventListener('click', () => {
-          isRotateInterpolationEnabled = !isRotateInterpolationEnabled;
-          updateRotateInterpolationButton?.();
+      if (rotateEasingSelect) {
+        rotateEasingSelect.addEventListener('change', () => {
+          const nextKey = rotateEasingSelect.value as EasingOptionKey;
+          rotateEasingKey = nextKey;
+          isRotateInterpolationEnabled = isEasingEnabled(nextKey);
           applyRotateInterpolationToAll(isRotateInterpolationEnabled);
         });
       }
@@ -3713,20 +4018,15 @@ const main = async () => {
         });
       }
 
-      const opacityInterpolationButton = queryFirst<HTMLButtonElement>(
-        '[data-control="opacity-interpolation-toggle"]'
+      const opacityEasingSelect = queryFirst<HTMLSelectElement>(
+        '[data-control="opacity-easing-select"]'
       );
-      if (opacityInterpolationButton) {
-        updateOpacityInterpolationButton = () => {
-          setToggleButtonState(
-            opacityInterpolationButton,
-            isOpacityInterpolationEnabled,
-            'binary'
-          );
-        };
-        updateOpacityInterpolationButton();
-        opacityInterpolationButton.addEventListener('click', () => {
-          setOpacityInterpolationEnabled(!isOpacityInterpolationEnabled);
+      if (opacityEasingSelect) {
+        opacityEasingSelect.addEventListener('change', () => {
+          const nextKey = opacityEasingSelect.value as EasingOptionKey;
+          opacityEasingKey = nextKey;
+          isOpacityInterpolationEnabled = isEasingEnabled(nextKey);
+          applyOpacityInterpolationOptionsToAll();
         });
       }
 
@@ -3810,14 +4110,18 @@ const main = async () => {
       const newTag = {} as DemoSpriteTag;
       newTag.orderIndex = index;
       newTag.iconSpecId = imageSpec.id;
-      const location = initializeMovementState(
-        STARTUP_CENTER,
-        currentAnimationMode,
-        newTag
-      );
+      const location =
+        isTestMode && index === 0
+          ? applyTestSpritePreset(newTag)
+          : initializeMovementState(
+              STARTUP_CENTER,
+              currentAnimationMode,
+              newTag
+            );
       const spriteVisibilityDistance = isPseudoLodEnabled
         ? generatePseudoLodDistanceMeters()
         : undefined;
+      const spriteBorder = resolveSpriteBorderDefinition(id);
       return {
         spriteId: id,
         location: {
@@ -3837,6 +4141,7 @@ const main = async () => {
             autoRotation: isAutoRotationEnabled,
             rotateDeg: primaryPlacement.rotateDeg,
             anchor: primaryPlacement.anchor,
+            ...(spriteBorder ?? {}),
             interpolation: isRotateInterpolationEnabled
               ? {
                   rotateDeg: {
@@ -3856,6 +4161,10 @@ const main = async () => {
             originLocation: { subLayer: PRIMARY_SUB_LAYER, order: 0 }, // Use the primary image as the origin.
             scale: SECONDARY_IMAGE_SCALE,
             opacity: secondaryOpacity,
+            leaderLine: isSecondaryLeaderLineEnabled
+              ? { ...SECONDARY_LEADER_LINE_STYLE }
+              : undefined,
+            ...(spriteBorder ?? {}),
             ...(secondaryOffset
               ? {
                   offset: secondaryOffset,
@@ -3910,6 +4219,9 @@ const main = async () => {
         if (removedIds.length > 0) {
           spriteLayer.removeSprites(removedIds);
           removed = removedIds.length;
+          if (selectedSpriteId && removedIds.includes(selectedSpriteId)) {
+            clearSpriteSelection();
+          }
         }
       }
 
@@ -3924,6 +4236,7 @@ const main = async () => {
       spriteLayerRebuildPromise = (async () => {
         stopMovementInterval();
         detachSpriteMouseEvents();
+        selectedSpriteId = null;
         if (map.getLayer(SPRITE_LAYER_ID)) {
           map.removeLayer(SPRITE_LAYER_ID);
         }
@@ -3976,6 +4289,9 @@ const main = async () => {
         applyRotateInterpolationToAll(isRotateInterpolationEnabled);
         applyOrbitInterpolationToAll();
         applyPrimaryOpacityValue(primaryOpacityCurrentValue, false);
+        spriteLayer.setInterpolationCalculation(
+          isInterpolationCalculationEnabled
+        );
         applyPseudoLodVisibility();
         applyLayerVisibility(isActive);
         reconcileSpriteVisibility();
@@ -4107,6 +4423,7 @@ const main = async () => {
             ? {
                 mode: locationInterpolationMode,
                 durationMs: MOVEMENT_INTERVAL_MS,
+                easing: resolveEasingOption(locationEasingKey),
               }
             : null;
         }

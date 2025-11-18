@@ -15,10 +15,6 @@ dist-demo/
 .DS_Store
 Thumbs.db
 
-# Testing
-coverage/
-.nyc_output/
-
 # Environment
 .env
 .env.local
@@ -28,9 +24,6 @@ coverage/
 
 # Logs
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
 
 # Generated files
 src/generated/

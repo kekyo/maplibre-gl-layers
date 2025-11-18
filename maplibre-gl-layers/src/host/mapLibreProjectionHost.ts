@@ -13,7 +13,7 @@ import type {
   ProjectionHost,
   SpriteMercatorCoordinate,
 } from '../internalTypes';
-import { DEG2RAD, TILE_SIZE } from '../const';
+import { createProjectionHostParamsFromMapLibre } from './projectionHost';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -34,72 +34,54 @@ export const createMapLibreProjectionHost = (
   const getZoom = () => mapLibreMap.getZoom();
 
   // Internal function for get mercator matrix from MapLibre.
-  const getMercatorMatrix = (): ReadonlyMat4 | null => {
+  const getMercatorMatrix = (): ReadonlyMat4 | undefined => {
     const transform = mapLibreMap.transform;
     if (!transform) {
-      return null;
+      return undefined;
     }
     // DIRTY: Refers internal mercator matrix... How to extract with safe method?
     const mercatorMatrix: ReadonlyMat4 | undefined =
       (transform as any).mercatorMatrix ?? (transform as any)._mercatorMatrix;
     if (!mercatorMatrix) {
-      return null;
+      return undefined;
     }
     return mercatorMatrix;
   };
 
   /**
    * Extracts the current clip-space context if the mercator matrix is available.
-   * @returns {ClipContext | null} Clip context or `null` when the transform is not ready.
+   * @returns {ClipContext | undefined} Clip context or `null` when the transform is not ready.
    */
-  const getClipContext = (): ClipContext | null => {
+  const getClipContext = (): ClipContext | undefined => {
     const mercatorMatrix = getMercatorMatrix();
     if (!mercatorMatrix) {
-      return null;
+      return undefined;
     }
     return { mercatorMatrix };
   };
 
-  const getCameraLocation = (): SpriteLocation | null => {
-    const mapInstance = mapLibreMap;
-    const transform = mapInstance?.transform;
-    if (!mapInstance || !transform) {
-      return null;
-    }
-    const center = mapInstance.getCenter();
-    const ensureFiniteNumber = (value: unknown): number | undefined =>
-      typeof value === 'number' && Number.isFinite(value)
-        ? (value as number)
-        : undefined;
-    const zoom = ensureFiniteNumber(transform.zoom) ?? mapInstance.getZoom();
-    const pitchDeg =
-      ensureFiniteNumber(transform.pitch) ?? mapInstance.getPitch();
-    const cameraToCenterDistance = ensureFiniteNumber(
-      transform.cameraToCenterDistance
-    );
-    if (!Number.isFinite(cameraToCenterDistance)) {
-      return null;
-    }
-    const tileSize = ensureFiniteNumber(transform.tileSize) ?? TILE_SIZE;
-    const worldSize = tileSize * Math.pow(2, Number.isFinite(zoom) ? zoom : 0);
-    if (!Number.isFinite(worldSize) || worldSize <= 0) {
-      return null;
-    }
-    const mercator = MercatorCoordinate.fromLngLat(center, 0);
-    const pixelPerMeter = mercator.meterInMercatorCoordinateUnits() * worldSize;
-    if (!Number.isFinite(pixelPerMeter) || pixelPerMeter <= 0) {
-      return null;
-    }
-    const centerElevation = ensureFiniteNumber(transform.elevation) ?? 0;
-    const pitchRad = (Number.isFinite(pitchDeg) ? pitchDeg : 0) * DEG2RAD;
-    const altitude =
-      (Math.cos(pitchRad) * cameraToCenterDistance!) / pixelPerMeter +
-      centerElevation;
-    return {
-      lng: center.lng,
-      lat: center.lat,
-      z: altitude,
-    };
+  const getCameraLocation = () => {
+    const params = createProjectionHostParamsFromMapLibre(mapLibreMap);
+    return params.cameraLocation;
+
+    // TODO: Garbage
+    //const mercator = params.cameraLocation;
+    //if (!mercator) {
+    //  return null;
+    //}
+    //const coord = new MercatorCoordinate(
+    //  mercator.x,
+    //  mercator.y,
+    //  mercator.z ?? 0
+    //);
+    //const lngLat = coord.toLngLat();
+    //const metersPerUnit = coord.meterInMercatorCoordinateUnits();
+    //const altitude = (mercator.z ?? 0) * (metersPerUnit || 1);
+    //return {
+    //  lng: lngLat.lng,
+    //  lat: lngLat.lat,
+    //  z: altitude,
+    //};
   };
 
   /**
@@ -115,15 +97,17 @@ export const createMapLibreProjectionHost = (
    * @param location Location.
    * @returns Projected point if valid location.
    */
-  const project = (location: SpriteLocation) => mapLibreMap.project(location);
+  const project = (location: SpriteLocation): SpritePoint =>
+    mapLibreMap.project(location);
 
   /**
    * Unproject the location.
    * @param point Projected point.
    * @returns Location if valid point.
    */
-  const unproject = (point: Readonly<SpritePoint>): SpriteLocation | null =>
-    mapLibreMap.unproject([point.x, point.y]);
+  const unproject = (
+    point: Readonly<SpritePoint>
+  ): SpriteLocation | undefined => mapLibreMap.unproject([point.x, point.y]);
 
   /**
    * Calculate perspective ratio.

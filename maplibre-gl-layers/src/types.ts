@@ -49,6 +49,16 @@ export interface SpriteImageOffset {
 }
 
 /**
+ * Line attribute.
+ */
+export interface SpriteImageLineAttribute {
+  /** CSS color string. Defaults to red. */
+  color?: string;
+  /** Line width in meters. Defaults to 1. */
+  widthMeters?: number;
+}
+
+/**
  * Anchor within the image.
  * The sprite's base coordinate maps to this location; range is -1.0 to 1.0 relative to image size.
  * x: -1.0 at left, 0.0 center, 1.0 right. y: -1.0 bottom, 0.0 center, 1.0 top.
@@ -82,12 +92,72 @@ export interface SpriteImageOriginLocation {
 /** Defines movement interpolation modes. */
 export type SpriteInterpolationMode = 'feedback' | 'feedforward';
 
-/** Easing function signature used to map interpolation progress. */
-export type EasingFunction = (progress: number) => number;
+export interface SpriteEasingLinear {
+  type: 'linear';
+}
 
-export type SpriteEasingPresetName = 'linear';
+export interface SpriteEasingEase {
+  type: 'ease';
+  /** Power applied to the easing curve. Defaults to 3. */
+  power?: number;
+  /** Direction of the easing curve. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
+}
 
-export type SpriteInterpolationEasing = EasingFunction | SpriteEasingPresetName;
+export interface SpriteEasingExponential {
+  type: 'exponential';
+  /** Growth rate used by the exponential curve. Defaults to 5. */
+  exponent?: number;
+  /** Direction of the exponential curve. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
+}
+
+export interface SpriteEasingQuadratic {
+  type: 'quadratic';
+  /** Direction of the quadratic curve. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
+}
+
+export interface SpriteEasingCubic {
+  type: 'cubic';
+  /** Direction of the cubic curve. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
+}
+
+export interface SpriteEasingSine {
+  type: 'sine';
+  /** Direction of the sine ease. Defaults to in-out. */
+  mode?: 'in' | 'out' | 'in-out';
+  /** Multiplier applied to the sine amplitude. Defaults to 1. */
+  amplitude?: number;
+}
+
+export interface SpriteEasingBounce {
+  type: 'bounce';
+  /** Number of visible bounces before settling. Defaults to 3. */
+  bounces?: number;
+  /** Decay factor applied per bounce; range (0, 1]. Defaults to 0.5. */
+  decay?: number;
+}
+
+export interface SpriteEasingBack {
+  type: 'back';
+  /** Overshoot factor controlling how far past the target the curve goes. Defaults to 1.70158. */
+  overshoot?: number;
+}
+
+/** Union of supported easing definitions. */
+export type SpriteEasing =
+  | SpriteEasingLinear
+  | SpriteEasingEase
+  | SpriteEasingExponential
+  | SpriteEasingQuadratic
+  | SpriteEasingCubic
+  | SpriteEasingSine
+  | SpriteEasingBounce
+  | SpriteEasingBack;
+
+export type SpriteEasingType = SpriteEasing['type'];
 
 /** Options for interpolating values. */
 export interface SpriteInterpolationOptions {
@@ -95,8 +165,8 @@ export interface SpriteInterpolationOptions {
   mode?: SpriteInterpolationMode;
   /** Duration in milliseconds. */
   durationMs: number;
-  /** Easing mapping applied to progress values. Accepts preset names or custom functions. Defaults to linear. */
-  easing?: SpriteInterpolationEasing;
+  /** Easing definition. Defaults to linear. */
+  easing?: SpriteEasing;
 }
 
 /** Interpolation configuration for rotateDeg and offsetDeg. */
@@ -127,6 +197,10 @@ export interface SpriteImageDefinitionInit {
   anchor?: SpriteAnchor;
   /** Offset from the sprite coordinate. Defaults to no offset. */
   offset?: SpriteImageOffset;
+  /** Optional border rendered around the image. */
+  border?: SpriteImageLineAttribute;
+  /** Optional leader line rendered toward the origin image. */
+  leaderLine?: SpriteImageLineAttribute;
   /**
    * Determines which coordinate to anchor against.
    * - Omitted: use the sprite base coordinate.
@@ -169,6 +243,10 @@ export interface SpriteImageDefinitionUpdate {
   anchor?: SpriteAnchor;
   /** Offset from the sprite coordinate. */
   offset?: SpriteImageOffset;
+  /** Border rendered around the image. Specify null to remove. */
+  border?: SpriteImageLineAttribute | null;
+  /** Leader line rendered toward the origin image. Specify null to remove. */
+  leaderLine?: SpriteImageLineAttribute | null;
   /** Additional rotation in degrees. */
   rotateDeg?: number;
   /** Enables auto-rotation toward the travel direction. */
@@ -203,10 +281,19 @@ export interface SpriteInit<TTag> {
   /** Initial location. */
   location: SpriteLocation;
   /**
+   * Marks the sprite as invalidated initially, causing interpolation parameters to be
+   * ignored until the first update drives the value again.
+   */
+  invalidate?: boolean;
+  /**
    * Pseudo LOD threshold for the sprite. When the camera distance exceeds this value,
    * all images attached to the sprite become invisible.
    */
   visibilityDistanceMeters?: number;
+  /**
+   * Default interpolation settings applied to initial location updates until overridden.
+   */
+  interpolation?: SpriteInterpolationOptions;
   /** Array of zero or more images. */
   images: SpriteImageDefinitionInitEntry[];
   /** Optional tag value; null or omission means no tag. */
@@ -236,13 +323,15 @@ export type SpriteInitCollection<TTag> =
  * Interpolated values.
  * @param T - Value type.
  */
-export interface InterpolatedValues<T> {
+export interface SpriteInterpolatedValues<T> {
   /** Current time value. */
   readonly current: T;
   /** Requested value. */
   readonly from: T | undefined;
   /** Will be reached value. */
   readonly to: T | undefined;
+  /** Marks whether the value was invalidated due to visibility changes. */
+  readonly invalidated: boolean | undefined;
 }
 
 /**
@@ -250,9 +339,19 @@ export interface InterpolatedValues<T> {
  */
 export interface SpriteImageInterpolatedOffset {
   /** Distance from the anchor in meters. */
-  readonly offsetMeters: InterpolatedValues<number>;
+  readonly offsetMeters: SpriteInterpolatedValues<number>;
   /** Heading describing the offset direction in degrees. */
-  readonly offsetDeg: InterpolatedValues<number>;
+  readonly offsetDeg: SpriteInterpolatedValues<number>;
+}
+
+/**
+ * Resolved line attribute state.
+ */
+export interface SpriteImageLineAttributeState {
+  /** CSS color string applied to the line. */
+  readonly color: string;
+  /** Line width in meters. */
+  readonly widthMeters: number;
 }
 
 /**
@@ -262,11 +361,13 @@ export interface SpriteImageInterpolatedOffset {
  * @property {number} order - Ordering slot within the sub-layer.
  * @property {string} imageId - Identifier of the registered image or glyph.
  * @property {SpriteMode} mode - Rendering mode applied to the image.
- * @property {InterpolatedValues<number>} opacity - Opacity multiplier applied when rendering, with interpolation metadata.
+ * @property {SpriteInterpolatedValues<number>} opacity - Opacity multiplier applied when rendering, with interpolation metadata.
  * @property {number} scale - Scale factor converting pixels to meters.
  * @property {Readonly<SpriteAnchor>} anchor - Anchor coordinates resolved for the image.
- * @property {Readonly<SpriteImageInterpolatedOffset>} offset - Offset applied relative to the anchor point, with interpolation metadata.
- * @property {InterpolatedValues<number>} rotateDeg - Additional rotation in degrees plus interpolation metadata.
+ * @property {SpriteImageInterpolatedOffset} offset - Offset applied relative to the anchor point, with interpolation metadata.
+ * @property {SpriteImageLineAttributeState | undefined} border - Border line attribute.
+ * @property {SpriteImageLineAttributeState | undefined} leaderLine - Leader line attribute.
+ * @property {SpriteInterpolatedValues<number>} rotateDeg - Additional rotation in degrees plus interpolation metadata.
  * @property {boolean} autoRotation - Indicates whether auto-rotation is active.
  * @property {number} autoRotationMinDistanceMeters - Minimum travel distance before auto-rotation updates.
  * @property {number} resolvedBaseRotateDeg - Internal base rotation resolved for the current frame.
@@ -287,14 +388,18 @@ export interface SpriteImageState {
   /** Anchor coordinates resolved for the image. */
   readonly anchor: Readonly<SpriteAnchor>;
   /** Opacity multiplier applied when rendering. */
-  readonly opacity: InterpolatedValues<number>;
+  readonly opacity: SpriteInterpolatedValues<number>;
   /** Offset applied relative to the anchor point. */
-  readonly offset: Readonly<SpriteImageInterpolatedOffset>;
+  readonly offset: SpriteImageInterpolatedOffset;
+  /** Optional border rendered around the image. */
+  readonly border: SpriteImageLineAttributeState | undefined;
+  /** Optional leader line rendered toward the origin image. */
+  readonly leaderLine: SpriteImageLineAttributeState | undefined;
   /**
    * Additional rotation in degrees with interpolation metadata.
    * `from`/`to` are `undefined` when no rotation animation is running.
    */
-  readonly rotateDeg: InterpolatedValues<number>;
+  readonly rotateDeg: SpriteInterpolatedValues<number>;
   /** Indicates whether auto-rotation is active. */
   readonly autoRotation: boolean;
   /** Minimum travel distance before auto-rotation updates. */
@@ -326,7 +431,7 @@ export interface SpriteCurrentState<TTag> {
    * Location information including current, source, and destination coordinates.
    * `from`/`to` are `undefined` when interpolation is inactive.
    */
-  readonly location: InterpolatedValues<Readonly<SpriteLocation>>;
+  readonly location: SpriteInterpolatedValues<Readonly<SpriteLocation>>;
   /** Current image states, grouped by sub-layer and order. */
   readonly images: ReadonlyMap<number, ReadonlyMap<number, SpriteImageState>>;
   /** Optional tag value; null indicates no tag. */
@@ -632,11 +737,6 @@ export interface SpriteLayerOptions {
   spriteScaling?: SpriteScalingOptions;
   /** Optional texture filtering configuration. */
   textureFiltering?: SpriteTextureFilteringOptions;
-  /**
-   * When true, renders red outlines around sprite hit-test regions to aid debugging.
-   * Defaults to false.
-   */
-  showDebugBounds?: boolean;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -851,6 +951,7 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    * @param {boolean} enabled - When false, hit testing is skipped and the internal data structure is cleared.
    */
   readonly setHitTestEnabled: (enabled: boolean) => void;
+
   ////////////////////////////////////////////////////////////////////////////////
 
   /**
@@ -943,6 +1044,13 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
   ) => number;
 
   ////////////////////////////////////////////////////////////////////////////////
+
+  /**
+   * Controls entire interpolation Calculation.
+   * When `false`, interpolation halts immediately and resumes smoothly from the paused state when re-enabled.
+   * @param moveable - Continuous calculation for movement interpolation when value is true.
+   */
+  readonly setInterpolationCalculation: (moveable: boolean) => void;
 
   /**
    * Adds an event listener.

@@ -21,9 +21,6 @@ import {
   type SpriteInitCollection,
   type SpriteLayerInterface,
   type SpriteLayerOptions,
-  type SpriteTextureFilteringOptions,
-  type SpriteTextureMagFilter,
-  type SpriteTextureMinFilter,
   type SpriteAnchor,
   type SpriteLocation,
   type SpriteCurrentState,
@@ -37,6 +34,7 @@ import {
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
   type SpriteImageOffset,
+  type SpriteImageLineAttribute,
   type SpriteInterpolationOptions,
   type SpriteImageOriginLocation,
   type SpriteScreenPoint,
@@ -47,7 +45,6 @@ import {
   type SpriteImageRegisterOptions,
 } from './types';
 import type {
-  ResolvedTextureFilteringOptions,
   RegisteredImage,
   InternalSpriteImageState,
   InternalSpriteCurrentState,
@@ -58,6 +55,7 @@ import type {
   RenderInterpolationParams,
   SpriteOriginReference,
   SpriteOriginReferenceKey,
+  ResolvedSpriteImageLineAttribute,
 } from './internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -76,6 +74,12 @@ import {
   clampOpacity,
 } from './utils/math';
 import {
+  DEFAULT_BORDER_COLOR,
+  DEFAULT_BORDER_COLOR_RGBA,
+  parseCssColorToRgba,
+  type RgbaColor,
+} from './utils/color';
+import {
   applyOffsetUpdate,
   applyOpacityUpdate,
   clearOffsetDegInterpolation,
@@ -84,12 +88,16 @@ import {
   syncImageRotationChannel,
   hasActiveImageInterpolations,
 } from './interpolation/interpolationChannels';
-import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from './default';
 import {
   createSpriteDrawProgram,
-  createDebugOutlineRenderer,
+  createBorderOutlineRenderer,
+  createLeaderLineRenderer,
   type SpriteDrawProgram,
-  type DebugOutlineRenderer,
+  type BorderOutlineRenderer,
+  type LeaderLineRenderer,
+  resolveTextureFilteringOptions,
+  resolveAnisotropyExtension,
+  ensureTextures,
 } from './gl/shader';
 import { createCalculationHost } from './host/calculationHost';
 import {
@@ -98,7 +106,12 @@ import {
 } from './host/projectionHost';
 import { createWasmProjectionHost } from './host/wasmProjectionHost';
 import { createWasmCalculationHost } from './host/wasmCalculationHost';
-import { DEFAULT_ANCHOR, DEFAULT_IMAGE_OFFSET } from './const';
+import {
+  DEFAULT_ANCHOR,
+  DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
+  DEFAULT_BORDER_WIDTH_METERS,
+  DEFAULT_IMAGE_OFFSET,
+} from './const';
 import {
   SL_DEBUG,
   ATLAS_QUEUE_CHUNK_SIZE,
@@ -164,134 +177,8 @@ import { renderTextGlyphBitmap } from './gl/text';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-/** Default threshold in meters for auto-rotation to treat movement as significant. */
-const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
-
 /** Sentinel used when an image has not been placed on any atlas page. */
 const ATLAS_PAGE_INDEX_NONE = -1;
-
-/** List of acceptable minification filters exposed to callers. */
-const MIN_FILTER_VALUES: readonly SpriteTextureMinFilter[] = [
-  'nearest',
-  'linear',
-  'nearest-mipmap-nearest',
-  'nearest-mipmap-linear',
-  'linear-mipmap-nearest',
-  'linear-mipmap-linear',
-] as const;
-
-/** List of acceptable magnification filters. */
-const MAG_FILTER_VALUES: readonly SpriteTextureMagFilter[] = [
-  'nearest',
-  'linear',
-] as const;
-
-//////////////////////////////////////////////////////////////////////////////////////
-
-/** Minification filters that require mipmaps to produce complete textures. */
-const MIPMAP_MIN_FILTERS: ReadonlySet<SpriteTextureMinFilter> =
-  new Set<SpriteTextureMinFilter>([
-    'nearest-mipmap-nearest',
-    'nearest-mipmap-linear',
-    'linear-mipmap-nearest',
-    'linear-mipmap-linear',
-  ]);
-
-const filterRequiresMipmaps = (filter: SpriteTextureMinFilter): boolean =>
-  MIPMAP_MIN_FILTERS.has(filter);
-
-const resolveTextureFilteringOptions = (
-  options?: SpriteTextureFilteringOptions
-): ResolvedTextureFilteringOptions => {
-  const minCandidate = options?.minFilter;
-  const minFilter: SpriteTextureMinFilter = MIN_FILTER_VALUES.includes(
-    minCandidate as SpriteTextureMinFilter
-  )
-    ? (minCandidate as SpriteTextureMinFilter)
-    : DEFAULT_TEXTURE_FILTERING_OPTIONS.minFilter!;
-
-  const magCandidate = options?.magFilter;
-  const magFilter: SpriteTextureMagFilter = MAG_FILTER_VALUES.includes(
-    magCandidate as SpriteTextureMagFilter
-  )
-    ? (magCandidate as SpriteTextureMagFilter)
-    : DEFAULT_TEXTURE_FILTERING_OPTIONS.magFilter!;
-
-  let generateMipmaps =
-    options?.generateMipmaps ??
-    DEFAULT_TEXTURE_FILTERING_OPTIONS.generateMipmaps!;
-  if (filterRequiresMipmaps(minFilter)) {
-    generateMipmaps = true;
-  }
-
-  let maxAnisotropy =
-    options?.maxAnisotropy ?? DEFAULT_TEXTURE_FILTERING_OPTIONS.maxAnisotropy!;
-  if (!Number.isFinite(maxAnisotropy) || maxAnisotropy < 1) {
-    maxAnisotropy = 1;
-  }
-
-  return {
-    minFilter,
-    magFilter,
-    generateMipmaps,
-    maxAnisotropy,
-  };
-};
-
-const ANISOTROPY_EXTENSION_NAMES = [
-  'EXT_texture_filter_anisotropic',
-  'WEBKIT_EXT_texture_filter_anisotropic',
-  'MOZ_EXT_texture_filter_anisotropic',
-] as const;
-
-const resolveAnisotropyExtension = (
-  glContext: WebGLRenderingContext
-): EXT_texture_filter_anisotropic | null => {
-  for (const name of ANISOTROPY_EXTENSION_NAMES) {
-    const extension = glContext.getExtension(name);
-    if (extension) {
-      return extension as EXT_texture_filter_anisotropic;
-    }
-  }
-  return null;
-};
-
-const isPowerOfTwo = (value: number): boolean =>
-  value > 0 && (value & (value - 1)) === 0;
-
-const resolveGlMinFilter = (
-  glContext: WebGLRenderingContext,
-  filter: SpriteTextureMinFilter
-): number => {
-  switch (filter) {
-    case 'nearest':
-      return glContext.NEAREST;
-    case 'nearest-mipmap-nearest':
-      return glContext.NEAREST_MIPMAP_NEAREST;
-    case 'nearest-mipmap-linear':
-      return glContext.NEAREST_MIPMAP_LINEAR;
-    case 'linear-mipmap-nearest':
-      return glContext.LINEAR_MIPMAP_NEAREST;
-    case 'linear-mipmap-linear':
-      return glContext.LINEAR_MIPMAP_LINEAR;
-    case 'linear':
-    default:
-      return glContext.LINEAR;
-  }
-};
-
-const resolveGlMagFilter = (
-  glContext: WebGLRenderingContext,
-  filter: SpriteTextureMagFilter
-): number => {
-  switch (filter) {
-    case 'nearest':
-      return glContext.NEAREST;
-    case 'linear':
-    default:
-      return glContext.LINEAR;
-  }
-};
 
 const updateImageInterpolationDirtyState = <T>(
   sprite: InternalSpriteCurrentState<T>,
@@ -303,8 +190,6 @@ const updateImageInterpolationDirtyState = <T>(
     sprite.interpolationDirty = true;
   }
 };
-
-//////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Applies auto-rotation to all images within a sprite when movement exceeds the configured threshold.
@@ -382,11 +267,11 @@ export const applyAutoRotation = <T>(
 
 /**
  * Clones an optional origin location descriptor to avoid mutating caller state.
- * @param {SpriteImageOriginLocation} [origin] - Source origin definition.
+ * @param {SpriteImageOriginLocation} origin - Source origin definition.
  * @returns {SpriteImageOriginLocation | undefined} Deep clone of the origin or `undefined` when absent.
  */
 const cloneOriginLocation = (
-  origin?: SpriteImageOriginLocation
+  origin: SpriteImageOriginLocation | undefined
 ): SpriteImageOriginLocation | undefined => {
   if (!origin) {
     return undefined;
@@ -403,10 +288,10 @@ const cloneOriginLocation = (
 
 /**
  * Clones a sprite anchor, defaulting to the origin when none supplied.
- * @param {SpriteAnchor} [anchor] - Anchor to clone.
+ * @param {SpriteAnchor} anchor - Anchor to clone.
  * @returns {SpriteAnchor} Safe copy for mutation within the layer state.
  */
-const cloneAnchor = (anchor?: SpriteAnchor): SpriteAnchor => {
+const cloneAnchor = (anchor: SpriteAnchor | undefined): SpriteAnchor => {
   if (!anchor) {
     return { ...DEFAULT_ANCHOR };
   }
@@ -415,10 +300,12 @@ const cloneAnchor = (anchor?: SpriteAnchor): SpriteAnchor => {
 
 /**
  * Clones an image offset, applying defaults when missing.
- * @param {SpriteImageOffset} [offset] - Offset definition to copy.
+ * @param {SpriteImageOffset | undefined} offset - Offset definition to copy.
  * @returns {SpriteImageOffset} Cloned offset structure.
  */
-const cloneOffset = (offset?: SpriteImageOffset): SpriteImageOffset => {
+const cloneOffset = (
+  offset: SpriteImageOffset | undefined
+): SpriteImageOffset => {
   if (!offset) {
     return { ...DEFAULT_IMAGE_OFFSET };
   }
@@ -429,7 +316,8 @@ const cloneOffset = (offset?: SpriteImageOffset): SpriteImageOffset => {
 };
 
 const createInterpolatedOffsetState = (
-  offset?: SpriteImageOffset
+  offset: SpriteImageOffset | undefined,
+  invalidated: boolean
 ): MutableSpriteImageInterpolatedOffset => {
   const base = offset ? cloneOffset(offset) : { ...DEFAULT_IMAGE_OFFSET };
   return {
@@ -437,12 +325,42 @@ const createInterpolatedOffsetState = (
       current: base.offsetMeters,
       from: undefined,
       to: undefined,
+      invalidated,
     },
     offsetDeg: {
       current: base.offsetDeg,
       from: undefined,
       to: undefined,
+      invalidated,
     },
+  };
+};
+
+const resolveBorderWidthMeters = (width?: number): number => {
+  if (typeof width !== 'number') {
+    return DEFAULT_BORDER_WIDTH_METERS;
+  }
+  if (!Number.isFinite(width) || width <= 0) {
+    return DEFAULT_BORDER_WIDTH_METERS;
+  }
+  return width;
+};
+
+const resolveSpriteImageLineAttribute = (
+  border: SpriteImageLineAttribute | null | undefined
+): ResolvedSpriteImageLineAttribute | undefined => {
+  if (!border) {
+    return undefined;
+  }
+  const colorString =
+    border.color && border.color.trim().length > 0
+      ? border.color
+      : DEFAULT_BORDER_COLOR;
+  const rgba = parseCssColorToRgba(colorString, DEFAULT_BORDER_COLOR_RGBA);
+  return {
+    color: colorString,
+    widthMeters: resolveBorderWidthMeters(border.widthMeters),
+    rgba,
   };
 };
 
@@ -451,13 +369,16 @@ const createInterpolatedOffsetState = (
  * @param {SpriteInterpolationOptions} options - Options provided by the user.
  * @returns {SpriteInterpolationOptions} Cloned options object.
  */
+const cloneEasing = (easing?: SpriteInterpolationOptions['easing']) =>
+  easing ? { ...easing } : easing;
+
 const cloneInterpolationOptions = (
   options: SpriteInterpolationOptions
 ): SpriteInterpolationOptions => {
   return {
     mode: options.mode,
     durationMs: options.durationMs,
-    easing: options.easing,
+    easing: cloneEasing(options.easing),
   };
 };
 
@@ -466,11 +387,11 @@ const cloneInterpolationOptions = (
  */
 const sanitizeVisibilityDistanceMeters = (
   value: number | null | undefined
-): number | undefined => {
+): number | null | undefined => {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return value;
   }
-  return undefined;
+  return value;
 };
 
 /**
@@ -479,13 +400,15 @@ const sanitizeVisibilityDistanceMeters = (
  * @param {number} subLayer - Sub-layer index the image belongs to.
  * @param {number} order - Ordering slot within the sub-layer.
  * @param {SpriteOriginReference} originReference - Encode/Decode origin reference.
+ * @param {boolean} invalidated - Initially invalidate state.
  * @returns {InternalSpriteImageState} Normalized internal state ready for rendering.
  */
 export const createImageStateFromInit = (
   imageInit: SpriteImageDefinitionInit,
   subLayer: number,
   order: number,
-  originReference: SpriteOriginReference
+  originReference: SpriteOriginReference,
+  invalidated: boolean
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
@@ -507,14 +430,20 @@ export const createImageStateFromInit = (
       current: initialOpacity,
       from: undefined,
       to: undefined,
+      invalidated,
     },
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
-    offset: createInterpolatedOffsetState(initialOffset),
+    border: resolveSpriteImageLineAttribute(imageInit.border),
+    borderPixelWidth: 0,
+    leaderLine: resolveSpriteImageLineAttribute(imageInit.leaderLine),
+    leaderLinePixelWidth: 0,
+    offset: createInterpolatedOffsetState(initialOffset, invalidated),
     rotateDeg: {
       current: initialRotateDeg,
       from: undefined,
       to: undefined,
+      invalidated,
     },
     rotationCommandDeg: initialRotateDeg,
     displayedRotateDeg: initialRotateDeg,
@@ -540,12 +469,14 @@ export const createImageStateFromInit = (
     lastCommandOpacity: initialOpacity,
     interpolationDirty: false,
   };
+
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
   const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
   if (rotateInitOption) {
     state.rotationInterpolationOptions =
       cloneInterpolationOptions(rotateInitOption);
   }
+
   const opacityInitOption = imageInit.interpolation?.opacity ?? null;
   if (opacityInitOption) {
     state.opacityInterpolationOptions =
@@ -578,7 +509,6 @@ export const createSpriteLayer = <T = any>(
   const resolvedTextureFiltering = resolveTextureFilteringOptions(
     options?.textureFiltering
   );
-  const showDebugBounds = options?.showDebugBounds === true;
 
   const createProjectionHostForMap = (
     mapInstance: MapLibreMap
@@ -608,17 +538,19 @@ export const createSpriteLayer = <T = any>(
   };
 
   /** WebGL context supplied by MapLibre, assigned during onAdd. */
-  let gl: WebGLRenderingContext | null = null;
+  let gl: WebGLRenderingContext | undefined;
   /** MapLibre map instance provided to the custom layer. */
-  let map: MapLibreMap | null = null;
+  let map: MapLibreMap | undefined;
   /** Sprite drawing helper encapsulating shader state. */
-  let spriteDrawProgram: SpriteDrawProgram<T> | null = null;
+  let spriteDrawProgram: SpriteDrawProgram<T> | undefined;
   /** Cached anisotropic filtering extension instance (when available). */
-  let anisotropyExtension: EXT_texture_filter_anisotropic | null = null;
+  let anisotropyExtension: EXT_texture_filter_anisotropic | undefined;
   /** Maximum anisotropy supported by the current context. */
   let maxSupportedAnisotropy = 1;
-  /** Helper used to render debug hit-test outlines. */
-  let debugOutlineRenderer: DebugOutlineRenderer | null = null;
+  /** Helper used to render sprite border outlines. */
+  let borderOutlineRenderer: BorderOutlineRenderer | undefined;
+  /** Helper used to render leader lines. */
+  let leaderLineRenderer: LeaderLineRenderer | undefined;
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -663,6 +595,39 @@ export const createSpriteLayer = <T = any>(
 
   const now = (): number =>
     typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+  // Tracks interpolation clock so it can be paused without losing progress.
+  let interpolationCalculationEnabled = true;
+  let interpolationTimestamp: number | undefined;
+  let interpolationTimestampAnchor: number | undefined;
+
+  const resolveInterpolationTimestamp = (realTimestamp: number): number => {
+    const effectiveReal = Number.isFinite(realTimestamp)
+      ? realTimestamp
+      : now();
+    if (interpolationTimestamp === undefined) {
+      interpolationTimestamp = effectiveReal;
+    }
+    if (interpolationTimestampAnchor === undefined) {
+      interpolationTimestampAnchor = effectiveReal;
+      return interpolationTimestamp;
+    }
+    if (interpolationCalculationEnabled) {
+      interpolationTimestamp += effectiveReal - interpolationTimestampAnchor;
+    }
+    interpolationTimestampAnchor = effectiveReal;
+    return interpolationTimestamp;
+  };
+
+  const resetInterpolationTimestampAnchor = (realTimestamp?: number): void => {
+    const effectiveReal = Number.isFinite(realTimestamp)
+      ? realTimestamp
+      : now();
+    if (interpolationTimestamp === undefined) {
+      interpolationTimestamp = effectiveReal;
+    }
+    interpolationTimestampAnchor = effectiveReal;
+  };
 
   const scheduleTextGlyphQueueProcessing = (): void => {
     if (textGlyphQueueTimer) {
@@ -927,6 +892,86 @@ export const createSpriteLayer = <T = any>(
    */
   const sprites = new Map<string, InternalSpriteCurrentState<T>>();
 
+  const invalidateImageInterpolationState = <TTag>(
+    sprite: InternalSpriteCurrentState<TTag>,
+    image: InternalSpriteImageState
+  ): void => {
+    const baseRotation = image.resolvedBaseRotateDeg ?? 0;
+    const displayedRotation = Number.isFinite(image.displayedRotateDeg)
+      ? image.displayedRotateDeg
+      : baseRotation + image.rotationCommandDeg;
+    const manualRotation = normalizeAngleDeg(displayedRotation - baseRotation);
+
+    image.rotationInterpolationState = null;
+    image.offsetDegInterpolationState = null;
+    image.offsetMetersInterpolationState = null;
+    image.opacityInterpolationState = null;
+
+    image.rotateDeg.current = manualRotation;
+    image.rotateDeg.from = undefined;
+    image.rotateDeg.to = undefined;
+    image.rotateDeg.invalidated = true;
+
+    image.rotationCommandDeg = manualRotation;
+    image.displayedRotateDeg = displayedRotation;
+    image.lastCommandRotateDeg = normalizeAngleDeg(displayedRotation);
+
+    image.offset.offsetDeg.from = undefined;
+    image.offset.offsetDeg.to = undefined;
+    image.offset.offsetDeg.invalidated = true;
+    image.lastCommandOffsetDeg = image.offset.offsetDeg.current;
+
+    image.offset.offsetMeters.from = undefined;
+    image.offset.offsetMeters.to = undefined;
+    image.offset.offsetMeters.invalidated = true;
+    image.lastCommandOffsetMeters = image.offset.offsetMeters.current;
+
+    image.opacity.from = undefined;
+    image.opacity.to = undefined;
+    image.opacity.invalidated = true;
+    image.opacityTargetValue = image.opacity.current;
+    image.lastCommandOpacity = image.opacity.current;
+    image.lodLastCommandOpacity = image.opacity.current;
+
+    updateImageInterpolationDirtyState(sprite, image);
+  };
+
+  const invalidateSpriteInterpolationState = <TTag>(
+    sprite: InternalSpriteCurrentState<TTag>
+  ): void => {
+    sprite.location.from = undefined;
+    sprite.location.to = undefined;
+    sprite.location.invalidated = true;
+    sprite.interpolationState = null;
+    sprite.pendingInterpolationOptions = null;
+    sprite.lastCommandLocation = cloneSpriteLocation(sprite.location.current);
+    sprite.lastAutoRotationLocation = cloneSpriteLocation(
+      sprite.location.current
+    );
+    sprite.interpolationDirty = false;
+
+    sprite.images.forEach((orderMap) => {
+      orderMap.forEach((image) => {
+        invalidateImageInterpolationState(sprite, image);
+      });
+    });
+  };
+
+  const invalidateAllInterpolations = (): void => {
+    sprites.forEach((sprite) => invalidateSpriteInterpolationState(sprite));
+  };
+
+  const updateVisibilityState = (): void => {
+    const visible = resolveDocumentVisibility();
+    if (visible === mapVisible) {
+      return;
+    }
+    mapVisible = visible;
+    if (!visible) {
+      invalidateAllInterpolations();
+    }
+  };
+
   /**
    * Updates image handle for every sprite image referencing the specified identifier.
    * @param imageId Image identifier.
@@ -1115,8 +1160,21 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
-  let canvasElement: HTMLCanvasElement | null = null;
+  let canvasElement: HTMLCanvasElement | undefined;
   const inputListenerDisposers: Array<() => void> = [];
+  let mapVisible =
+    typeof document !== 'undefined'
+      ? document.visibilityState !== 'hidden'
+      : true;
+
+  const resolveDocumentVisibility = (): boolean => {
+    const doc =
+      canvasElement?.ownerDocument ??
+      (typeof document !== 'undefined' ? document : undefined);
+    return doc ? doc.visibilityState !== 'hidden' : true;
+  };
+
+  const isLayerVisible = (): boolean => mapVisible;
 
   /**
    * Determines if any listeners are registered for the specified event.
@@ -1147,7 +1205,7 @@ export const createSpriteLayer = <T = any>(
    * @returns {{ sprite: SpriteCurrentState<T> | undefined; image: SpriteImageState | undefined }} Sprite/image state pair.
    */
   const resolveSpriteEventPayload = (
-    hitEntry: HitTestEntry<T> | null
+    hitEntry: HitTestEntry<T> | undefined
   ): {
     sprite: SpriteCurrentState<T> | undefined;
     image: SpriteImageState | undefined;
@@ -1209,7 +1267,7 @@ export const createSpriteLayer = <T = any>(
    * @param {MouseEvent | PointerEvent} originalEvent - Native input event.
    */
   const dispatchSpriteHover = (
-    hitEntry: HitTestEntry<T> | null,
+    hitEntry: HitTestEntry<T> | undefined,
     screenPoint: SpriteScreenPoint,
     originalEvent: MouseEvent | PointerEvent
   ): void => {
@@ -1237,14 +1295,16 @@ export const createSpriteLayer = <T = any>(
   /**
    * Resolves hit-test information for a native event.
    * @param {MouseEvent | PointerEvent | TouchEvent} nativeEvent - Original browser event.
-   * @returns {{ hitEntry: HitTestEntry; screenPoint: SpriteScreenPoint } | null} Hit-test result or `null`.
+   * @returns {{ hitEntry: HitTestEntry; screenPoint: SpriteScreenPoint } | undefined} Hit-test result or `undefined`.
    */
   const resolveHitTestResult = (
     nativeEvent: MouseEvent | PointerEvent | TouchEvent
-  ): {
-    hitEntry: HitTestEntry<T> | null;
-    screenPoint: SpriteScreenPoint;
-  } | null => {
+  ):
+    | {
+        hitEntry: HitTestEntry<T> | undefined;
+        screenPoint: SpriteScreenPoint;
+      }
+    | undefined => {
     return hitTestController.resolveHitTestResult(
       nativeEvent,
       canvasElement,
@@ -1291,149 +1351,6 @@ export const createSpriteLayer = <T = any>(
   };
 
   //////////////////////////////////////////////////////////////////////////
-
-  /**
-   * Creates or refreshes WebGL textures for registered images.
-   * Processes only queued entries to avoid unnecessary work.
-   * Intended to run just before drawing; returns immediately if the GL context is unavailable.
-   * Ensures registerImage calls outside the render loop sync on the next frame.
-   * @returns {void}
-   */
-  const ensureTextures = (): void => {
-    if (!gl) {
-      return;
-    }
-    atlasQueue.flushPending();
-    if (!atlasNeedsUpload) {
-      return;
-    }
-
-    const glContext = gl;
-    const pages = atlasManager.getPages();
-    const activePageIndices = new Set<number>();
-    pages.forEach((page) => activePageIndices.add(page.index));
-
-    atlasPageTextures.forEach((texture, pageIndex) => {
-      if (!activePageIndices.has(pageIndex)) {
-        glContext.deleteTexture(texture);
-        atlasPageTextures.delete(pageIndex);
-      }
-    });
-
-    pages.forEach((page) => {
-      const requiresUpload =
-        page.needsUpload || !atlasPageTextures.has(page.index);
-      if (!requiresUpload) {
-        return;
-      }
-
-      let texture = atlasPageTextures.get(page.index);
-      let isNewTexture = false;
-      if (!texture) {
-        texture = glContext.createTexture();
-        if (!texture) {
-          throw new Error('Failed to create texture.');
-        }
-        atlasPageTextures.set(page.index, texture);
-        isNewTexture = true;
-      }
-      glContext.bindTexture(glContext.TEXTURE_2D, texture);
-      if (isNewTexture) {
-        glContext.texParameteri(
-          glContext.TEXTURE_2D,
-          glContext.TEXTURE_WRAP_S,
-          glContext.CLAMP_TO_EDGE
-        );
-        glContext.texParameteri(
-          glContext.TEXTURE_2D,
-          glContext.TEXTURE_WRAP_T,
-          glContext.CLAMP_TO_EDGE
-        );
-      }
-      glContext.pixelStorei(glContext.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
-      glContext.texImage2D(
-        glContext.TEXTURE_2D,
-        0,
-        glContext.RGBA,
-        glContext.RGBA,
-        glContext.UNSIGNED_BYTE,
-        page.canvas as TexImageSource
-      );
-
-      let minFilterEnum = resolveGlMinFilter(
-        glContext,
-        resolvedTextureFiltering.minFilter
-      );
-      const magFilterEnum = resolveGlMagFilter(
-        glContext,
-        resolvedTextureFiltering.magFilter
-      );
-
-      let usedMipmaps = false;
-      if (resolvedTextureFiltering.generateMipmaps) {
-        const isWebGL2 =
-          typeof WebGL2RenderingContext !== 'undefined' &&
-          glContext instanceof WebGL2RenderingContext;
-        const canUseMipmaps =
-          isWebGL2 || (isPowerOfTwo(page.width) && isPowerOfTwo(page.height));
-        if (canUseMipmaps) {
-          glContext.generateMipmap(glContext.TEXTURE_2D);
-          usedMipmaps = true;
-        } else {
-          minFilterEnum = glContext.LINEAR;
-        }
-      }
-
-      if (
-        !usedMipmaps &&
-        filterRequiresMipmaps(resolvedTextureFiltering.minFilter)
-      ) {
-        minFilterEnum = glContext.LINEAR;
-      }
-
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_MIN_FILTER,
-        minFilterEnum
-      );
-      glContext.texParameteri(
-        glContext.TEXTURE_2D,
-        glContext.TEXTURE_MAG_FILTER,
-        magFilterEnum
-      );
-
-      if (
-        usedMipmaps &&
-        anisotropyExtension &&
-        resolvedTextureFiltering.maxAnisotropy > 1
-      ) {
-        const ext = anisotropyExtension;
-        const targetAnisotropy = Math.min(
-          resolvedTextureFiltering.maxAnisotropy,
-          maxSupportedAnisotropy
-        );
-        if (targetAnisotropy > 1) {
-          glContext.texParameterf(
-            glContext.TEXTURE_2D,
-            ext.TEXTURE_MAX_ANISOTROPY_EXT,
-            targetAnisotropy
-          );
-        }
-      }
-
-      atlasManager.markPageClean(page.index);
-    });
-
-    images.forEach((image) => {
-      if (image.atlasPageIndex !== ATLAS_PAGE_INDEX_NONE) {
-        image.texture = atlasPageTextures.get(image.atlasPageIndex);
-      } else {
-        image.texture = undefined;
-      }
-    });
-    imageHandleBuffersController.markDirty(images);
-    atlasNeedsUpload = shouldUploadAtlasPages(pages);
-  };
 
   /**
    * Requests a redraw from MapLibre.
@@ -1668,13 +1585,27 @@ export const createSpriteLayer = <T = any>(
           canvasElement?.removeEventListener('mousemove', mouseMoveListener);
         });
       }
+
+      const visibilityTarget =
+        canvasElement.ownerDocument ??
+        (typeof document !== 'undefined' ? document : undefined);
+      if (visibilityTarget) {
+        const visibilityListener = () => updateVisibilityState();
+        visibilityTarget.addEventListener(
+          'visibilitychange',
+          visibilityListener
+        );
+        registerDisposer(() => {
+          visibilityTarget.removeEventListener(
+            'visibilitychange',
+            visibilityListener
+          );
+        });
+        updateVisibilityState();
+      }
     }
 
     spriteDrawProgram = createSpriteDrawProgram<T>(glContext);
-
-    if (showDebugBounds) {
-      debugOutlineRenderer = createDebugOutlineRenderer(glContext);
-    }
 
     // Request a render pass.
     scheduleRender();
@@ -1686,7 +1617,7 @@ export const createSpriteLayer = <T = any>(
   const onRemove = (): void => {
     inputListenerDisposers.forEach((dispose) => dispose());
     inputListenerDisposers.length = 0;
-    canvasElement = null;
+    canvasElement = undefined;
     hitTestController.clearAll();
 
     const glContext = gl;
@@ -1701,21 +1632,26 @@ export const createSpriteLayer = <T = any>(
       atlasNeedsUpload = true;
       if (spriteDrawProgram) {
         spriteDrawProgram.release();
-        spriteDrawProgram = null;
+        spriteDrawProgram = undefined;
       }
-      if (debugOutlineRenderer) {
-        debugOutlineRenderer.release();
-        debugOutlineRenderer = null;
+      if (borderOutlineRenderer) {
+        borderOutlineRenderer.release();
+        borderOutlineRenderer = undefined;
+      }
+      if (leaderLineRenderer) {
+        leaderLineRenderer.release();
+        leaderLineRenderer = undefined;
       }
     }
 
     eventListeners.forEach((set) => set.clear());
     eventListeners.clear();
 
-    gl = null;
-    map = null;
-    debugOutlineRenderer = null;
-    anisotropyExtension = null;
+    gl = undefined;
+    map = undefined;
+    borderOutlineRenderer = undefined;
+    leaderLineRenderer = undefined;
+    anisotropyExtension = undefined;
     maxSupportedAnisotropy = 1;
   };
 
@@ -1739,15 +1675,12 @@ export const createSpriteLayer = <T = any>(
       return;
     }
 
-    const timestamp =
-      typeof performance !== 'undefined' &&
-      typeof performance.now === 'function'
-        ? // Prefer high-resolution timers when available for smoother animation progress.
-          performance.now()
-        : // Fall back to Date.now() in environments without the Performance API.
-          Date.now();
+    const realTimestamp = now();
+    const interpolationTimestamp = resolveInterpolationTimestamp(realTimestamp);
 
     const spriteStateArray = Array.from(sprites.values());
+    const shouldProcessInterpolation =
+      interpolationCalculationEnabled && spriteStateArray.length > 0;
     let frameCalculationHost: RenderCalculationHost<T> | null = null;
     const ensureCalculationHost = (): RenderCalculationHost<T> => {
       if (!frameCalculationHost) {
@@ -1764,10 +1697,10 @@ export const createSpriteLayer = <T = any>(
     };
 
     const interpolationParams: RenderInterpolationParams<T> | null =
-      spriteStateArray.length > 0
+      shouldProcessInterpolation
         ? {
             sprites: spriteStateArray,
-            timestamp,
+            timestamp: interpolationTimestamp,
             frameContext: {
               baseMetersPerPixel: resolvedScaling.metersPerPixel,
               spriteMinPixel: resolvedScaling.spriteMinPixel,
@@ -1789,7 +1722,20 @@ export const createSpriteLayer = <T = any>(
     }
 
     // Synchronize GPU uploads for image textures.
-    ensureTextures();
+    atlasNeedsUpload = ensureTextures({
+      glContext: gl,
+      atlasQueue,
+      atlasManager,
+      atlasPageTextures,
+      atlasNeedsUpload,
+      resolvedTextureFiltering,
+      anisotropyExtension,
+      maxSupportedAnisotropy,
+      images,
+      imageHandleBuffersController,
+      atlasPageIndexNone: ATLAS_PAGE_INDEX_NONE,
+      shouldUploadAtlasPages,
+    });
 
     const drawingBufferWidth = glContext.drawingBufferWidth;
     const drawingBufferHeight = glContext.drawingBufferHeight;
@@ -1830,7 +1776,6 @@ export const createSpriteLayer = <T = any>(
       glContext.depthMask(false);
 
       const drawProgram = spriteDrawProgram;
-      drawProgram.beginFrame();
 
       let drawOrderCounter = 0;
       const drawPreparedSprite = (
@@ -1905,6 +1850,109 @@ export const createSpriteLayer = <T = any>(
           processResult.interpolationResult.hasActiveInterpolation;
         const preparedItems = processResult.preparedItems;
 
+        const preparedByImage = new Map<
+          InternalSpriteImageState,
+          PreparedDrawSpriteImageParams<T>
+        >();
+        for (const prepared of preparedItems) {
+          preparedByImage.set(prepared.imageEntry, prepared);
+        }
+
+        const resolveLineAnchorCenter = (
+          prepared: PreparedDrawSpriteImageParams<T>
+        ): SpriteScreenPoint | null => {
+          const corners = prepared.hitTestCorners;
+          if (corners && corners.length === 4) {
+            let x = 0;
+            let y = 0;
+            for (const corner of corners) {
+              x += corner.x;
+              y += corner.y;
+            }
+            return { x: x / 4, y: y / 4 };
+          }
+          const billboard = prepared.billboardUniforms;
+          if (billboard) {
+            return { x: billboard.center.x, y: billboard.center.y };
+          }
+          return null;
+        };
+
+        const leaderLineEntries: Array<{
+          from: SpriteScreenPoint;
+          to: SpriteScreenPoint;
+          color: RgbaColor;
+          width: number;
+        }> = [];
+
+        for (const prepared of preparedItems) {
+          const leader = prepared.imageEntry.leaderLine;
+          if (!leader) {
+            continue;
+          }
+          const originIndex = prepared.imageEntry.originRenderTargetIndex;
+          if (
+            originIndex === SPRITE_ORIGIN_REFERENCE_INDEX_NONE ||
+            originIndex < 0 ||
+            originIndex >= renderTargetEntries.length
+          ) {
+            continue;
+          }
+          const originEntry = renderTargetEntries[originIndex];
+          if (!originEntry) {
+            continue;
+          }
+          const [, originImage] = originEntry;
+          const originPrepared = preparedByImage.get(originImage);
+          if (!originPrepared) {
+            continue;
+          }
+          const from = resolveLineAnchorCenter(prepared);
+          const to = resolveLineAnchorCenter(originPrepared);
+          if (!from || !to) {
+            continue;
+          }
+          const width = prepared.imageEntry.leaderLinePixelWidth;
+          if (!Number.isFinite(width) || width <= 0) {
+            continue;
+          }
+          const alpha = clampOpacity(leader.rgba[3] * prepared.opacity);
+          if (alpha <= 0) {
+            continue;
+          }
+          const color: RgbaColor = [
+            leader.rgba[0],
+            leader.rgba[1],
+            leader.rgba[2],
+            alpha,
+          ];
+          leaderLineEntries.push({ from, to, color, width });
+        }
+
+        if (leaderLineEntries.length > 0) {
+          if (!leaderLineRenderer) {
+            leaderLineRenderer = createLeaderLineRenderer(glContext);
+          }
+          if (leaderLineRenderer) {
+            leaderLineRenderer.begin(
+              screenToClipScaleX,
+              screenToClipScaleY,
+              screenToClipOffsetX,
+              screenToClipOffsetY
+            );
+            for (const entry of leaderLineEntries) {
+              leaderLineRenderer.drawLine(
+                entry.from,
+                entry.to,
+                entry.color,
+                entry.width
+              );
+            }
+            leaderLineRenderer.end();
+          }
+        }
+
+        drawProgram.beginFrame();
         drawProgram.uploadVertexBatch(preparedItems);
 
         const preparedBySubLayer = new Map<
@@ -1947,21 +1995,53 @@ export const createSpriteLayer = <T = any>(
           processResult.interpolationResult.hasActiveInterpolation;
       }
 
-      if (hasActiveInterpolation) {
+      if (hasActiveInterpolation && interpolationCalculationEnabled) {
         scheduleRender();
       }
 
-      if (showDebugBounds && debugOutlineRenderer) {
-        debugOutlineRenderer.begin(
-          screenToClipScaleX,
-          screenToClipScaleY,
-          screenToClipOffsetX,
-          screenToClipOffsetY
-        );
-        for (const entry of hitTestController.getHitTestEntries()) {
-          debugOutlineRenderer.drawOutline(entry.corners);
+      const borderEntries = hitTestController
+        .getHitTestEntries()
+        .filter((entry) => entry.image.border);
+      if (borderEntries.length > 0) {
+        if (!borderOutlineRenderer) {
+          borderOutlineRenderer = createBorderOutlineRenderer(glContext);
         }
-        debugOutlineRenderer.end();
+        if (borderOutlineRenderer) {
+          borderOutlineRenderer.begin(
+            screenToClipScaleX,
+            screenToClipScaleY,
+            screenToClipOffsetX,
+            screenToClipOffsetY
+          );
+          for (const entry of borderEntries) {
+            const border = entry.image.border;
+            if (!border) {
+              continue;
+            }
+            const effectiveAlpha = clampOpacity(
+              border.rgba[3] * entry.image.opacity.current
+            );
+            if (effectiveAlpha <= 0) {
+              continue;
+            }
+            const borderColor: RgbaColor = [
+              border.rgba[0],
+              border.rgba[1],
+              border.rgba[2],
+              effectiveAlpha,
+            ];
+            const width = entry.image.borderPixelWidth;
+            if (!Number.isFinite(width) || width <= 0) {
+              continue;
+            }
+            borderOutlineRenderer.drawOutline(
+              entry.corners,
+              borderColor,
+              width
+            );
+          }
+          borderOutlineRenderer.end();
+        }
       }
     } finally {
       releaseCalculationHost();
@@ -2224,6 +2304,8 @@ export const createSpriteLayer = <T = any>(
       return false;
     }
 
+    const initialInvalidated = (init.invalidate ?? false) || !isLayerVisible();
+
     // Build internal image state map.
     const imagesInit = init.images ?? [];
     // Each initial image definition will be normalized into internal state maps below.
@@ -2233,7 +2315,8 @@ export const createSpriteLayer = <T = any>(
         imageInit,
         imageInit.subLayer,
         imageInit.order,
-        originReference
+        originReference,
+        initialInvalidated
       );
       state.imageHandle = resolveImageHandle(state.imageId);
       let inner = images.get(imageInit.subLayer);
@@ -2301,23 +2384,27 @@ export const createSpriteLayer = <T = any>(
     const spriteVisibilityDistanceMeters = sanitizeVisibilityDistanceMeters(
       init.visibilityDistanceMeters
     );
+    const initialInterpolationOptions = init.interpolation
+      ? cloneInterpolationOptions(init.interpolation)
+      : null;
 
     const spriteState: InternalSpriteCurrentState<T> = {
       spriteId,
       handle: spriteHandle,
       // Sprites default to enabled unless explicitly disabled in the init payload.
       isEnabled: init.isEnabled ?? true,
-      visibilityDistanceMeters: spriteVisibilityDistanceMeters,
+      visibilityDistanceMeters: spriteVisibilityDistanceMeters ?? undefined,
       location: {
         current: currentLocation,
         from: undefined,
         to: undefined,
+        invalidated: initialInvalidated,
       },
       images,
       // Tags default to null to simplify downstream comparisons.
       tag: init.tag ?? null,
       interpolationState: null,
-      pendingInterpolationOptions: null,
+      pendingInterpolationOptions: initialInterpolationOptions,
       lastCommandLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationAngleDeg: 0,
@@ -2571,7 +2658,8 @@ export const createSpriteLayer = <T = any>(
       imageInit,
       subLayer,
       order,
-      originReference
+      originReference,
+      !isLayerVisible() || sprite.location.invalidated === true
     );
     state.imageHandle = resolveImageHandle(state.imageId);
 
@@ -2693,6 +2781,9 @@ export const createSpriteLayer = <T = any>(
     const state = getImageState(sprite, subLayer, order);
     // Ignore updates targeting image slots that do not exist.
     if (!state) return false;
+    const mapCurrentlyVisible = isLayerVisible();
+    const interpolationAllowed =
+      interpolationCalculationEnabled && mapCurrentlyVisible;
 
     // Apply updates for each provided attribute.
     if (imageUpdate.imageId !== undefined) {
@@ -2712,10 +2803,13 @@ export const createSpriteLayer = <T = any>(
           ? null
           : cloneInterpolationOptions(opacityInterpolationOption);
     }
-    const resolvedOpacityInterpolationOption =
-      opacityInterpolationOption === undefined
+    const allowOpacityInterpolation =
+      interpolationAllowed && !state.opacity.invalidated;
+    const resolvedOpacityInterpolationOption = allowOpacityInterpolation
+      ? opacityInterpolationOption === undefined
         ? (state.opacityInterpolationOptions ?? null)
-        : opacityInterpolationOption;
+        : opacityInterpolationOption
+      : null;
     if (imageUpdate.opacity !== undefined) {
       // Update opacity; zero values will be filtered out during rendering.
       applyOpacityUpdate(
@@ -2725,12 +2819,25 @@ export const createSpriteLayer = <T = any>(
       );
       state.opacityTargetValue = state.lastCommandOpacity;
       state.lodLastCommandOpacity = state.lastCommandOpacity;
+      if (mapCurrentlyVisible && state.opacity.invalidated) {
+        state.opacity.invalidated = false;
+      }
     } else if (opacityInterpolationOption === null) {
       clearOpacityInterpolation(state);
     }
     if (imageUpdate.scale !== undefined) {
       // Adjust image scaling factor applied to dimensions and offsets.
       state.scale = imageUpdate.scale;
+    }
+    if (imageUpdate.border !== undefined) {
+      state.border = resolveSpriteImageLineAttribute(imageUpdate.border);
+      state.borderPixelWidth = 0;
+    }
+    if (imageUpdate.leaderLine !== undefined) {
+      state.leaderLine = resolveSpriteImageLineAttribute(
+        imageUpdate.leaderLine
+      );
+      state.leaderLinePixelWidth = 0;
     }
     const prevAutoRotation = state.autoRotation;
     const prevMinDistance = state.autoRotationMinDistanceMeters;
@@ -2742,18 +2849,40 @@ export const createSpriteLayer = <T = any>(
       state.anchor = cloneAnchor(imageUpdate.anchor);
     }
     // Optional interpolation payloads allow independent control over offset and rotation animations.
-    const offsetDegInterpolationOption = interpolationOptions?.offsetDeg;
-    const offsetMetersInterpolationOption = interpolationOptions?.offsetMeters;
+    const allowOffsetDegInterpolation =
+      interpolationAllowed && !state.offset.offsetDeg.invalidated;
+    const allowOffsetMetersInterpolation =
+      interpolationAllowed && !state.offset.offsetMeters.invalidated;
+    const offsetDegInterpolationOption = allowOffsetDegInterpolation
+      ? interpolationOptions?.offsetDeg
+      : null;
+    const offsetMetersInterpolationOption = allowOffsetMetersInterpolation
+      ? interpolationOptions?.offsetMeters
+      : null;
     // Pull out rotateDeg interpolation hints when the payload includes them.
-    const rotateInterpolationOption = interpolationOptions?.rotateDeg;
+    const allowRotateInterpolation =
+      interpolationAllowed && !state.rotateDeg.invalidated;
+    const rotateInterpolationOption = allowRotateInterpolation
+      ? interpolationOptions?.rotateDeg
+      : null;
     let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
     if (imageUpdate.offset !== undefined) {
       const clonedOffset = cloneOffset(imageUpdate.offset);
       applyOffsetUpdate(state, clonedOffset, {
-        deg: offsetDegInterpolationOption,
-        meters: offsetMetersInterpolationOption,
+        deg: allowOffsetDegInterpolation ? offsetDegInterpolationOption : null,
+        meters: allowOffsetMetersInterpolation
+          ? offsetMetersInterpolationOption
+          : null,
       });
+      if (mapCurrentlyVisible) {
+        if (state.offset.offsetDeg.invalidated) {
+          state.offset.offsetDeg.invalidated = false;
+        }
+        if (state.offset.offsetMeters.invalidated) {
+          state.offset.offsetMeters.invalidated = false;
+        }
+      }
     } else {
       if (offsetDegInterpolationOption === null) {
         // Explicit null clears any running angular interpolation.
@@ -2826,8 +2955,15 @@ export const createSpriteLayer = <T = any>(
       syncImageRotationChannel(
         state,
         // When a rotation override has been computed, pass it along (null clears interpolation); otherwise leave undefined.
-        hasRotationOverride ? (rotationOverride ?? null) : undefined
+        interpolationAllowed
+          ? hasRotationOverride
+            ? (rotationOverride ?? null)
+            : undefined
+          : null
       );
+      if (mapCurrentlyVisible && state.rotateDeg.invalidated) {
+        state.rotateDeg.invalidated = false;
+      }
     }
 
     updateImageInterpolationDirtyState(sprite, state);
@@ -2993,10 +3129,36 @@ export const createSpriteLayer = <T = any>(
       const resolved = sanitizeVisibilityDistanceMeters(
         update.visibilityDistanceMeters
       );
-      if (sprite.visibilityDistanceMeters !== resolved) {
-        sprite.visibilityDistanceMeters = resolved;
+      const previousVisibilityDistance = sprite.visibilityDistanceMeters;
+      if (previousVisibilityDistance !== resolved) {
+        sprite.visibilityDistanceMeters = resolved ?? undefined;
         updated = true;
         isRequiredRender = true;
+        if (
+          previousVisibilityDistance !== undefined &&
+          (resolved === undefined || resolved === null)
+        ) {
+          sprite.images.forEach((orderMap) => {
+            orderMap.forEach((image) => {
+              if (
+                !(
+                  Number.isFinite(image.lastCommandOpacity) &&
+                  image.lastCommandOpacity > 0
+                )
+              ) {
+                return;
+              }
+              if (image.opacity.current > 0) {
+                return;
+              }
+              applyOpacityUpdate(
+                image,
+                image.lastCommandOpacity,
+                image.opacityInterpolationOptions
+              );
+            });
+          });
+        }
       }
     }
 
@@ -3005,6 +3167,11 @@ export const createSpriteLayer = <T = any>(
       | null
       | undefined = undefined;
     let interpolationExplicitlySpecified = false;
+    const mapCurrentlyVisible = isLayerVisible();
+    const interpolationAllowed =
+      interpolationCalculationEnabled &&
+      mapCurrentlyVisible &&
+      !sprite.location.invalidated;
 
     if (update.interpolation !== undefined) {
       interpolationExplicitlySpecified = true;
@@ -3056,7 +3223,9 @@ export const createSpriteLayer = <T = any>(
 
       const effectiveOptions =
         // Treat `undefined` as "no interpolation change" whereas explicit `null` disables interpolation.
-        optionsForLocation === undefined ? null : optionsForLocation;
+        !interpolationAllowed || optionsForLocation === undefined
+          ? null
+          : optionsForLocation;
 
       let handledByInterpolation = false;
 
@@ -3101,6 +3270,10 @@ export const createSpriteLayer = <T = any>(
         sprite.interpolationState = null;
         sprite.location.from = undefined;
         sprite.location.to = undefined;
+      }
+
+      if (mapCurrentlyVisible && sprite.location.invalidated) {
+        sprite.location.invalidated = false;
       }
 
       sprite.pendingInterpolationOptions = null;
@@ -3453,6 +3626,18 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
+  const setInterpolationCalculation = (moveable: boolean): void => {
+    const realTimestamp = now();
+    // Advance the interpolation clock to the moment of the toggle so progress up to
+    // this call is preserved.
+    resolveInterpolationTimestamp(realTimestamp);
+    interpolationCalculationEnabled = moveable;
+    resetInterpolationTimestampAnchor(realTimestamp);
+    if (moveable) {
+      scheduleRender();
+    }
+  };
+
   const setHitTestEnabled = (enabled: boolean): void => {
     const changed = hitTestController.setHitTestEnabled(enabled);
     if (!changed || !enabled || !map) {
@@ -3497,6 +3682,7 @@ export const createSpriteLayer = <T = any>(
     updateSprite,
     mutateSprites,
     updateForEach,
+    setInterpolationCalculation,
     setHitTestEnabled,
     on: addEventListener,
     off: removeEventListener,

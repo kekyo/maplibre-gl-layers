@@ -99,11 +99,135 @@ static inline double clamp01(double value) {
   return value;
 }
 
-static inline double applyEasingPreset(double progress, int32_t presetId) {
+static inline int decodeMode(double modeCode) {
+  if (modeCode == 1.0) {
+    return 1;  // in
+  }
+  if (modeCode == 2.0) {
+    return 2;  // out
+  }
+  return 0;  // in-out
+}
+
+static inline double applyEasingPreset(double progress,
+                                       int32_t presetId,
+                                       double param0,
+                                       double param1,
+                                       double param2) {
+  (void)param2;
+  constexpr double PI = 3.14159265358979323846;
+  const double t = clamp01(progress);
   switch (presetId) {
     case 0:  // linear
     default:
-      return clamp01(progress);
+      return t;
+    case 1: {  // ease (power param0, mode param1)
+      const double power = param0 > 0.0 ? param0 : 3.0;
+      const int mode = decodeMode(param1);
+      if (mode == 1) {
+        return std::pow(t, power);
+      }
+      if (mode == 2) {
+        return 1.0 - std::pow(1.0 - t, power);
+      }
+      if (t < 0.5) {
+        const double x = t * 2.0;
+        return 0.5 * std::pow(x, power);
+      }
+      const double x = 2.0 - t * 2.0;
+      return 1.0 - 0.5 * std::pow(x, power);
+    }
+    case 4: {  // exponential (exponent param0, mode param1)
+      const double exponent = param0 > 0.0 ? param0 : 5.0;
+      const int mode = decodeMode(param1);
+      const double denom = std::expm1(exponent);
+      auto expIn = [&](double v) -> double {
+        if (v == 0.0) {
+          return 0.0;
+        }
+        if (v == 1.0) {
+          return 1.0;
+        }
+        return std::expm1(exponent * v) / denom;
+      };
+      auto expOut = [&](double v) -> double {
+        if (v == 0.0) {
+          return 0.0;
+        }
+        if (v == 1.0) {
+          return 1.0;
+        }
+        return 1.0 - std::expm1(exponent * (1.0 - v)) / denom;
+      };
+      switch (mode) {
+        case 1:  // in
+          return expIn(t);
+        case 2:  // out
+          return expOut(t);
+        default:  // in-out
+          if (t < 0.5) {
+            return 0.5 * expIn(t * 2.0);
+          }
+          return 0.5 + 0.5 * expOut(t * 2.0 - 1.0);
+      }
+    }
+    case 5: {  // quadratic (mode param0)
+      const int mode = decodeMode(param0);
+      if (mode == 1) {
+        return t * t;
+      }
+      if (mode == 2) {
+        return 1.0 - (1.0 - t) * (1.0 - t);
+      }
+      if (t < 0.5) {
+        const double x = t * 2.0;
+        return 0.5 * x * x;
+      }
+      const double x = 2.0 - t * 2.0;
+      return 1.0 - 0.5 * x * x;
+    }
+    case 6: {  // cubic (mode param0)
+      const int mode = decodeMode(param0);
+      if (mode == 1) {
+        return t * t * t;
+      }
+      if (mode == 2) {
+        const double inv = 1.0 - t;
+        return 1.0 - inv * inv * inv;
+      }
+      if (t < 0.5) {
+        const double x = t * 2.0;
+        return 0.5 * x * x * x;
+      }
+      const double x = 2.0 - t * 2.0;
+      return 1.0 - 0.5 * x * x * x;
+    }
+    case 7: {  // sine (mode param0, amplitude param1)
+      const int mode = decodeMode(param0);
+      const double amplitude = param1 > 0.0 ? param1 : 1.0;
+      if (mode == 1) {  // in
+        return amplitude * (1.0 - std::cos((PI / 2.0) * t));
+      }
+      if (mode == 2) {  // out
+        return amplitude * std::sin((PI / 2.0) * t);
+      }
+      return amplitude * 0.5 * (1.0 - std::cos(PI * t));
+    }
+    case 8: {  // bounce (bounces param0, decay param1)
+      const double bounces = std::max(1.0, std::round(param0 > 0.0 ? param0 : 3.0));
+      const double decay =
+          param1 <= 0.0 ? 0.5 : (param1 > 1.0 ? 1.0 : param1);
+      const double oscillation = std::cos(PI * (bounces + 0.5) * t);
+      const double dampening = std::pow(decay, t * bounces);
+      return 1.0 - std::abs(oscillation) * dampening;
+    }
+    case 9: {  // back (overshoot param0)
+      const double overshoot =
+          (std::isfinite(param0) && param0 != 0.0) ? param0 : 1.70158;
+      const double c3 = overshoot + 1.0;
+      const double p = t - 1.0;
+      return 1.0 + c3 * p * p * p + overshoot * p * p;
+    }
   }
 }
 
@@ -3029,6 +3153,9 @@ static inline bool evaluateDistanceInterpolationsImpl(
     const double startTimestamp = readCursor[4];
     const double timestampRaw = readCursor[5];
     const int32_t easingPresetId = static_cast<int32_t>(readCursor[6]);
+    const double easingParam0 = readCursor[7];
+    const double easingParam1 = readCursor[8];
+    const double easingParam2 = readCursor[9];
     readCursor += DISTANCE_INTERPOLATION_ITEM_LENGTH;
 
     const double timestamp = resolveTimestamp(timestampRaw);
@@ -3040,7 +3167,9 @@ static inline bool evaluateDistanceInterpolationsImpl(
     if (duration > 0.0 && std::fabs(to - from) > DISTANCE_EPSILON) {
       const double elapsed = timestamp - effectiveStart;
       const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
-      const double eased = applyEasingPreset(rawProgress, easingPresetId);
+      const double eased = applyEasingPreset(
+          rawProgress, easingPresetId, easingParam0, easingParam1,
+          easingParam2);
       const double interpolated = lerp(from, to, eased);
       completed = rawProgress >= 1.0;
       resultValue = completed ? finalValue : interpolated;
@@ -3082,6 +3211,9 @@ static inline bool evaluateDegreeInterpolationsImpl(
     const double startTimestamp = readCursor[4];
     const double timestampRaw = readCursor[5];
     const int32_t easingPresetId = static_cast<int32_t>(readCursor[6]);
+    const double easingParam0 = readCursor[7];
+    const double easingParam1 = readCursor[8];
+    const double easingParam2 = readCursor[9];
     readCursor += DEGREE_INTERPOLATION_ITEM_LENGTH;
 
     const double timestamp = resolveTimestamp(timestampRaw);
@@ -3093,7 +3225,9 @@ static inline bool evaluateDegreeInterpolationsImpl(
     if (duration > 0.0 && std::fabs(to - from) > DEGREE_EPSILON) {
       const double elapsed = timestamp - effectiveStart;
       const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
-      const double eased = applyEasingPreset(rawProgress, easingPresetId);
+      const double eased = applyEasingPreset(
+          rawProgress, easingPresetId, easingParam0, easingParam1,
+          easingParam2);
       const double interpolated = lerp(from, to, eased);
       completed = rawProgress >= 1.0;
       resultValue = completed ? finalValue : interpolated;
@@ -3140,6 +3274,9 @@ static inline bool evaluateSpriteInterpolationsImpl(
     const double startTimestamp = readCursor[8];
     const double timestampRaw = readCursor[9];
     const int32_t easingPresetId = static_cast<int32_t>(readCursor[10]);
+    const double easingParam0 = readCursor[11];
+    const double easingParam1 = readCursor[12];
+    const double easingParam2 = readCursor[13];
     readCursor += SPRITE_INTERPOLATION_ITEM_LENGTH;
 
     const double timestamp = resolveTimestamp(timestampRaw);
@@ -3160,7 +3297,9 @@ static inline bool evaluateSpriteInterpolationsImpl(
     if (requiresInterpolation) {
       const double elapsed = timestamp - effectiveStart;
       const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
-      const double eased = applyEasingPreset(rawProgress, easingPresetId);
+      const double eased = applyEasingPreset(
+          rawProgress, easingPresetId, easingParam0, easingParam1,
+          easingParam2);
       completed = rawProgress >= 1.0;
       if (!completed) {
         resultLng = lerp(fromLng, toLng, eased);

@@ -55,9 +55,9 @@ const RESULT_ITEM_STRIDE =
   RESULT_VERTEX_COMPONENT_LENGTH +
   RESULT_HIT_TEST_COMPONENT_LENGTH +
   RESULT_SURFACE_BLOCK_LENGTH;
-const DISTANCE_INTERPOLATION_ITEM_LENGTH = 7;
-const DEGREE_INTERPOLATION_ITEM_LENGTH = 7;
-const SPRITE_INTERPOLATION_ITEM_LENGTH = 11;
+const DISTANCE_INTERPOLATION_ITEM_LENGTH = 10;
+const DEGREE_INTERPOLATION_ITEM_LENGTH = 10;
+const SPRITE_INTERPOLATION_ITEM_LENGTH = 14;
 const PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
 interface WasmProcessInterpolationResults {
@@ -378,6 +378,7 @@ const PROJECTION_PARAMS: ProjectionHostParams = {
   width: 800,
   height: 600,
   center: { lng: 0, lat: 0 },
+  cameraLocation: undefined,
 };
 
 const createMockDependencies = () => {
@@ -617,7 +618,7 @@ describe('processInterpolationsViaWasm', () => {
     const distanceState: DistanceInterpolationState = {
       durationMs: 1000,
       easing: linear,
-      easingPreset: 'linear',
+      easingPreset: { type: 'linear' },
       from: 0,
       to: 10,
       finalValue: 10,
@@ -626,7 +627,7 @@ describe('processInterpolationsViaWasm', () => {
     const degreeState: DegreeInterpolationState = {
       durationMs: 1000,
       easing: linear,
-      easingPreset: 'linear',
+      easingPreset: { type: 'linear' },
       from: 0,
       to: 90,
       finalValue: 90,
@@ -636,7 +637,7 @@ describe('processInterpolationsViaWasm', () => {
       mode: 'feedback',
       durationMs: 1000,
       easing: linear,
-      easingPreset: 'linear',
+      easingPreset: { type: 'linear' },
       startTimestamp: -1,
       from: { lng: 0, lat: 0 },
       to: { lng: 5, lat: 0 },

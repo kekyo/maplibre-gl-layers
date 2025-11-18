@@ -33,6 +33,9 @@ import type {
 import {
   SURFACE_CORNER_DISPLACEMENT_COUNT,
   cloneSpriteLocation,
+  calculateMetersPerPixelAtLatitude,
+  calculateEffectivePixelsPerMeter,
+  multiplyMatrixAndVector,
   type SurfaceCorner,
 } from '../utils/math';
 import type {
@@ -40,7 +43,8 @@ import type {
   SpriteLocation,
   SpritePoint,
   SpriteMode,
-  SpriteEasingPresetName,
+  SpriteEasing,
+  SpriteEasingType,
   SpriteImageOffset,
 } from '../types';
 import { prepareWasmHost, type BufferHolder, type WasmHost } from './wasmHost';
@@ -80,6 +84,8 @@ import {
   ORDER_BUCKET,
   ORDER_MAX,
   EPS_NDC,
+  EARTH_RADIUS_METERS,
+  DEG2RAD,
 } from '../const';
 import {
   ENABLE_NDC_BIAS_SURFACE,
@@ -99,17 +105,86 @@ const WASM_CalculateSurfaceDepthKey_DISPLACEMENT_ELEMENT_COUNT =
 const WASM_CalculateSurfaceDepthKey_RESULT_ELEMENT_COUNT = 1;
 
 // Must match constants defined in wasm/param_layouts.h.
-const WASM_DISTANCE_INTERPOLATION_ITEM_LENGTH = 7;
+const WASM_DISTANCE_INTERPOLATION_ITEM_LENGTH = 10;
 const WASM_DISTANCE_INTERPOLATION_RESULT_LENGTH = 3;
-const WASM_DEGREE_INTERPOLATION_ITEM_LENGTH = 7;
+const WASM_DEGREE_INTERPOLATION_ITEM_LENGTH = 10;
 const WASM_DEGREE_INTERPOLATION_RESULT_LENGTH = 3;
-const WASM_SPRITE_INTERPOLATION_ITEM_LENGTH = 11;
+const WASM_SPRITE_INTERPOLATION_ITEM_LENGTH = 14;
 const WASM_SPRITE_INTERPOLATION_RESULT_LENGTH = 6;
 const WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
-const EASING_PRESET_IDS: Record<SpriteEasingPresetName, number> = {
+const EASING_PRESET_IDS: Record<SpriteEasingType, number> = {
   linear: 0,
+  ease: 1,
+  exponential: 4,
+  quadratic: 5,
+  cubic: 6,
+  sine: 7,
+  bounce: 8,
+  back: 9,
 };
+
+type EncodedEasingPreset = {
+  readonly id: number;
+  readonly param0: number;
+  readonly param1: number;
+  readonly param2: number;
+};
+
+const encodeEasingPreset = (preset: SpriteEasing): EncodedEasingPreset => {
+  const id = EASING_PRESET_IDS[preset.type] ?? -1;
+  switch (preset.type) {
+    case 'ease': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return { id, param0: preset.power ?? 3, param1: mode, param2: 0 };
+    }
+    case 'exponential': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return {
+        id,
+        param0: preset.exponent ?? 5,
+        param1: mode,
+        param2: 0,
+      };
+    }
+    case 'quadratic': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return { id, param0: mode, param1: 0, param2: 0 };
+    }
+    case 'cubic': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return { id, param0: mode, param1: 0, param2: 0 };
+    }
+    case 'sine': {
+      const mode =
+        preset.mode === 'in' ? 1 : preset.mode === 'out' ? 2 : /*in-out*/ 0;
+      return {
+        id,
+        param0: mode,
+        param1: preset.amplitude ?? 1,
+        param2: 0,
+      };
+    }
+    case 'bounce':
+      return {
+        id,
+        param0: preset.bounces ?? 3,
+        param1: preset.decay ?? 0.5,
+        param2: 0,
+      };
+    case 'back':
+      return { id, param0: preset.overshoot ?? 1.70158, param1: 0, param2: 0 };
+    case 'linear':
+    default:
+      return { id, param0: 0, param1: 0, param2: 0 };
+  }
+};
+
+const MAX_MERCATOR_LATITUDE = 85.051129;
 
 const resolveImageOffset = (
   image: Readonly<InternalSpriteImageState>
@@ -124,23 +199,14 @@ const resolveImageOffset = (
   };
 };
 
-const encodeEasingPresetId = (
-  preset: SpriteEasingPresetName | null
-): number => {
-  if (!preset) {
-    return -1;
-  }
-  return EASING_PRESET_IDS[preset] ?? -1;
-};
-
 const encodeDistanceInterpolationRequest = (
   buffer: Float64Array,
   cursor: number,
   request: DistanceInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const presetId = encodeEasingPresetId(state.easingPreset);
-  if (presetId < 0) {
+  const preset = encodeEasingPreset(state.easingPreset);
+  if (preset.id < 0) {
     throw new Error(
       'Distance interpolation request missing preset easing function.'
     );
@@ -151,7 +217,10 @@ const encodeDistanceInterpolationRequest = (
   buffer[cursor++] = state.finalValue;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
-  buffer[cursor++] = presetId;
+  buffer[cursor++] = preset.id;
+  buffer[cursor++] = preset.param0;
+  buffer[cursor++] = preset.param1;
+  buffer[cursor++] = preset.param2;
   return cursor;
 };
 
@@ -161,8 +230,8 @@ const encodeDegreeInterpolationRequest = (
   request: DegreeInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const presetId = encodeEasingPresetId(state.easingPreset);
-  if (presetId < 0) {
+  const preset = encodeEasingPreset(state.easingPreset);
+  if (preset.id < 0) {
     throw new Error(
       'Degree interpolation request missing preset easing function.'
     );
@@ -173,7 +242,10 @@ const encodeDegreeInterpolationRequest = (
   buffer[cursor++] = state.finalValue;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
-  buffer[cursor++] = presetId;
+  buffer[cursor++] = preset.id;
+  buffer[cursor++] = preset.param0;
+  buffer[cursor++] = preset.param1;
+  buffer[cursor++] = preset.param2;
   return cursor;
 };
 
@@ -183,8 +255,8 @@ const encodeSpriteInterpolationRequest = (
   request: SpriteInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const presetId = encodeEasingPresetId(state.easingPreset);
-  if (presetId < 0) {
+  const preset = encodeEasingPreset(state.easingPreset);
+  if (preset.id < 0) {
     throw new Error(
       'Sprite interpolation request missing preset easing function.'
     );
@@ -200,7 +272,10 @@ const encodeSpriteInterpolationRequest = (
   buffer[cursor++] = hasZ;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
-  buffer[cursor++] = presetId;
+  buffer[cursor++] = preset.id;
+  buffer[cursor++] = preset.param0;
+  buffer[cursor++] = preset.param1;
+  buffer[cursor++] = preset.param2;
   return cursor;
 };
 
@@ -416,26 +491,7 @@ const processInterpolationsWithWasm = <TTag>(
     }
 
     if (state) {
-      if (state.easingPreset) {
-        spriteInterpolationWorkItems.push({ sprite, state });
-      } else {
-        const evaluation = evaluateInterpolation({
-          state,
-          timestamp,
-        });
-        if (state.startTimestamp < 0) {
-          state.startTimestamp = evaluation.effectiveStartTimestamp;
-        }
-        sprite.location.current = evaluation.location;
-        if (evaluation.completed) {
-          sprite.location.current = cloneSpriteLocation(state.to);
-          sprite.location.from = undefined;
-          sprite.location.to = undefined;
-          sprite.interpolationState = null;
-        } else {
-          hasActiveInterpolation = true;
-        }
-      }
+      spriteInterpolationWorkItems.push({ sprite, state });
     }
 
     const touchedImages: InternalSpriteImageState[] = [];
@@ -516,53 +572,23 @@ const processInterpolationsWithWasm = <TTag>(
     processedSprites.push({ sprite, touchedImages });
   }
 
-  const presetDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
-  const fallbackDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
-  for (const item of distanceInterpolationWorkItems) {
-    if (item.state.easingPreset) {
-      presetDistanceWorkItems.push(item);
-    } else {
-      fallbackDistanceWorkItems.push(item);
-    }
-  }
-
-  const presetDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
-  const fallbackDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
-  for (const item of degreeInterpolationWorkItems) {
-    if (item.state.easingPreset) {
-      presetDegreeWorkItems.push(item);
-    } else {
-      fallbackDegreeWorkItems.push(item);
-    }
-  }
-
-  const presetSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
-  const fallbackSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
-  for (const item of spriteInterpolationWorkItems) {
-    if (item.state.easingPreset) {
-      presetSpriteWorkItems.push(item);
-    } else {
-      fallbackSpriteWorkItems.push(item);
-    }
-  }
-
   const distanceRequests =
-    presetDistanceWorkItems.length > 0
-      ? presetDistanceWorkItems.map(({ state }) => ({
+    distanceInterpolationWorkItems.length > 0
+      ? distanceInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
   const degreeRequests =
-    presetDegreeWorkItems.length > 0
-      ? presetDegreeWorkItems.map(({ state }) => ({
+    degreeInterpolationWorkItems.length > 0
+      ? degreeInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
   const spriteRequests =
-    presetSpriteWorkItems.length > 0
-      ? presetSpriteWorkItems.map(({ state }) => ({
+    spriteInterpolationWorkItems.length > 0
+      ? spriteInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
@@ -585,10 +611,10 @@ const processInterpolationsWithWasm = <TTag>(
         sprite: [],
       };
 
-  if (presetDistanceWorkItems.length > 0) {
+  if (distanceRequests.length > 0) {
     if (
       applyDistanceInterpolationEvaluations(
-        presetDistanceWorkItems,
+        distanceInterpolationWorkItems,
         wasmResults.distance,
         timestamp
       )
@@ -597,21 +623,10 @@ const processInterpolationsWithWasm = <TTag>(
     }
   }
 
-  if (
-    fallbackDistanceWorkItems.length > 0 &&
-    applyDistanceInterpolationEvaluations(
-      fallbackDistanceWorkItems,
-      [],
-      timestamp
-    )
-  ) {
-    hasActiveInterpolation = true;
-  }
-
-  if (presetDegreeWorkItems.length > 0) {
+  if (degreeRequests.length > 0) {
     if (
       applyDegreeInterpolationEvaluations(
-        presetDegreeWorkItems,
+        degreeInterpolationWorkItems,
         wasmResults.degree,
         timestamp
       )
@@ -620,30 +635,16 @@ const processInterpolationsWithWasm = <TTag>(
     }
   }
 
-  if (
-    fallbackDegreeWorkItems.length > 0 &&
-    applyDegreeInterpolationEvaluations(fallbackDegreeWorkItems, [], timestamp)
-  ) {
-    hasActiveInterpolation = true;
-  }
-
-  if (presetSpriteWorkItems.length > 0) {
+  if (spriteRequests.length > 0) {
     if (
       applySpriteInterpolationEvaluations(
-        presetSpriteWorkItems,
+        spriteInterpolationWorkItems,
         wasmResults.sprite,
         timestamp
       )
     ) {
       hasActiveInterpolation = true;
     }
-  }
-
-  if (
-    fallbackSpriteWorkItems.length > 0 &&
-    applySpriteInterpolationEvaluations(fallbackSpriteWorkItems, [], timestamp)
-  ) {
-    hasActiveInterpolation = true;
   }
 
   for (const { sprite, touchedImages } of processedSprites) {
@@ -951,6 +952,10 @@ interface PreparedInputBuffer extends Releasable {
 
 interface WritableWasmProjectionState<TTag> {
   readonly preparedProjection: PreparedProjectionState;
+  lastFrameParams?: {
+    baseMetersPerPixel: number;
+    zoomScaleFactor: number;
+  };
   readonly prepareInputBuffer: (
     params: PrepareDrawSpriteImageParams<TTag>
   ) => PreparedInputBuffer;
@@ -1007,6 +1012,105 @@ const converToPreparedDrawImageParams = <TTag>(
   const resourceRefs = state.getResourceRefs();
 
   const items: PreparedDrawSpriteImageParams<TTag>[] = [];
+
+  const baseMetersPerPixel = state.lastFrameParams?.baseMetersPerPixel ?? 1;
+  const zoomScaleFactor = state.lastFrameParams?.zoomScaleFactor ?? 1;
+
+  const clampLatitude = (lat: number): number =>
+    Math.min(Math.max(lat, -MAX_MERCATOR_LATITUDE), MAX_MERCATOR_LATITUDE);
+
+  const mercatorZfromAltitude = (
+    altitude: number,
+    latitude: number
+  ): number => {
+    const circumferenceAtLatitude =
+      2 * Math.PI * EARTH_RADIUS_METERS * Math.cos(latitude * DEG2RAD);
+    if (
+      !Number.isFinite(circumferenceAtLatitude) ||
+      circumferenceAtLatitude === 0
+    ) {
+      return 0;
+    }
+    return altitude / circumferenceAtLatitude;
+  };
+
+  const calculatePerspectiveRatio = (
+    location: Readonly<SpriteLocation>
+  ): number => {
+    const { mercatorMatrix, cameraToCenterDistance } = state.preparedProjection;
+    if (!mercatorMatrix || !Number.isFinite(cameraToCenterDistance)) {
+      return 1;
+    }
+    const lng = location.lng ?? 0;
+    const lat = clampLatitude(location.lat ?? 0);
+    const altitude = location.z ?? 0;
+    const mercatorX = (180 + lng) / 360;
+    const mercatorY =
+      (180 -
+        (180 / Math.PI) *
+          Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360))) /
+      360;
+    const mercatorZ = mercatorZfromAltitude(altitude, lat);
+    try {
+      const [, , , w] = multiplyMatrixAndVector(
+        mercatorMatrix,
+        mercatorX,
+        mercatorY,
+        mercatorZ,
+        1
+      );
+      if (!Number.isFinite(w) || w <= 0) {
+        return 1;
+      }
+      const ratio = cameraToCenterDistance / w;
+      return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+    } catch {
+      return 1;
+    }
+  };
+
+  const resolveEffectivePixelsPerMeter = (
+    location: Readonly<SpriteLocation>
+  ): number => {
+    const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
+      state.preparedProjection.zoom,
+      location.lat ?? 0
+    );
+    const perspectiveRatio = calculatePerspectiveRatio(location);
+    const effective = calculateEffectivePixelsPerMeter(
+      metersPerPixelAtLat,
+      perspectiveRatio
+    );
+    return Number.isFinite(effective) && effective > 0 ? effective : 0;
+  };
+
+  const calculateBorderWidthPixels = (
+    widthMeters: number | undefined,
+    imageScale: number,
+    sizeScaleAdjustment: number,
+    effectivePixelsPerMeter: number
+  ): number => {
+    if (
+      widthMeters === undefined ||
+      !Number.isFinite(widthMeters) ||
+      widthMeters <= 0 ||
+      !Number.isFinite(effectivePixelsPerMeter) ||
+      effectivePixelsPerMeter <= 0 ||
+      !Number.isFinite(imageScale) ||
+      imageScale <= 0 ||
+      !Number.isFinite(sizeScaleAdjustment) ||
+      sizeScaleAdjustment <= 0
+    ) {
+      return 0;
+    }
+    return (
+      widthMeters *
+      imageScale *
+      zoomScaleFactor *
+      effectivePixelsPerMeter *
+      sizeScaleAdjustment
+    );
+  };
 
   for (let itemIndex = 0; itemIndex < preparedCount; itemIndex++) {
     const base = RESULT_HEADER_LENGTH + itemIndex * itemStride;
@@ -1205,6 +1309,61 @@ const converToPreparedDrawImageParams = <TTag>(
         }
       : null;
 
+    // Calculate border pixel width on the JS side (wasm does not currently emit it).
+    const widthMeters = imageEntry.border?.widthMeters;
+    const imageScale = imageEntry.scale ?? 1;
+    const effectivePixelsPerMeter = resolveEffectivePixelsPerMeter(
+      spriteEntry.location.current
+    );
+
+    // Apply surface/billboard size clamp scaling when available.
+    let sizeScaleAdjustment = 1;
+    if (useShaderSurface && surfaceShaderInputs) {
+      sizeScaleAdjustment = surfaceShaderInputs.scaleAdjustment;
+    } else if (useShaderBillboard && imageResource) {
+      const actualWidth = (halfWidth ?? 0) * 2;
+      const actualHeight = (halfHeight ?? 0) * 2;
+      const rawWidth =
+        imageResource.width *
+        baseMetersPerPixel *
+        imageScale *
+        zoomScaleFactor *
+        effectivePixelsPerMeter;
+      const rawHeight =
+        imageResource.height *
+        baseMetersPerPixel *
+        imageScale *
+        zoomScaleFactor *
+        effectivePixelsPerMeter;
+      const largestActual = Math.max(actualWidth, actualHeight);
+      const largestRaw = Math.max(rawWidth, rawHeight);
+      if (
+        Number.isFinite(largestActual) &&
+        largestActual > 0 &&
+        Number.isFinite(largestRaw) &&
+        largestRaw > 0
+      ) {
+        const ratio = largestActual / largestRaw;
+        if (Number.isFinite(ratio) && ratio > 0) {
+          sizeScaleAdjustment = ratio;
+        }
+      }
+    }
+
+    imageEntry.borderPixelWidth = calculateBorderWidthPixels(
+      widthMeters,
+      imageScale,
+      sizeScaleAdjustment,
+      effectivePixelsPerMeter
+    );
+    const leaderLineWidthMeters = imageEntry.leaderLine?.widthMeters;
+    imageEntry.leaderLinePixelWidth = calculateBorderWidthPixels(
+      leaderLineWidthMeters,
+      imageScale,
+      sizeScaleAdjustment,
+      effectivePixelsPerMeter
+    );
+
     items.push({
       spriteEntry,
       imageEntry,
@@ -1293,6 +1452,8 @@ const convertToWasmProjectionState = <TTag>(
   let spriteHandles: number[] = [];
   let imageRefs: InternalSpriteImageState[] = [];
   let resourceRefs: ReadonlyArray<RegisteredImage | undefined> = [];
+
+  let state: WritableWasmProjectionState<TTag>;
 
   const writeMatrix = (
     buffer: Float64Array,
@@ -1416,6 +1577,11 @@ const convertToWasmProjectionState = <TTag>(
     frameConstView[fcCursor++] = cameraLocation?.lng ?? 0;
     frameConstView[fcCursor++] = cameraLocation?.lat ?? 0;
     frameConstView[fcCursor++] = cameraLocation?.z ?? 0;
+
+    state.lastFrameParams = {
+      baseMetersPerPixel: callParams.baseMetersPerPixel,
+      zoomScaleFactor: toFiniteOr(callParams.zoomScaleFactor, 1),
+    };
 
     writeMatrix(
       parameterBuffer,
@@ -1546,12 +1712,15 @@ const convertToWasmProjectionState = <TTag>(
     };
   };
 
-  return {
+  state = {
     preparedProjection,
+    lastFrameParams: undefined,
     prepareInputBuffer,
     getImageRefs: () => imageRefs,
     getResourceRefs: () => resourceRefs,
   };
+
+  return state;
 };
 
 /**

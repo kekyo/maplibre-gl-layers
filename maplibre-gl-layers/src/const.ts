@@ -34,6 +34,12 @@ export const DEFAULT_TEXT_GLYPH_ALIGN: SpriteTextGlyphHorizontalAlign =
 export const DEFAULT_TEXT_GLYPH_FONT_SIZE = 32;
 export const DEFAULT_TEXT_GLYPH_RENDER_PIXEL_RATIO = 1;
 
+/** Default threshold in meters for auto-rotation to treat movement as significant. */
+export const DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS = 20;
+
+/** Default border width in meters for sprite image outlines. */
+export const DEFAULT_BORDER_WIDTH_METERS = 1;
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**

@@ -20,6 +20,7 @@
     "pack": "npm run pack --workspaces",
     "dev": "npm run dev --workspaces"
   },
-  "dependencies": {
+  "devDependencies": {
+    "@playwright/test": ">=1.56.0"
   }
 }

@@ -18,12 +18,17 @@ import type {
   SpriteTextureMagFilter,
   SpriteTextureMinFilter,
   SpriteInterpolationMode,
-  EasingFunction,
   SpriteScreenPoint,
   SpritePoint,
-  SpriteEasingPresetName,
+  SpriteEasing,
+  SpriteImageLineAttributeState,
+  SpriteImageState,
+  SpriteInterpolatedValues,
+  SpriteImageInterpolatedOffset,
 } from './types';
+import type { EasingFunction } from './interpolation/easing';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
+import type { RgbaColor } from './utils/color';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -210,18 +215,21 @@ export interface SpriteMercatorCoordinate {
 }
 
 /**
- * Mutable counterpart to {@link InterpolatedValues}, used internally so SpriteLayer
+ * Mutable counterpart to {@link SpriteInterpolatedValues}, used internally so SpriteLayer
  * can reuse object references while still exposing readonly snapshots publicly.
  */
-export interface MutableInterpolatedValues<T> {
+export interface MutableSpriteInterpolatedValues<T>
+  extends SpriteInterpolatedValues<T> {
   current: T;
   from: T | undefined;
   to: T | undefined;
+  invalidated: boolean | undefined;
 }
 
-export interface MutableSpriteImageInterpolatedOffset {
-  offsetMeters: MutableInterpolatedValues<number>;
-  offsetDeg: MutableInterpolatedValues<number>;
+export interface MutableSpriteImageInterpolatedOffset
+  extends SpriteImageInterpolatedOffset {
+  offsetMeters: MutableSpriteInterpolatedValues<number>;
+  offsetDeg: MutableSpriteInterpolatedValues<number>;
 }
 
 export interface Releasable {
@@ -229,7 +237,7 @@ export interface Releasable {
 }
 
 /**
- * Abstraction that exposes projection-related helpers.
+ * Mimimum abstraction that exposes projection-related helpers.
  */
 export interface ProjectionHost extends Releasable {
   /**
@@ -238,10 +246,15 @@ export interface ProjectionHost extends Releasable {
    */
   readonly getZoom: () => number;
   /**
-   * Extracts the current clip-space context if the mercator matrix is available.
-   * @returns {ClipContext | null} Clip context or `null` when the transform is not ready.
+   * Get camera location.
+   * @returns Camera location when viewport is available.
    */
-  readonly getClipContext: () => ClipContext | null;
+  readonly getCameraLocation: () => SpriteLocation | undefined;
+  /**
+   * Extracts the current clip-space context if the mercator matrix is available.
+   * @returns {ClipContext | undefined} Clip context or `undefined` when the transform is not ready.
+   */
+  readonly getClipContext: () => ClipContext | undefined;
   /**
    * Get mercator coordinate from the location
    * @param location Location.
@@ -255,13 +268,17 @@ export interface ProjectionHost extends Releasable {
    * @param location Location.
    * @returns Projected point if valid location.
    */
-  readonly project: (location: Readonly<SpriteLocation>) => SpritePoint | null;
+  readonly project: (
+    location: Readonly<SpriteLocation>
+  ) => SpritePoint | undefined;
   /**
    * Unproject the location.
    * @param point Projected point.
    * @returns Location if valid point.
    */
-  readonly unproject: (point: Readonly<SpritePoint>) => SpriteLocation | null;
+  readonly unproject: (
+    point: Readonly<SpritePoint>
+  ) => SpriteLocation | undefined;
   /**
    * Calculate perspective ratio.
    * @param location Location.
@@ -272,7 +289,6 @@ export interface ProjectionHost extends Releasable {
     location: Readonly<SpriteLocation>,
     cachedMercator?: SpriteMercatorCoordinate
   ) => number;
-  readonly getCameraLocation: () => SpriteLocation | null;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -286,7 +302,7 @@ export interface PrepareDrawSpriteImageParamsBase {
   readonly drawingBufferWidth: number;
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
-  readonly clipContext: Readonly<ClipContext> | null;
+  readonly clipContext: Readonly<ClipContext> | undefined;
 }
 
 export interface PrepareDrawSpriteImageParamsBefore<TTag>
@@ -477,7 +493,7 @@ export interface SpriteInterpolationState {
   readonly mode: SpriteInterpolationMode;
   readonly durationMs: number;
   readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasingPresetName | null;
+  readonly easingPreset: SpriteEasing;
   startTimestamp: number;
   readonly from: SpriteLocation;
   readonly to: SpriteLocation;
@@ -495,7 +511,7 @@ export interface SpriteInterpolationState {
 export interface DegreeInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasingPresetName | null;
+  readonly easingPreset: SpriteEasing;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;
@@ -505,7 +521,7 @@ export interface DegreeInterpolationState {
 export interface DistanceInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasingPresetName | null;
+  readonly easingPreset: SpriteEasing;
   readonly from: number;
   readonly to: number;
   readonly finalValue: number;
@@ -656,28 +672,38 @@ export type Canvas2DContext =
  */
 export type Canvas2DSource = HTMLCanvasElement | OffscreenCanvas;
 
+/** Line definition resolved for rendering. */
+export interface ResolvedSpriteImageLineAttribute
+  extends SpriteImageLineAttributeState {
+  readonly rgba: RgbaColor;
+}
+
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Base attributes for an image that composes a sprite.
  */
-export interface InternalSpriteImageState {
+export interface InternalSpriteImageState extends SpriteImageState {
   subLayer: number;
   order: number;
   imageId: string;
   imageHandle: number;
   mode: SpriteMode;
-  opacity: MutableInterpolatedValues<number>;
+  opacity: MutableSpriteInterpolatedValues<number>;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
+  border: ResolvedSpriteImageLineAttribute | undefined;
+  borderPixelWidth: number;
+  leaderLine: ResolvedSpriteImageLineAttribute | undefined;
+  leaderLinePixelWidth: number;
   offset: MutableSpriteImageInterpolatedOffset;
-  rotateDeg: MutableInterpolatedValues<number>;
+  rotateDeg: MutableSpriteInterpolatedValues<number>;
   rotationCommandDeg: number;
   displayedRotateDeg: number;
   autoRotation: boolean;
   autoRotationMinDistanceMeters: number;
   resolvedBaseRotateDeg: number;
-  originLocation?: Readonly<SpriteImageOriginLocation>;
+  originLocation: Readonly<SpriteImageOriginLocation> | undefined;
   originReferenceKey: SpriteOriginReferenceKey;
   originRenderTargetIndex: SpriteOriginReferenceIndex;
   rotationInterpolationState: Readonly<DegreeInterpolationState> | null;
@@ -710,7 +736,7 @@ export interface InternalSpriteCurrentState<TTag> {
   handle: IdHandle;
   isEnabled: boolean;
   visibilityDistanceMeters?: number;
-  location: MutableInterpolatedValues<Readonly<SpriteLocation>>;
+  location: MutableSpriteInterpolatedValues<Readonly<SpriteLocation>>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
   interpolationState: InternalSpriteInterpolationState | null;

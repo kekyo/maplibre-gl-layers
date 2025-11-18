@@ -130,6 +130,34 @@ const resolveImageOffset = (
   };
 };
 
+const calculateBorderWidthPixels = (
+  widthMeters: number | undefined,
+  imageScale: number,
+  zoomScaleFactor: number,
+  effectivePixelsPerMeter: number,
+  sizeScaleAdjustment: number
+): number => {
+  if (
+    widthMeters === undefined ||
+    !Number.isFinite(widthMeters) ||
+    widthMeters <= 0
+  ) {
+    return 0;
+  }
+  if (
+    !Number.isFinite(effectivePixelsPerMeter) ||
+    effectivePixelsPerMeter <= 0
+  ) {
+    return 0;
+  }
+  const scaledWidthMeters =
+    widthMeters * imageScale * zoomScaleFactor * sizeScaleAdjustment;
+  if (!Number.isFinite(scaledWidthMeters) || scaledWidthMeters <= 0) {
+    return 0;
+  }
+  return scaledWidthMeters * effectivePixelsPerMeter;
+};
+
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -155,7 +183,7 @@ type ImageCenterCache = Map<string, Map<string, ImageCenterCacheEntry>>;
 type OriginImageResolver<T> = (
   sprite: Readonly<InternalSpriteCurrentState<T>>,
   image: Readonly<InternalSpriteImageState>
-) => InternalSpriteImageState | null;
+) => InternalSpriteImageState | undefined;
 
 export const DEFAULT_RENDER_INTERPOLATION_RESULT: RenderInterpolationResult = {
   handled: false,
@@ -197,17 +225,17 @@ const createBucketOriginResolver = <T>(
       index >= bucket.length
     ) {
       // Missing index or out-of-bounds reference -> origin cannot be resolved.
-      return null;
+      return undefined;
     }
     const entry = bucket[index];
     if (!entry) {
       // Bucket holes should not happen, but guard to avoid undefined access.
-      return null;
+      return undefined;
     }
     const [resolvedSprite, resolvedImage] = entry;
     if (resolvedSprite !== sprite) {
       // A stale index referencing another sprite is treated as unresolved.
-      return null;
+      return undefined;
     }
     return resolvedImage;
   };
@@ -333,7 +361,7 @@ export const collectDepthSortedItemsInternal = <T>(
       true
     );
 
-    let depthKey: number;
+    let depthKey: number | undefined;
 
     if (imageEntry.mode === 'surface') {
       const imageScale = imageEntry.scale ?? 1;
@@ -410,7 +438,7 @@ export const collectDepthSortedItemsInternal = <T>(
         }
       );
 
-      if (surfaceDepth === null) {
+      if (surfaceDepth === undefined) {
         continue;
       }
       depthKey = surfaceDepth;
@@ -420,7 +448,7 @@ export const collectDepthSortedItemsInternal = <T>(
         unprojectPoint,
         projectToClipSpace
       );
-      if (billboardDepth === null) {
+      if (billboardDepth === undefined) {
         continue;
       }
       depthKey = billboardDepth;
@@ -459,16 +487,16 @@ export const collectDepthSortedItemsInternal = <T>(
  * @param {number} lng - Longitude in degrees.
  * @param {number} lat - Latitude in degrees.
  * @param {number} elevationMeters - Elevation above the ellipsoid in meters.
- * @param {ClipContext | null} context - Clip-space context; `null` skips projection.
- * @returns {[number, number, number, number] | null} Clip coordinates or `null` when projection fails.
+ * @param {ClipContext | undefined} context - Clip-space context; `undefined` skips projection.
+ * @returns {[number, number, number, number] | undefined} Clip coordinates or `undefined` when projection fails.
  */
 const projectLngLatToClipSpace = (
   projectionHost: ProjectionHost,
   location: Readonly<SpriteLocation>,
-  context: Readonly<ClipContext> | null
-): [number, number, number, number] | null => {
+  context: Readonly<ClipContext> | undefined
+): [number, number, number, number] | undefined => {
   if (!context) {
-    return null;
+    return undefined;
   }
   const { mercatorMatrix } = context;
   const coord = projectionHost.fromLngLat(location);
@@ -480,7 +508,7 @@ const projectLngLatToClipSpace = (
     1
   );
   if (!isFiniteNumber(clipW) || clipW <= MIN_CLIP_W) {
-    return null;
+    return undefined;
   }
   return [clipX, clipY, clipZ, clipW];
 };
@@ -501,7 +529,7 @@ interface ComputeImageCenterParams<T> {
   readonly drawingBufferWidth: number;
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
-  readonly clipContext: Readonly<ClipContext> | null;
+  readonly clipContext: Readonly<ClipContext> | undefined;
   readonly resolveOrigin: OriginImageResolver<T>;
 }
 
@@ -819,6 +847,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
 
   // Reset previous frame state so skipped images do not leak stale uniforms.
   imageEntry.surfaceShaderInputs = undefined;
+  imageEntry.borderPixelWidth = 0;
 
   let screenCornerBuffer:
     | [
@@ -846,6 +875,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     offsetX: identityOffsetX,
     offsetY: identityOffsetY,
   };
+  let borderSizeScaleAdjustment = 1;
 
   // Use per-image anchor/offset when provided; otherwise fall back to defaults.
   const anchor = imageEntry.anchor ?? DEFAULT_ANCHOR;
@@ -950,7 +980,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     z: spriteBaseLocation.z ?? 0,
   };
   const cameraDistanceMeters =
-    cameraLocation !== null
+    cameraLocation !== undefined
       ? calculateCartesianDistanceMeters(cameraLocation, spriteDistanceLocation)
       : Number.POSITIVE_INFINITY;
 
@@ -983,6 +1013,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       pixelRatio,
       project: clipContext ? undefined : projectionHost.project,
     });
+
+    borderSizeScaleAdjustment = surfaceCenter.worldDimensions.scaleAdjustment;
 
     if (!surfaceCenter.center) {
       // Projection failed for at least one corner; skip rendering to avoid NaNs.
@@ -1025,9 +1057,10 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     imageEntry.surfaceShaderInputs = surfaceShaderInputs;
 
     useShaderSurface = USE_SHADER_SURFACE_GEOMETRY && !!clipContext;
-    let clipCornerPositions: Array<[number, number, number, number]> | null =
-      null;
-    let clipCenterPosition: [number, number, number, number] | null = null;
+    let clipCornerPositions:
+      | Array<[number, number, number, number]>
+      | undefined = undefined;
+    let clipCenterPosition: [number, number, number, number] | undefined;
     if (useShaderSurface) {
       clipCornerPositions = new Array(SURFACE_BASE_CORNERS.length) as Array<
         [number, number, number, number]
@@ -1039,7 +1072,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       );
       if (!clipCenterPosition) {
         useShaderSurface = false;
-        clipCornerPositions = null;
+        clipCornerPositions = undefined;
       }
     }
 
@@ -1276,6 +1309,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       offset: offsetDef,
     });
 
+    borderSizeScaleAdjustment = placement.scaleAdjustment;
+
     const billboardShaderInputs = {
       center: placement.center,
       halfWidth: placement.halfWidth,
@@ -1401,6 +1436,23 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       };
     }
   }
+
+  const borderWidthMeters = imageEntry.border?.widthMeters;
+  imageEntry.borderPixelWidth = calculateBorderWidthPixels(
+    borderWidthMeters,
+    imageScale,
+    zoomScaleFactor,
+    effectivePixelsPerMeter,
+    borderSizeScaleAdjustment
+  );
+  const leaderLineWidthMeters = imageEntry.leaderLine?.widthMeters;
+  imageEntry.leaderLinePixelWidth = calculateBorderWidthPixels(
+    leaderLineWidthMeters,
+    imageScale,
+    zoomScaleFactor,
+    effectivePixelsPerMeter,
+    borderSizeScaleAdjustment
+  );
 
   const hitTestCorners =
     screenCornerBuffer && screenCornerBuffer.length === 4
@@ -1710,26 +1762,7 @@ export const processInterpolationsInternal = <TTag>(
   for (const sprite of sprites) {
     const state = sprite.interpolationState;
     if (state) {
-      if (state.easingPreset) {
-        spriteInterpolationWorkItems.push({ sprite, state });
-      } else {
-        const evaluation = evaluateInterpolation({
-          state,
-          timestamp,
-        });
-        if (state.startTimestamp < 0) {
-          state.startTimestamp = evaluation.effectiveStartTimestamp;
-        }
-        sprite.location.current = evaluation.location;
-        if (evaluation.completed) {
-          sprite.location.current = cloneSpriteLocation(state.to);
-          sprite.location.from = undefined;
-          sprite.location.to = undefined;
-          sprite.interpolationState = null;
-        } else {
-          hasActiveInterpolation = true;
-        }
-      }
+      spriteInterpolationWorkItems.push({ sprite, state });
     }
 
     sprite.images.forEach((orderMap) => {
@@ -1792,70 +1825,34 @@ export const processInterpolationsInternal = <TTag>(
     });
   }
 
-  const presetDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
-  const fallbackDistanceWorkItems: DistanceInterpolationWorkItem[] = [];
-  if (distanceInterpolationWorkItems.length > 0) {
-    for (const item of distanceInterpolationWorkItems) {
-      if (item.state.easingPreset) {
-        presetDistanceWorkItems.push(item);
-      } else {
-        fallbackDistanceWorkItems.push(item);
-      }
-    }
-  }
-
-  const presetDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
-  const fallbackDegreeWorkItems: DegreeInterpolationWorkItem[] = [];
-  if (degreeInterpolationWorkItems.length > 0) {
-    for (const item of degreeInterpolationWorkItems) {
-      if (item.state.easingPreset) {
-        presetDegreeWorkItems.push(item);
-      } else {
-        fallbackDegreeWorkItems.push(item);
-      }
-    }
-  }
-
-  const presetSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
-  const fallbackSpriteWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
-  if (spriteInterpolationWorkItems.length > 0) {
-    for (const item of spriteInterpolationWorkItems) {
-      if (item.state.easingPreset) {
-        presetSpriteWorkItems.push(item);
-      } else {
-        fallbackSpriteWorkItems.push(item);
-      }
-    }
-  }
-
   const distanceRequests =
-    presetDistanceWorkItems.length > 0
-      ? presetDistanceWorkItems.map(({ state }) => ({
+    distanceInterpolationWorkItems.length > 0
+      ? distanceInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
   const degreeRequests =
-    presetDegreeWorkItems.length > 0
-      ? presetDegreeWorkItems.map(({ state }) => ({
+    degreeInterpolationWorkItems.length > 0
+      ? degreeInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
   const spriteRequests =
-    presetSpriteWorkItems.length > 0
-      ? presetSpriteWorkItems.map(({ state }) => ({
+    spriteInterpolationWorkItems.length > 0
+      ? spriteInterpolationWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
       : [];
 
-  const hasPresetRequests =
+  const hasRequests =
     distanceRequests.length > 0 ||
     degreeRequests.length > 0 ||
     spriteRequests.length > 0;
 
-  if (hasPresetRequests) {
+  if (hasRequests) {
     evaluationHandlers.prepare?.({
       distance: distanceRequests,
       degree: degreeRequests,
@@ -1863,11 +1860,11 @@ export const processInterpolationsInternal = <TTag>(
     });
   }
 
-  if (presetDistanceWorkItems.length > 0) {
+  if (distanceRequests.length > 0) {
     const evaluations = evaluationHandlers.evaluateDistance(distanceRequests);
     if (
       applyDistanceInterpolationEvaluations(
-        presetDistanceWorkItems,
+        distanceInterpolationWorkItems,
         evaluations,
         timestamp
       )
@@ -1876,22 +1873,11 @@ export const processInterpolationsInternal = <TTag>(
     }
   }
 
-  if (
-    fallbackDistanceWorkItems.length > 0 &&
-    applyDistanceInterpolationEvaluations(
-      fallbackDistanceWorkItems,
-      [],
-      timestamp
-    )
-  ) {
-    hasActiveInterpolation = true;
-  }
-
-  if (presetDegreeWorkItems.length > 0) {
+  if (degreeRequests.length > 0) {
     const evaluations = evaluationHandlers.evaluateDegree(degreeRequests);
     if (
       applyDegreeInterpolationEvaluations(
-        presetDegreeWorkItems,
+        degreeInterpolationWorkItems,
         evaluations,
         timestamp
       )
@@ -1900,31 +1886,17 @@ export const processInterpolationsInternal = <TTag>(
     }
   }
 
-  if (
-    fallbackDegreeWorkItems.length > 0 &&
-    applyDegreeInterpolationEvaluations(fallbackDegreeWorkItems, [], timestamp)
-  ) {
-    hasActiveInterpolation = true;
-  }
-
-  if (presetSpriteWorkItems.length > 0) {
+  if (spriteRequests.length > 0) {
     const evaluations = evaluationHandlers.evaluateSprite(spriteRequests);
     if (
       applySpriteInterpolationEvaluations(
-        presetSpriteWorkItems,
+        spriteInterpolationWorkItems,
         evaluations,
         timestamp
       )
     ) {
       hasActiveInterpolation = true;
     }
-  }
-
-  if (
-    fallbackSpriteWorkItems.length > 0 &&
-    applySpriteInterpolationEvaluations(fallbackSpriteWorkItems, [], timestamp)
-  ) {
-    hasActiveInterpolation = true;
   }
 
   return {
@@ -1970,19 +1942,9 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
     };
   }
 
-  const presetOpacityWorkItems: DistanceInterpolationWorkItem[] = [];
-  const fallbackOpacityWorkItems: DistanceInterpolationWorkItem[] = [];
-  for (const item of opacityWorkItems) {
-    if (item.state.easingPreset) {
-      presetOpacityWorkItems.push(item);
-    } else {
-      fallbackOpacityWorkItems.push(item);
-    }
-  }
-
   const opacityRequests =
-    presetOpacityWorkItems.length > 0
-      ? presetOpacityWorkItems.map(({ state }) => ({
+    opacityWorkItems.length > 0
+      ? opacityWorkItems.map(({ state }) => ({
           state,
           timestamp,
         }))
@@ -1998,28 +1960,17 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
 
   let hasActiveInterpolation = false;
 
-  if (presetOpacityWorkItems.length > 0) {
+  if (opacityRequests.length > 0) {
     const evaluations = evaluationHandlers.evaluateDistance(opacityRequests);
     if (
       applyDistanceInterpolationEvaluations(
-        presetOpacityWorkItems,
+        opacityWorkItems,
         evaluations,
         timestamp
       )
     ) {
       hasActiveInterpolation = true;
     }
-  }
-
-  if (
-    fallbackOpacityWorkItems.length > 0 &&
-    applyDistanceInterpolationEvaluations(
-      fallbackOpacityWorkItems,
-      [],
-      timestamp
-    )
-  ) {
-    hasActiveInterpolation = true;
   }
 
   return {

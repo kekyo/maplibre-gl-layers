@@ -487,11 +487,11 @@ spriteLayer.updateSprite(SPRITE_ID, {
 `interpolation` は次のチャネルをサポートします。
 
 - `rotateDeg`: 画像の追加回転角。最短経路で補間され、完了後は最終角にスナップします。
-- `offsetDeg` / `offsetMeters`: オフセットの向きと距離。角度・距離を別々の時間や easing で制御可能です。
+- `offsetDeg` / `offsetMeters`: オフセットの向きと距離。角度・距離を別々の時間やイージングプリセットで制御可能です。
 - `opacity`: 0.0〜1.0の値を自動的にクリップしながらフェードさせます。値が0に近づくと描画が抑制されるため、LODやハイライト演出に使えます。
 
-各チャネルに `durationMs` と補間モード（`feedback`/`feedforward`）、任意のイージング関数を与えます。
-イージング関数の指定が省略された場合は、単純な線形補間となります。
+各チャネルに `durationMs` と補間モード（`feedback`/`feedforward`）、任意のイージングプリセット（現在は `linear` のみ）を与えます。
+イージングプリセットの指定が省略された場合は、`linear` となります。
 設定を削除するか `null` を渡すとそのチャネルだけ即座に停止します。
 
 以下に、回転・オフセット・不透明度で補間を適用する例を示します:
@@ -533,6 +533,61 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
   },
 });
 ```
+
+## 全体的な補間計算の制御
+
+スプライト全体の補間を一時停止したい場合は `setInterpolationCalculation(false)` を呼び出します。
+一時停止は即時に反映され、補間中の動作も全て完全に一時停止します。
+再度 `true` に戻すと、停止していた補間を途中から滑らかに再開します。
+
+初期状態は `true` で、継続的に補間が計算されます。
+
+以下に例を示します:
+
+```typescript
+// 補間を一時停止する
+spriteLayer.setInterpolationCalculation(false);
+
+// (何か他の処理...)
+
+// 補間を再開すると、停止していた補間が滑らかに続行する
+spriteLayer.setInterpolationCalculation(true);
+```
+
+注意: 停止中にスプライトやスプライト画像の更新を行った場合は、内部の補間ステートはリセットされます:
+
+```typescript
+// 補間を一時停止する
+spriteLayer.setInterpolationCalculation(false);
+
+// スプライトや画像に変更を加える
+spriteLayer.updateSprite('car-1', {
+  location: { lng: 136.8853, lat: 35.1702 },  // 即時反映される
+  interpolation: { durationMs: 1000 },
+});
+spriteLayer.updateSpriteImage('car-1', 0, 0, {
+  rotateDeg: 45,  // 即時反映される
+  offset: { offsetMeters: 12, offsetDeg: 30 },  //即時反映される
+  interpolation: {
+    rotateDeg: { durationMs: 800 },
+    offsetDeg: { durationMs: 500 },
+  },
+});
+
+// 補間を再開すると、上記の設定から補間が改めて開始される
+// （以前の補間ステートはリセットされる）
+spriteLayer.setInterpolationCalculation(true);
+```
+
+### MapLibre非表示中の補間処理
+
+MapLibreが非表示となる場合（正確にはそのページが非表示となる場合）には、補間処理が中断・停止します。
+また、停止時に補間中の値は、その値が現在値として反映されます。
+
+その後、MapLibreが表示状態となると補間処理が停止しているため、その場でスプライト群は停止しています。
+更新系のAPIで新しい座標や値が設定されると、補間が行われずにその値に即座に更新され、次回の更新から補間処理が再び適用されます。
+
+これは、表示が復帰したあとの補間処理によって、描画が極端に更新される（例えば、座標が遠方に移動し、高速に移動したりする）のを防ぐためです。
 
 ## 基準座標点とアンカー
 
@@ -598,6 +653,74 @@ spriteLayer.updateSprite('vehicle-lod', {
   visibilityDistanceMeters: null, // nullで疑似LODを無効化
 });
 ```
+
+## ボーダー
+
+各スプライト画像には、それぞれボーダー線を描画させることができます。
+これは、そのスプライト画像の視認性を向上させたり、スプライト画像の選択状態を可視化したりする目的に使えます。
+また、後述のイベントハンドラがスプライト画像を判定する基準となる領域を示します。
+
+![borders](./images/borders1.png)
+
+以下にボーダーを描画させる例を示します:
+
+```typescript
+// 基本の矢印に赤の2mボーダーを付ける
+spriteLayer.addSprite('bordered-marker', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      border: { color: '#ff0000', widthMeters: 2 },
+    },
+  ],
+});
+
+// 後からボーダーを外す場合（nullでクリア）
+spriteLayer.updateSpriteImage(
+  'bordered-marker', 0, 0, { border: null });
+```
+
+注意: ボーダーは常に全てのスプライトより手前に描画されます。
+つまり、サブレイヤーが常に最大の位置に配置されているのと同じとなります。
+
+### 引き出し線
+
+画像に`leaderLine`を指定すると、その画像の基準座標点（アンカー適用後の位置）と`originLocation`で参照された画像の基準座標点を線で結びます。
+線は`color`と`widthMeters`で見た目を指定でき、不透明度は画像自身の（補間後の）`opacity`を使用します。
+
+![leader-line1](./images/leader-line1.png)
+
+以下の例では、2つの画像の間に引き出し線を引きます。
+
+```typescript
+spriteLayer.addSprite('vehicle-group', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    // プライマリ画像
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+    },
+    // セカンダリ画像(テキスト)
+    {
+      subLayer: 1,
+      order: 0,
+      imageId: TEXT_LABEL1_ID,
+      // プライマリ画像を参照
+      originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
+      // 引き出し線を引く
+      leaderLine: { color: '#00aa00', widthMeters: 2 },
+    },
+  ],
+});
+```
+
+注意: 引き出し線は、常に全てのスプライトより背面に描画されます。
+つまり、サブレイヤーが常に最小の位置に配置されているのと同じとなります。
 
 ## イベントハンドラ
 
@@ -833,7 +956,6 @@ const spriteLayer = createSpriteLayer({
     generateMipmaps: true,
     maxAnisotropy: 4,
   },
-  showDebugBounds: false, // デバッグ時に当たり判定の赤枠を表示
 });
 ```
 
@@ -852,11 +974,6 @@ const spriteLayer = createSpriteLayer({
 - `textureFiltering.minFilter` / `magFilter` - WebGL のテクスチャフィルタリングを上書きします。既定値はいずれも `linear` です。`minFilter` にミップマップ系 (`linear-mipmap-linear` など) を指定すると、新規登録される画像で自動的にミップマップが生成されます。
 - `textureFiltering.generateMipmaps` - ミップマップ必須でないフィルターを選んだ場合でもミップマップを生成します。WebGL2 もしくは 2 のベキ乗サイズの画像で大きく縮小した際の画質を改善できます。WebGL1 かつ非 2 のベキ乗画像でミップマップが生成できない場合は、自動的に `linear` フィルターへフォールバックします。
 - `textureFiltering.maxAnisotropy` - `EXT_texture_filter_anisotropic` 拡張が利用できる場合に異方性フィルタリング係数を指定します (1 以上)。地表に沿ったスプライトを浅い角度から見た際のシャープさを維持できます。指定値は GPU の上限でクランプされ、ミップマップが存在する場合のみ適用されます。
-- `showDebugBounds` - `true` にするとスプライトのヒットテスト領域を赤枠で表示します。
-
-  ![debug-bounds](./images/debug-bounds.png)
-  
-  ポインタイベントハンドラのデバッグ用途を想定しており、本番環境ではパフォーマンスのため `false` のままにすることを推奨します。
 
 これらの値（スケーリング／テクスチャフィルタリング）はレイヤー生成時に一度解決されます。動的に変更したい場合はレイヤーを再生成してください。
 無効な値を指定すると自動で補正され、開発中に気付きやすいよう `console.warn` 経由で通知されます。

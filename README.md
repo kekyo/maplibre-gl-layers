@@ -464,8 +464,8 @@ These are independent of sprite position interpolation and are controlled indivi
 - `offsetDeg` / `offsetMeters`: Offset direction and distance. Angle and distance can be controlled with separate timing and easing.
 - `opacity`: Fades automatically clipping values between 0.0 and 1.0. As the value approaches 0, rendering is suppressed, making it useful for LOD or highlight effects.
 
-Assign `durationMs` and an interpolation mode (`feedback`/`feedforward`) to each channel, along with an optional easing function.
-If no easing function is specified, simple linear interpolation is used.
+Assign `durationMs` and an interpolation mode (`feedback`/`feedforward`) to each channel, along with an optional easing preset (currently only `linear`).
+If no easing preset is specified, `linear` interpolation is used.
 Removing the setting or passing `null` immediately stops that channel.
 
 Below is an example applying interpolation to rotation, offset, and opacity:
@@ -507,6 +507,60 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
   },
 });
 ```
+
+## Controlling Overall Interpolation Calculation
+
+To pause interpolation for the entire sprite attributes, call `setInterpolationCalculation(false)`.
+The pause takes effect immediately, halting all ongoing interpolation behavior.
+Setting it back to `true` smoothly resumes the paused interpolation from its current position.
+
+The initial state is `true`, and interpolation is continuously calculated.
+
+Here's an example:
+
+```typescript
+// Pause interpolation
+spriteLayer.setInterpolationCalculation(false);
+
+// (Your another tasks...)
+
+// Resuming interpolation smoothly continues the paused
+spriteLayer.setInterpolationCalculation(true);
+```
+
+Note: If you update the sprite or sprite image while paused, the internal interpolation state will be reset:
+
+```typescript
+// Pause interpolation
+spriteLayer.setInterpolationCalculation(false);
+
+// Modify sprites or images
+spriteLayer.updateSprite('car-1', {
+  location: { lng: 136.8853, lat: 35.1702 },  // Immediately applied
+  interpolation: { durationMs: 1000 },
+});
+spriteLayer.updateSpriteImage('car-1', 0, 0, {
+  rotateDeg: 45,  // Immediately applied
+  offset: { offsetMeters: 12, offsetDeg: 30 },  // Immediately applied
+  interpolation: {
+    rotateDeg: { durationMs: 800 },
+    offsetDeg: { durationMs: 500 },
+  },
+});
+
+// When interpolation resumes, it will start from the above settings
+// (the previous interpolation state is reset).
+spriteLayer.setInterpolationCalculation(true);
+```
+
+### Interpolation Processing When MapLibre is Hidden
+
+When MapLibre becomes hidden (more precisely, when the page containing it becomes hidden), interpolation processing is interrupted and stopped.Additionally, any values currently being interpolated at the time of stopping are reflected as the current values.
+
+Subsequently, when MapLibre becomes visible again, interpolation processing remains stopped, so the sprites are frozen in place.
+When new coordinates or values are set via update APIs, they are updated immediately without interpolation, and interpolation resumes with the next update.
+
+This prevents extreme drawing updates upon reappearance (e.g., coordinates moving far away or moving at high speed) caused by the subsequent interpolation processing.
 
 ## Referencing Base Positions and Anchors
 
@@ -569,6 +623,75 @@ spriteLayer.updateSprite('vehicle-lod', {
   visibilityDistanceMeters: null, // null disables pseudo LOD
 });
 ```
+
+## Borders
+
+Each sprite image can draw its own border.
+This helps emphasize an icon or show selection state without changing the texture itself.
+Additionally, the event handler described later indicates the area used as the criteria for determining the sprite image.
+
+
+![borders](./images/borders1.png)
+
+Example:
+
+```typescript
+// Add a 2m red border to the arrow
+spriteLayer.addSprite('bordered-marker', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      border: { color: '#ff0000', widthMeters: 2 },
+    },
+  ],
+});
+
+// Remove a border later (null clears it)
+spriteLayer.updateSpriteImage(
+  'bordered-marker', 0, 0, { border: null });
+```
+
+Note: Borders are always drawn in front of all sprites.
+This means it is equivalent to always placing the sublayer at the topmost position.
+
+### Leader lines
+
+Set the optional `leaderLine` on an image to draw a connecting line between the image’s own anchor position and the anchor position of the image specified by `originLocation`.
+The line uses your specified CSS `color` and `widthMeters`, and the effective opacity follows the image’s (post-interpolation) `opacity`.
+
+![leader-line1](./images/leader-line1.png)
+
+In the following example, a pull-out line is drawn between two images:
+
+```typescript
+spriteLayer.addSprite('vehicle-group', {
+  location: { lng: 136.8852, lat: 35.17 },
+  images: [
+    // Primary image
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+    },
+    // Secondary image (text)
+    {
+      subLayer: 1,
+      order: 0,
+      imageId: TEXT_LABEL1_ID,
+      // Refer to primary image
+      originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
+      // Draw leader line
+      leaderLine: { color: '#00aa00', widthMeters: 2 },
+    },
+  ],
+});
+```
+
+Note: Leader lines are always drawn behind all sprites.
+This means it is equivalent to always placing the sublayer at the lowest position.
 
 ## Event Handlers
 
@@ -806,7 +929,6 @@ const spriteLayer = createSpriteLayer({
     generateMipmaps: true,
     maxAnisotropy: 4,
   },
-  showDebugBounds: false, // Draw red hit-test outlines while debugging
 });
 ```
 
@@ -827,11 +949,6 @@ const spriteLayer = createSpriteLayer({
 - `textureFiltering.minFilter` / `magFilter` - Override the WebGL texture filters used when sprites shrink or expand. The defaults match `linear` filtering in both directions. Setting `minFilter` to a mipmap variant (for example `linear-mipmap-linear`) automatically enables mipmap generation for newly registered images.
 - `textureFiltering.generateMipmaps` - Forces mipmap generation even when the chosen filter does not require it, improving quality for aggressively downscaled sprites on WebGL2 or power-of-two images. When the context cannot build mipmaps (for example WebGL1 with non power-of-two textures) the layer falls back to linear filtering automatically.
 - `textureFiltering.maxAnisotropy` - Requests anisotropic filtering (>= 1) when the runtime exposes `EXT_texture_filter_anisotropic`, helping surface-aligned sprites remain sharp at shallow viewing angles. The requested value is clamped to the GPU limit and only applied when mipmaps are available.
-- `showDebugBounds` - When `true`, the layer overlays red outlines representing sprite hit-test regions.
-
-  ![debug-bounds](./images/debug-bounds.png)
-
-  This is intended for debugging pointer interaction event handler and should remain `false` in production for best performance.
 
 All scaling values and texture filtering values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
 Invalid inputs are normalized and reported via `console.warn` to help catch configuration mistakes during development.

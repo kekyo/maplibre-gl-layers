@@ -59,7 +59,7 @@ const computeFeedforwardTarget = (
  *
  * @property durationMs - Clamped non-negative duration in milliseconds.
  * @property mode - Strategy that guides how the destination is computed.
- * @property easing - Optional easing function carried through for later resolution.
+ * @property easing - Optional easing preset carried through for later resolution.
  */
 interface NormalizedInterpolationOptions {
   durationMs: number;

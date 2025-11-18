@@ -35,7 +35,7 @@ describe('createInterpolationState', () => {
     expect(state.from).not.toBe(current);
     expect(state.to).not.toBe(next);
     expect(state.easing).toBe(linearEasing);
-    expect(state.easingPreset).toBe('linear');
+    expect(state.easingPreset.type).toBe('linear');
   });
 
   it('predicts feedforward target based on velocity', () => {
@@ -69,16 +69,15 @@ describe('createInterpolationState', () => {
     expect(spriteLocationsEqual(state.to, next)).toBe(true);
   });
 
-  it('copies custom easing function into interpolation state', () => {
-    const customEasing = (t: number) => t * t;
+  it('uses the requested easing preset', () => {
     const { state } = createInterpolationState({
       currentLocation: { lng: 0, lat: 0 },
       nextCommandLocation: { lng: 1, lat: 1 },
-      options: { durationMs: 1000, easing: customEasing },
+      options: { durationMs: 1000, easing: { type: 'linear' } },
     });
 
-    expect(state.easing).toBe(customEasing);
-    expect(state.easingPreset).toBeNull();
+    expect(state.easing).toBe(linearEasing);
+    expect(state.easingPreset.type).toBe('linear');
   });
 
   it('marks interpolation as unnecessary when duration is zero', () => {
@@ -177,28 +176,5 @@ describe('evaluateInterpolation', () => {
 
     expect(backwards.completed).toBe(false);
     expect(backwards.location.lng).toBeCloseTo(0);
-  });
-
-  it('applies custom easing function when provided', () => {
-    const customEasing = (t: number) => Math.min(1, t * t);
-    const { state } = createInterpolationState({
-      currentLocation: { lng: 0, lat: 0 },
-      nextCommandLocation: { lng: 8, lat: 0 },
-      options: { durationMs: 1000, easing: customEasing },
-    });
-
-    const start = evaluateInterpolation({
-      state,
-      timestamp: 1000,
-    });
-
-    state.startTimestamp = start.effectiveStartTimestamp;
-    const midway = evaluateInterpolation({
-      state,
-      timestamp: start.effectiveStartTimestamp + 500,
-    });
-
-    // custom easing(progress=0.5) => 0.25
-    expect(midway.location.lng).toBeCloseTo(2);
   });
 });
