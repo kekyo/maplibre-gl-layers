@@ -28,16 +28,54 @@ const createImageState = (): InternalSpriteImageState => ({
     from: undefined,
     to: undefined,
     invalidated: false,
+    interpolation: {
+      state: null,
+      options: null,
+      targetValue: 1,
+      baseValue: 1,
+      lastCommandValue: 1,
+    },
   },
+  lodOpacity: 1,
   scale: 1,
   anchor: { x: 0, y: 0 },
   border: undefined,
   borderPixelWidth: 0,
   offset: {
-    offsetMeters: { current: 0, from: undefined, to: undefined },
-    offsetDeg: { current: 0, from: undefined, to: undefined },
+    offsetMeters: {
+      current: 0,
+      from: undefined,
+      to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: 0,
+      },
+    },
+    offsetDeg: {
+      current: 0,
+      from: undefined,
+      to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: 0,
+      },
+    },
   },
-  rotateDeg: { current: 0, from: undefined, to: undefined },
+  rotateDeg: {
+    current: 0,
+    from: undefined,
+    to: undefined,
+    invalidated: false,
+    interpolation: {
+      state: null,
+      options: null,
+      lastCommandValue: 0,
+    },
+  },
   rotationCommandDeg: 0,
   displayedRotateDeg: 0,
   autoRotation: false,
@@ -45,20 +83,7 @@ const createImageState = (): InternalSpriteImageState => ({
   resolvedBaseRotateDeg: 0,
   originReferenceKey: SPRITE_ORIGIN_REFERENCE_KEY_NONE,
   originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
-  rotationInterpolationState: null,
-  rotationInterpolationOptions: null,
-  offsetDegInterpolationState: null,
-  offsetMetersInterpolationState: null,
-  opacityInterpolationState: null,
-  opacityInterpolationOptions: null,
-  opacityTargetValue: 1,
-  lodLastCommandOpacity: 1,
-  lastCommandOpacityBase: 1,
   originLocation: undefined,
-  lastCommandRotateDeg: 0,
-  lastCommandOffsetDeg: 0,
-  lastCommandOffsetMeters: 0,
-  lastCommandOpacity: 1,
   interpolationDirty: false,
 });
 
@@ -74,10 +99,10 @@ describe('applyOffsetUpdate', () => {
 
     expect(state.offset.offsetDeg.current).toBe(45);
     expect(state.offset.offsetMeters.current).toBe(12);
-    expect(state.offsetDegInterpolationState).toBeNull();
-    expect(state.offsetMetersInterpolationState).toBeNull();
-    expect(state.lastCommandOffsetDeg).toBe(45);
-    expect(state.lastCommandOffsetMeters).toBe(12);
+    expect(state.offset.offsetDeg.interpolation.state).toBeNull();
+    expect(state.offset.offsetMeters.interpolation.state).toBeNull();
+    expect(state.offset.offsetDeg.interpolation.lastCommandValue).toBe(45);
+    expect(state.offset.offsetMeters.interpolation.lastCommandValue).toBe(12);
   });
 
   it('creates interpolation state for both angle and distance channels', () => {
@@ -92,8 +117,8 @@ describe('applyOffsetUpdate', () => {
       }
     );
 
-    expect(state.offsetDegInterpolationState).not.toBeNull();
-    expect(state.offsetMetersInterpolationState).not.toBeNull();
+    expect(state.offset.offsetDeg.interpolation.state).not.toBeNull();
+    expect(state.offset.offsetMeters.interpolation.state).not.toBeNull();
     expect(state.offset.offsetDeg.current).toBe(0);
     expect(state.offset.offsetMeters.current).toBe(0);
 
@@ -109,8 +134,8 @@ describe('applyOffsetUpdate', () => {
     expect(finalStepActive).toBe(false);
     expect(state.offset.offsetDeg.current).toBeCloseTo(90, 5);
     expect(state.offset.offsetMeters.current).toBeCloseTo(20, 5);
-    expect(state.offsetDegInterpolationState).toBeNull();
-    expect(state.offsetMetersInterpolationState).toBeNull();
+    expect(state.offset.offsetDeg.interpolation.state).toBeNull();
+    expect(state.offset.offsetMeters.interpolation.state).toBeNull();
   });
 
   it('clears interpolation state explicitly', () => {
@@ -125,13 +150,13 @@ describe('applyOffsetUpdate', () => {
       }
     );
 
-    expect(state.offsetDegInterpolationState).not.toBeNull();
-    expect(state.offsetMetersInterpolationState).not.toBeNull();
+    expect(state.offset.offsetDeg.interpolation.state).not.toBeNull();
+    expect(state.offset.offsetMeters.interpolation.state).not.toBeNull();
 
     clearOffsetDegInterpolation(state);
     clearOffsetMetersInterpolation(state);
 
-    expect(state.offsetDegInterpolationState).toBeNull();
-    expect(state.offsetMetersInterpolationState).toBeNull();
+    expect(state.offset.offsetDeg.interpolation.state).toBeNull();
+    expect(state.offset.offsetMeters.interpolation.state).toBeNull();
   });
 });

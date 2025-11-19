@@ -18,16 +18,59 @@ const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   imageId: 'image',
   imageHandle: 1,
   mode: 'surface',
-  opacity: { current: opacity, from: undefined, to: undefined },
+  opacity: {
+    current: opacity,
+    from: undefined,
+    to: undefined,
+    invalidated: false,
+    interpolation: {
+      state: null,
+      options: null,
+      targetValue: opacity,
+      baseValue: opacity,
+      lastCommandValue: opacity,
+    },
+  },
+  lodOpacity: 1,
   scale: 1,
   anchor: { x: 0, y: 0 },
   border: undefined,
   borderPixelWidth: 0,
   offset: {
-    offsetMeters: { current: 0, from: undefined, to: undefined },
-    offsetDeg: { current: 0, from: undefined, to: undefined },
+    offsetMeters: {
+      current: 0,
+      from: undefined,
+      to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: 0,
+      },
+    },
+    offsetDeg: {
+      current: 0,
+      from: undefined,
+      to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: 0,
+      },
+    },
   },
-  rotateDeg: { current: 0, from: undefined, to: undefined },
+  rotateDeg: {
+    current: 0,
+    from: undefined,
+    to: undefined,
+    invalidated: false,
+    interpolation: {
+      state: null,
+      options: null,
+      lastCommandValue: 0,
+    },
+  },
   rotationCommandDeg: 0,
   displayedRotateDeg: 0,
   autoRotation: false,
@@ -36,19 +79,6 @@ const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   originLocation: undefined,
   originReferenceKey: 0,
   originRenderTargetIndex: 0,
-  rotationInterpolationState: null,
-  rotationInterpolationOptions: null,
-  offsetDegInterpolationState: null,
-  offsetMetersInterpolationState: null,
-  opacityInterpolationState: null,
-  opacityInterpolationOptions: null,
-  opacityTargetValue: opacity,
-  lodLastCommandOpacity: opacity,
-  lastCommandOpacityBase: opacity,
-  lastCommandRotateDeg: 0,
-  lastCommandOffsetDeg: 0,
-  lastCommandOffsetMeters: 0,
-  lastCommandOpacity: opacity,
   interpolationDirty: false,
 });
 
@@ -59,8 +89,8 @@ describe('applyOpacityUpdate', () => {
     applyOpacityUpdate(image, 5);
 
     expect(image.opacity.current).toBe(1);
-    expect(image.opacityInterpolationState).toBeNull();
-    expect(image.lastCommandOpacity).toBe(1);
+    expect(image.opacity.interpolation.state).toBeNull();
+    expect(image.opacity.interpolation.lastCommandValue).toBe(1);
   });
 
   it('interpolates opacity over time and clamps the final value', () => {
@@ -68,7 +98,7 @@ describe('applyOpacityUpdate', () => {
 
     applyOpacityUpdate(image, -4, { durationMs: 100, easing: (t) => t });
 
-    expect(image.opacityInterpolationState).not.toBeNull();
+    expect(image.opacity.interpolation.state).not.toBeNull();
 
     const startTimestamp = 0;
     // First tick initializes the interpolation without completing it.
@@ -101,7 +131,7 @@ describe('applyOpacityUpdate', () => {
     const image = createMockImageState(0.4);
     applyOpacityUpdate(image, 0.6, null, 0.5);
     expect(image.opacity.current).toBe(0.3);
-    expect(image.lastCommandOpacityBase).toBe(0.6);
-    expect(image.lastCommandOpacity).toBe(0.3);
+    expect(image.opacity.interpolation.baseValue).toBe(0.6);
+    expect(image.opacity.interpolation.lastCommandValue).toBe(0.3);
   });
 });

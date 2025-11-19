@@ -960,6 +960,30 @@ const createHud = () => {
               data-testid="selected-visible"
             >--</span>
           </div>
+          <div class="status-row" data-testid="selected-row-rotate">
+            <span class="status-label">Rotate Deg</span>
+            <span
+              class="status-value"
+              data-selected-field="rotate"
+              data-testid="selected-rotate"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset">
+            <span class="status-label">Offset</span>
+            <span
+              class="status-value"
+              data-selected-field="offset"
+              data-testid="selected-offset"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-opacity">
+            <span class="status-label">Opacity</span>
+            <span
+              class="status-value"
+              data-selected-field="opacity"
+              data-testid="selected-opacity"
+            >--</span>
+          </div>
           <div class="status-row" data-testid="selected-row-lnglat">
             <span class="status-label">LngLat</span>
             <span
@@ -1649,6 +1673,15 @@ const main = async () => {
       '[data-selected-field="screen"]'
     ),
     tag: document.querySelector<HTMLSpanElement>('[data-selected-field="tag"]'),
+    rotateDeg: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotate"]'
+    ),
+    offset: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offset"]'
+    ),
+    opacity: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="opacity"]'
+    ),
   } as const;
 
   let updateCameraControls: (() => void) | undefined;
@@ -1839,6 +1872,19 @@ const main = async () => {
       // Reflect whether the sprite image was visible (non-zero opacity) at the time of the click.
       selectedFieldEls.visible.textContent =
         imageState.opacity.current !== 0.0 ? 'Visible' : 'Hidden';
+    }
+    if (selectedFieldEls.rotateDeg) {
+      selectedFieldEls.rotateDeg.textContent = `${imageState.rotateDeg.current.toFixed(2)}°`;
+    }
+    if (selectedFieldEls.offset) {
+      selectedFieldEls.offset.textContent = `meters=${imageState.offset.offsetMeters.current.toFixed(
+        2
+      )}, deg=${imageState.offset.offsetDeg.current.toFixed(2)}`;
+    }
+    if (selectedFieldEls.opacity) {
+      selectedFieldEls.opacity.textContent = `${imageState.opacity.current.toFixed(
+        3
+      )}`;
     }
     if (selectedFieldEls.lnglat) {
       // Show the geographic coordinates for the sprite's current location.
@@ -2467,9 +2513,7 @@ const main = async () => {
       });
     };
 
-    const resetPrimaryImageOpacity = (
-      preferInterpolation: boolean
-    ): void => {
+    const resetPrimaryImageOpacity = (preferInterpolation: boolean): void => {
       const shouldInterpolate =
         preferInterpolation && isOpacityInterpolationEnabled;
       spriteLayer.updateForEach((sprite, spriteUpdate) => {

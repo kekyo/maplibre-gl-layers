@@ -510,7 +510,7 @@ const processInterpolationsWithWasm = <TTag>(
         }
 
         const hasOffsetMetersInterpolation =
-          image.offsetMetersInterpolationState !== null;
+          image.offset.offsetMeters.interpolation.state !== null;
         if (hasOffsetMetersInterpolation) {
           collectDistanceInterpolationWorkItems(
             image,
@@ -522,11 +522,11 @@ const processInterpolationsWithWasm = <TTag>(
         }
 
         const hasOpacityInterpolation =
-          image.opacityInterpolationState !== null;
+          image.opacity.interpolation.state !== null;
 
         const hasDegreeInterpolation =
-          image.rotationInterpolationState !== null ||
-          image.offsetDegInterpolationState !== null;
+          image.rotateDeg.interpolation.state !== null ||
+          image.offset.offsetDeg.interpolation.state !== null;
         if (hasDegreeInterpolation) {
           collectDegreeInterpolationWorkItems(
             image,

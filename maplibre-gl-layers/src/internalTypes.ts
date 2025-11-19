@@ -218,18 +218,39 @@ export interface SpriteMercatorCoordinate {
  * Mutable counterpart to {@link SpriteInterpolatedValues}, used internally so SpriteLayer
  * can reuse object references while still exposing readonly snapshots publicly.
  */
-export interface MutableSpriteInterpolatedValues<T>
-  extends SpriteInterpolatedValues<T> {
+export interface MutableSpriteInterpolatedValues<
+  T,
+  TInterpolationState = undefined,
+> extends SpriteInterpolatedValues<T> {
   current: T;
   from: T | undefined;
   to: T | undefined;
   invalidated: boolean | undefined;
+  interpolation?: MutableSpriteValueInterpolation<T, TInterpolationState>;
 }
+
+export interface MutableSpriteValueInterpolation<TValue, TInterpolationState> {
+  state: TInterpolationState | null;
+  options: Readonly<SpriteInterpolationOptions> | null;
+  lastCommandValue: TValue;
+  targetValue?: TValue;
+  baseValue?: TValue;
+}
+
+export interface MutableSpriteManagedInterpolatedValues<
+  TValue,
+  TInterpolationState,
+> extends MutableSpriteInterpolatedValues<TValue, TInterpolationState> {
+  interpolation: MutableSpriteValueInterpolation<TValue, TInterpolationState>;
+}
+
+export interface MutableSpriteInterpolatedNumberValues<TInterpolationState>
+  extends MutableSpriteManagedInterpolatedValues<number, TInterpolationState> {}
 
 export interface MutableSpriteImageInterpolatedOffset
   extends SpriteImageInterpolatedOffset {
-  offsetMeters: MutableSpriteInterpolatedValues<number>;
-  offsetDeg: MutableSpriteInterpolatedValues<number>;
+  offsetMeters: MutableSpriteInterpolatedNumberValues<DistanceInterpolationState>;
+  offsetDeg: MutableSpriteInterpolatedNumberValues<DegreeInterpolationState>;
 }
 
 export interface Releasable {
@@ -689,7 +710,8 @@ export interface InternalSpriteImageState extends SpriteImageState {
   imageId: string;
   imageHandle: number;
   mode: SpriteMode;
-  opacity: MutableSpriteInterpolatedValues<number>;
+  opacity: MutableSpriteInterpolatedNumberValues<DistanceInterpolationState>;
+  lodOpacity: number;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
   border: ResolvedSpriteImageLineAttribute | undefined;
@@ -697,7 +719,7 @@ export interface InternalSpriteImageState extends SpriteImageState {
   leaderLine: ResolvedSpriteImageLineAttribute | undefined;
   leaderLinePixelWidth: number;
   offset: MutableSpriteImageInterpolatedOffset;
-  rotateDeg: MutableSpriteInterpolatedValues<number>;
+  rotateDeg: MutableSpriteInterpolatedNumberValues<DegreeInterpolationState>;
   rotationCommandDeg: number;
   displayedRotateDeg: number;
   autoRotation: boolean;
@@ -706,19 +728,6 @@ export interface InternalSpriteImageState extends SpriteImageState {
   originLocation: Readonly<SpriteImageOriginLocation> | undefined;
   originReferenceKey: SpriteOriginReferenceKey;
   originRenderTargetIndex: SpriteOriginReferenceIndex;
-  rotationInterpolationState: Readonly<DegreeInterpolationState> | null;
-  rotationInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
-  offsetDegInterpolationState: Readonly<DegreeInterpolationState> | null;
-  offsetMetersInterpolationState: Readonly<DistanceInterpolationState> | null;
-  opacityInterpolationState: Readonly<DistanceInterpolationState> | null;
-  opacityInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
-  opacityTargetValue: number;
-  lodLastCommandOpacity: number;
-  lastCommandOpacityBase: number;
-  lastCommandRotateDeg: number;
-  lastCommandOffsetDeg: number;
-  lastCommandOffsetMeters: number;
-  lastCommandOpacity: number;
   interpolationDirty: boolean;
   surfaceShaderInputs?: Readonly<SurfaceShaderInputs>;
   hitTestCorners?: [

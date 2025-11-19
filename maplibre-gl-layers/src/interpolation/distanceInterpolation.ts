@@ -11,6 +11,7 @@ import type {
   DistanceInterpolationEvaluationResult,
   DistanceInterpolationState,
   InternalSpriteImageState,
+  MutableSpriteValueInterpolation,
 } from '../internalTypes';
 import { clampOpacity } from '../utils/math';
 
@@ -136,12 +137,10 @@ export const evaluateDistanceInterpolation = (
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-type DistanceInterpolationStateKey =
-  | 'offsetMetersInterpolationState'
-  | 'opacityInterpolationState';
-
 interface DistanceInterpolationChannelDescriptor {
-  readonly stateKey: DistanceInterpolationStateKey;
+  readonly resolveInterpolation: (
+    image: InternalSpriteImageState
+  ) => MutableSpriteValueInterpolation<number, DistanceInterpolationState>;
   readonly normalize?: (value: number) => number;
   readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
   readonly applyFinalValue?: (
@@ -155,7 +154,7 @@ const DISTANCE_INTERPOLATION_CHANNELS: Record<
   DistanceInterpolationChannelDescriptor
 > = {
   offsetMeters: {
-    stateKey: 'offsetMetersInterpolationState',
+    resolveInterpolation: (image) => image.offset.offsetMeters.interpolation,
     applyValue: (image: InternalSpriteImageState, value: number) => {
       image.offset.offsetMeters.current = value;
     },
@@ -166,7 +165,7 @@ const DISTANCE_INTERPOLATION_CHANNELS: Record<
     },
   },
   opacity: {
-    stateKey: 'opacityInterpolationState',
+    resolveInterpolation: (image) => image.opacity.interpolation,
     normalize: clampOpacity,
     applyValue: (image: InternalSpriteImageState, value: number) => {
       image.opacity.current = value;
@@ -204,7 +203,10 @@ export const collectDistanceInterpolationWorkItems = (
   const includeOffsetMeters = options?.includeOffsetMeters ?? true;
   const includeOpacity = options?.includeOpacity ?? true;
 
-  const offsetMetersState = image.offsetMetersInterpolationState;
+  const offsetMetersState =
+    DISTANCE_INTERPOLATION_CHANNELS.offsetMeters.resolveInterpolation(
+      image
+    ).state;
   if (includeOffsetMeters && offsetMetersState) {
     workItems.push({
       descriptor: DISTANCE_INTERPOLATION_CHANNELS.offsetMeters,
@@ -213,7 +215,8 @@ export const collectDistanceInterpolationWorkItems = (
     });
   }
 
-  const opacityState = image.opacityInterpolationState;
+  const opacityState =
+    DISTANCE_INTERPOLATION_CHANNELS.opacity.resolveInterpolation(image).state;
   if (includeOpacity && opacityState) {
     workItems.push({
       descriptor: DISTANCE_INTERPOLATION_CHANNELS.opacity,
@@ -228,11 +231,7 @@ const updateDistanceInterpolationState = (
   descriptor: DistanceInterpolationChannelDescriptor,
   nextState: DistanceInterpolationState | null
 ): void => {
-  if (descriptor.stateKey === 'offsetMetersInterpolationState') {
-    image.offsetMetersInterpolationState = nextState;
-  } else {
-    image.opacityInterpolationState = nextState;
-  }
+  descriptor.resolveInterpolation(image).state = nextState;
 };
 
 export const applyDistanceInterpolationEvaluations = (

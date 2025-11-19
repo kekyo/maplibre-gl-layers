@@ -10,6 +10,7 @@ import type {
   DegreeInterpolationState,
   DegreeInterpolationEvaluationResult,
   InternalSpriteImageState,
+  MutableSpriteValueInterpolation,
 } from '../internalTypes';
 import { normalizeAngleDeg } from '../utils/math';
 
@@ -230,12 +231,10 @@ export const evaluateDegreeInterpolation = (
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-type DegreeInterpolationStateKey =
-  | 'rotationInterpolationState'
-  | 'offsetDegInterpolationState';
-
 interface DegreeInterpolationChannelDescriptor {
-  readonly stateKey: DegreeInterpolationStateKey;
+  readonly resolveInterpolation: (
+    image: InternalSpriteImageState
+  ) => MutableSpriteValueInterpolation<number, DegreeInterpolationState>;
   readonly normalize?: (value: number) => number;
   readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
   readonly applyFinalValue?: (
@@ -249,14 +248,14 @@ const DEGREE_INTERPOLATION_CHANNELS: Record<
   DegreeInterpolationChannelDescriptor
 > = {
   rotation: {
-    stateKey: 'rotationInterpolationState',
+    resolveInterpolation: (image) => image.rotateDeg.interpolation,
     normalize: normalizeAngleDeg,
     applyValue: (image, value) => {
       image.displayedRotateDeg = value;
     },
   },
   offsetDeg: {
-    stateKey: 'offsetDegInterpolationState',
+    resolveInterpolation: (image) => image.offset.offsetDeg.interpolation,
     applyValue: (image, value) => {
       image.offset.offsetDeg.current = value;
     },
@@ -273,11 +272,7 @@ const updateDegreeInterpolationState = (
   descriptor: DegreeInterpolationChannelDescriptor,
   nextState: DegreeInterpolationState | null
 ): void => {
-  if (descriptor.stateKey === 'rotationInterpolationState') {
-    image.rotationInterpolationState = nextState;
-  } else {
-    image.offsetDegInterpolationState = nextState;
-  }
+  descriptor.resolveInterpolation(image).state = nextState;
 };
 
 export interface DegreeInterpolationWorkItem {
@@ -290,7 +285,8 @@ export const collectDegreeInterpolationWorkItems = (
   image: InternalSpriteImageState,
   workItems: DegreeInterpolationWorkItem[]
 ): void => {
-  const rotationState = image.rotationInterpolationState;
+  const rotationState =
+    DEGREE_INTERPOLATION_CHANNELS.rotation.resolveInterpolation(image).state;
   if (rotationState) {
     workItems.push({
       descriptor: DEGREE_INTERPOLATION_CHANNELS.rotation,
@@ -299,7 +295,8 @@ export const collectDegreeInterpolationWorkItems = (
     });
   }
 
-  const offsetState = image.offsetDegInterpolationState;
+  const offsetState =
+    DEGREE_INTERPOLATION_CHANNELS.offsetDeg.resolveInterpolation(image).state;
   if (offsetState) {
     workItems.push({
       descriptor: DEGREE_INTERPOLATION_CHANNELS.offsetDeg,

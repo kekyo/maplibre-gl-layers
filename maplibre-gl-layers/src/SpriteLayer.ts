@@ -172,6 +172,8 @@ import { renderTextGlyphBitmap } from './gl/text';
 //   last origin position (H) and update it only after exceeding G so rotation changes occur at meaningful distances.
 // * rotateDeg applies an additional rotation on top of F using the anchor-adjusted position (E) as the pivot.
 
+const OPACITY_VISIBILITY_EPSILON = 1e-4;
+
 // Baseline computation values:
 // SpriteScalingOptions parameters are used here.
 
@@ -197,8 +199,9 @@ const reapplySpriteOpacityMultiplier = <T>(
   const multiplier = sprite.opacityMultiplier || 1;
   sprite.images.forEach((orderMap) => {
     orderMap.forEach((image) => {
-      const baseOpacity = image.lastCommandOpacityBase;
-      const interpolationOption = image.opacityInterpolationOptions ?? null;
+      const baseOpacity =
+        image.opacity.interpolation.baseValue ?? image.opacity.current;
+      const interpolationOption = image.opacity.interpolation.options ?? null;
       applyOpacityUpdate(image, baseOpacity, interpolationOption, multiplier);
     });
   });
@@ -344,12 +347,22 @@ const createInterpolatedOffsetState = (
       from: undefined,
       to: undefined,
       invalidated,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: base.offsetMeters,
+      },
     },
     offsetDeg: {
       current: base.offsetDeg,
       from: undefined,
       to: undefined,
       invalidated,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: base.offsetDeg,
+      },
     },
   };
 };
@@ -461,7 +474,15 @@ export const createImageStateFromInit = (
       from: undefined,
       to: undefined,
       invalidated,
+      interpolation: {
+        state: null,
+        options: null,
+        targetValue: initialOpacity,
+        baseValue: initialOpacity,
+        lastCommandValue: initialOpacity,
+      },
     },
+    lodOpacity: 1,
     scale: imageInit.scale ?? 1.0,
     anchor: cloneAnchor(imageInit.anchor),
     border: resolveSpriteImageLineAttribute(imageInit.border),
@@ -474,6 +495,11 @@ export const createImageStateFromInit = (
       from: undefined,
       to: undefined,
       invalidated,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: initialRotateDeg,
+      },
     },
     rotationCommandDeg: initialRotateDeg,
     displayedRotateDeg: initialRotateDeg,
@@ -485,32 +511,19 @@ export const createImageStateFromInit = (
     originLocation,
     originReferenceKey,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
-    rotationInterpolationState: null,
-    rotationInterpolationOptions: null,
-    offsetDegInterpolationState: null,
-    offsetMetersInterpolationState: null,
-    opacityInterpolationState: null,
-    opacityInterpolationOptions: null,
-    opacityTargetValue: initialOpacity,
-    lodLastCommandOpacity: initialOpacity,
-    lastCommandOpacityBase: initialOpacity,
-    lastCommandRotateDeg: initialRotateDeg,
-    lastCommandOffsetDeg: initialOffset.offsetDeg,
-    lastCommandOffsetMeters: initialOffset.offsetMeters,
-    lastCommandOpacity: initialOpacity,
     interpolationDirty: false,
   };
 
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
   const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
   if (rotateInitOption) {
-    state.rotationInterpolationOptions =
+    state.rotateDeg.interpolation.options =
       cloneInterpolationOptions(rotateInitOption);
   }
 
   const opacityInitOption = imageInit.interpolation?.opacity ?? null;
   if (opacityInitOption) {
-    state.opacityInterpolationOptions =
+    state.opacity.interpolation.options =
       cloneInterpolationOptions(opacityInitOption);
   }
 
@@ -927,47 +940,62 @@ export const createSpriteLayer = <T = any>(
     sprite: InternalSpriteCurrentState<TTag>,
     image: InternalSpriteImageState
   ): void => {
-    const baseRotation = image.resolvedBaseRotateDeg ?? 0;
-    const displayedRotation = Number.isFinite(image.displayedRotateDeg)
-      ? image.displayedRotateDeg
-      : baseRotation + image.rotationCommandDeg;
-    const manualRotation = normalizeAngleDeg(displayedRotation - baseRotation);
+    image.rotateDeg.interpolation.state = null;
+    image.offset.offsetDeg.interpolation.state = null;
+    image.offset.offsetMeters.interpolation.state = null;
+    image.opacity.interpolation.state = null;
 
-    image.rotationInterpolationState = null;
-    image.offsetDegInterpolationState = null;
-    image.offsetMetersInterpolationState = null;
-    image.opacityInterpolationState = null;
-
-    image.rotateDeg.current = manualRotation;
     image.rotateDeg.from = undefined;
     image.rotateDeg.to = undefined;
     image.rotateDeg.invalidated = true;
+    image.rotateDeg.interpolation.lastCommandValue = image.rotateDeg.current;
 
-    image.rotationCommandDeg = manualRotation;
-    image.displayedRotateDeg = displayedRotation;
-    image.lastCommandRotateDeg = normalizeAngleDeg(displayedRotation);
+    //image.displayedRotateDeg =
+    //  image.resolvedBaseRotateDeg + image.rotationCommandDeg;
+    //image.lastCommandRotateDeg = image.rotationCommandDeg;
+    //image.lastCommandRotateDeg = image.resolvedBaseRotateDeg;
+
+    //const baseRotation = image.resolvedBaseRotateDeg ?? 0;
+    //const displayedRotation = Number.isFinite(image.displayedRotateDeg)
+    //  ? image.displayedRotateDeg
+    //  : baseRotation + image.rotationCommandDeg;
+    //const manualRotation = normalizeAngleDeg(displayedRotation - baseRotation);
+
+    //image.rotateDeg.from = undefined;
+    //image.rotateDeg.to = undefined;
+    //image.rotateDeg.invalidated = undefined;
+    //image.rotationCommandDeg = image.rotateDeg.current;
+    //image.resolvedBaseRotateDeg = normalizeAngleDeg(
+    //  displayedRotation - manualRotation
+    //);
+    //image.displayedRotateDeg =
+    //  image.resolvedBaseRotateDeg + image.rotationCommandDeg;
+    //image.lastCommandRotateDeg = image.rotationCommandDeg;
 
     image.offset.offsetDeg.from = undefined;
     image.offset.offsetDeg.to = undefined;
     image.offset.offsetDeg.invalidated = true;
-    image.lastCommandOffsetDeg = image.offset.offsetDeg.current;
+    image.offset.offsetDeg.interpolation.lastCommandValue =
+      image.offset.offsetDeg.current;
 
     image.offset.offsetMeters.from = undefined;
     image.offset.offsetMeters.to = undefined;
     image.offset.offsetMeters.invalidated = true;
-    image.lastCommandOffsetMeters = image.offset.offsetMeters.current;
+    image.offset.offsetMeters.interpolation.lastCommandValue =
+      image.offset.offsetMeters.current;
 
     image.opacity.from = undefined;
     image.opacity.to = undefined;
     image.opacity.invalidated = true;
-    image.opacityTargetValue = image.opacity.current;
-    image.lastCommandOpacity = image.opacity.current;
-    image.lodLastCommandOpacity = image.opacity.current;
+    image.opacity.interpolation.targetValue = image.opacity.current;
+    image.opacity.interpolation.lastCommandValue = image.opacity.current;
     const spriteOpacityMultiplier = sprite.opacityMultiplier || 1;
-    image.lastCommandOpacityBase =
-      spriteOpacityMultiplier > 0
-        ? clampOpacity(image.opacity.current / spriteOpacityMultiplier)
-        : 0;
+    const lodMultiplier = image.lodOpacity || 1;
+    if (spriteOpacityMultiplier > 0 && lodMultiplier > 0) {
+      image.opacity.interpolation.baseValue = clampOpacity(
+        image.opacity.current / (spriteOpacityMultiplier * lodMultiplier)
+      );
+    }
 
     updateImageInterpolationDirtyState(sprite, image);
   };
@@ -989,6 +1017,10 @@ export const createSpriteLayer = <T = any>(
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
         invalidateImageInterpolationState(sprite, image);
+        // Preserve the prior displayed rotation so manual angles
+        // aren't overwritten during visibility transitions.
+        image.displayedRotateDeg =
+          image.resolvedBaseRotateDeg + image.rotationCommandDeg;
       });
     });
   };
@@ -1433,9 +1465,12 @@ export const createSpriteLayer = <T = any>(
       sprite.images.forEach((orderMap) => {
         // Inspect each ordered image entry to update rotation/offset animations.
         orderMap.forEach((image) => {
+          const baseOpacity =
+            image.opacity.interpolation.baseValue ??
+            image.opacity.interpolation.lastCommandValue;
           const shouldForceVisibilityCheck =
             sprite.visibilityDistanceMeters !== undefined &&
-            image.lastCommandOpacity > 0;
+            (baseOpacity ?? 0) > OPACITY_VISIBILITY_EPSILON;
           // Fully transparent images contribute nothing and can be ignored unless pseudo LOD controls their visibility.
           if (image.opacity.current <= 0 && !shouldForceVisibilityCheck) {
             image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
@@ -2836,7 +2871,7 @@ export const createSpriteLayer = <T = any>(
     const interpolationOptions = imageUpdate.interpolation;
     const opacityInterpolationOption = interpolationOptions?.opacity;
     if (opacityInterpolationOption !== undefined) {
-      state.opacityInterpolationOptions =
+      state.opacity.interpolation.options =
         opacityInterpolationOption === null
           ? null
           : cloneInterpolationOptions(opacityInterpolationOption);
@@ -2845,7 +2880,7 @@ export const createSpriteLayer = <T = any>(
       interpolationAllowed && !state.opacity.invalidated;
     const resolvedOpacityInterpolationOption = allowOpacityInterpolation
       ? opacityInterpolationOption === undefined
-        ? (state.opacityInterpolationOptions ?? null)
+        ? (state.opacity.interpolation.options ?? null)
         : opacityInterpolationOption
       : null;
     if (imageUpdate.opacity !== undefined) {
@@ -2856,8 +2891,6 @@ export const createSpriteLayer = <T = any>(
         resolvedOpacityInterpolationOption,
         sprite.opacityMultiplier
       );
-      state.opacityTargetValue = state.lastCommandOpacity;
-      state.lodLastCommandOpacity = state.lastCommandOpacity;
       if (mapCurrentlyVisible && state.opacity.invalidated) {
         state.opacity.invalidated = false;
       }
@@ -2935,11 +2968,11 @@ export const createSpriteLayer = <T = any>(
     if (rotateInterpolationOption !== undefined) {
       // Caller supplied new rotation interpolation preferences.
       if (rotateInterpolationOption === null) {
-        state.rotationInterpolationOptions = null;
+        state.rotateDeg.interpolation.options = null;
         rotationOverride = null;
       } else {
         const cloned = cloneInterpolationOptions(rotateInterpolationOption);
-        state.rotationInterpolationOptions = cloned;
+        state.rotateDeg.interpolation.options = cloned;
         rotationOverride = cloned;
       }
       hasRotationOverride = true;
@@ -3181,8 +3214,9 @@ export const createSpriteLayer = <T = any>(
             orderMap.forEach((image) => {
               if (
                 !(
-                  Number.isFinite(image.lastCommandOpacity) &&
-                  image.lastCommandOpacity > 0
+                  Number.isFinite(
+                    image.opacity.interpolation.lastCommandValue
+                  ) && image.opacity.interpolation.lastCommandValue > 0
                 )
               ) {
                 return;
@@ -3192,8 +3226,8 @@ export const createSpriteLayer = <T = any>(
               }
               applyOpacityUpdate(
                 image,
-                image.lastCommandOpacityBase,
-                image.opacityInterpolationOptions,
+                image.opacity.interpolation.baseValue ?? image.opacity.current,
+                image.opacity.interpolation.options,
                 sprite.opacityMultiplier
               );
             });

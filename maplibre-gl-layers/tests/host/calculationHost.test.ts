@@ -45,6 +45,8 @@ import type {
   MutableSpriteImageInterpolatedOffset,
   MutableSpriteInterpolatedValues,
   ResolvedSpriteImageLineAttribute,
+  DegreeInterpolationState,
+  DistanceInterpolationState,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -208,40 +210,106 @@ const resolveMutableOffset = (
   offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset | undefined
 ): MutableSpriteImageInterpolatedOffset => {
   if (isMutableOffset(offset)) {
-    return offset;
+    return {
+      offsetMeters: cloneDistanceInterpolatedValues(
+        offset.offsetMeters as MutableSpriteInterpolatedValues<
+          number,
+          DistanceInterpolationState
+        >
+      ),
+      offsetDeg: cloneDegreeInterpolatedValues(
+        offset.offsetDeg as MutableSpriteInterpolatedValues<
+          number,
+          DegreeInterpolationState
+        >
+      ),
+    };
   }
   const base: SpriteImageOffset = offset ?? DEFAULT_OFFSET;
   return {
-    offsetMeters: {
-      current: base.offsetMeters,
-      from: undefined,
-      to: undefined,
+    offsetMeters: cloneDistanceInterpolatedValues(undefined, base.offsetMeters),
+    offsetDeg: cloneDegreeInterpolatedValues(undefined, base.offsetDeg),
+  };
+};
+
+const cloneDistanceInterpolatedValues = (
+  value?:
+    | MutableSpriteInterpolatedValues<number, DistanceInterpolationState>
+    | undefined,
+  fallback = 0
+): MutableSpriteInterpolatedValues<number, DistanceInterpolationState> => {
+  const current = value?.current ?? fallback;
+  return {
+    current,
+    from: value?.from,
+    to: value?.to,
+    invalidated: value?.invalidated ?? false,
+    interpolation: {
+      state: value?.interpolation?.state ?? null,
+      options: value?.interpolation?.options ?? null,
+      lastCommandValue: value?.interpolation?.lastCommandValue ?? current,
     },
-    offsetDeg: {
-      current: base.offsetDeg,
-      from: undefined,
-      to: undefined,
+  };
+};
+
+const cloneDegreeInterpolatedValues = (
+  value?:
+    | MutableSpriteInterpolatedValues<number, DegreeInterpolationState>
+    | undefined,
+  fallback = 0
+): MutableSpriteInterpolatedValues<number, DegreeInterpolationState> => {
+  const current = value?.current ?? fallback;
+  return {
+    current,
+    from: value?.from,
+    to: value?.to,
+    invalidated: value?.invalidated ?? false,
+    interpolation: {
+      state: value?.interpolation?.state ?? null,
+      options: value?.interpolation?.options ?? null,
+      lastCommandValue: value?.interpolation?.lastCommandValue ?? current,
+    },
+  };
+};
+
+const cloneOpacityInterpolatedValues = (
+  value?:
+    | MutableSpriteInterpolatedValues<number, DistanceInterpolationState>
+    | undefined,
+  fallback = 1
+): MutableSpriteInterpolatedValues<number, DistanceInterpolationState> => {
+  const current = value?.current ?? fallback;
+  return {
+    current,
+    from: value?.from,
+    to: value?.to,
+    invalidated: value?.invalidated ?? false,
+    interpolation: {
+      state: value?.interpolation?.state ?? null,
+      options: value?.interpolation?.options ?? null,
+      targetValue: value?.interpolation?.targetValue ?? current,
+      baseValue: value?.interpolation?.baseValue ?? current,
+      lastCommandValue: value?.interpolation?.lastCommandValue ?? current,
     },
   };
 };
 
 const resolveOpacityState = (
-  value?: MutableSpriteInterpolatedValues<number> | number
-): MutableSpriteInterpolatedValues<number> => {
+  value?:
+    | MutableSpriteInterpolatedValues<number, DistanceInterpolationState>
+    | number
+): MutableSpriteInterpolatedValues<number, DistanceInterpolationState> => {
   if (isMutableInterpolatedValues<number>(value)) {
-    const candidate = value;
-    return {
-      current: candidate.current,
-      from: candidate.from,
-      to: candidate.to,
-    };
+    return cloneOpacityInterpolatedValues(
+      value as MutableSpriteInterpolatedValues<
+        number,
+        DistanceInterpolationState
+      >,
+      (value as MutableSpriteInterpolatedValues<number>).current
+    );
   }
   const base = typeof value === 'number' ? value : 1;
-  return {
-    current: base,
-    from: undefined,
-    to: undefined,
-  };
+  return cloneOpacityInterpolatedValues(undefined, base);
 };
 
 type ImageStateOverrides = Partial<
@@ -259,6 +327,19 @@ type ImageStateOverrides = Partial<
     | null
     | undefined;
   borderPixelWidth?: number;
+  lodOpacity?: number;
+  rotationInterpolationState?: DegreeInterpolationState | null;
+  rotationInterpolationOptions?: SpriteInterpolationOptions | null;
+  offsetDegInterpolationState?: DegreeInterpolationState | null;
+  offsetMetersInterpolationState?: DistanceInterpolationState | null;
+  opacityInterpolationState?: DistanceInterpolationState | null;
+  opacityInterpolationOptions?: SpriteInterpolationOptions | null;
+  opacityTargetValue?: number;
+  lastCommandOpacityBase?: number;
+  lastCommandRotateDeg?: number;
+  lastCommandOffsetDeg?: number;
+  lastCommandOffsetMeters?: number;
+  lastCommandOpacity?: number;
 };
 
 const resolveBorder = (
@@ -285,7 +366,12 @@ const createImageState = (
     originLocation !== undefined
       ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
       : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
-  const resolvedOpacity = resolveOpacityState(overrides.opacity);
+  const resolvedOpacity = resolveOpacityState(
+    overrides.opacity as MutableSpriteInterpolatedValues<
+      number,
+      DistanceInterpolationState
+    >
+  );
   const initialOpacity = resolvedOpacity.current;
   const resolvedOffset = resolveMutableOffset(overrides.offset);
   const rotateDegOverride = overrides.rotateDeg;
@@ -296,20 +382,63 @@ const createImageState = (
       : typeof rotateDegOverride === 'number'
         ? rotateDegOverride
         : (overrides.displayedRotateDeg ?? 0));
-  const rotateDeg = isMutableInterpolatedValues<number>(rotateDegOverride)
-    ? {
-        current: rotateDegOverride.current,
-        from: rotateDegOverride.from,
-        to: rotateDegOverride.to,
-      }
-    : typeof rotateDegOverride === 'number'
-      ? { current: rotateDegOverride, from: undefined, to: undefined }
-      : {
-          current: rotationCommandDeg,
-          from: undefined,
-          to: undefined,
-        };
+  const rotateDeg = cloneDegreeInterpolatedValues(
+    isMutableInterpolatedValues<number>(rotateDegOverride)
+      ? (rotateDegOverride as MutableSpriteInterpolatedValues<
+          number,
+          DegreeInterpolationState
+        >)
+      : undefined,
+    typeof rotateDegOverride === 'number'
+      ? rotateDegOverride
+      : rotationCommandDeg
+  );
   const border = resolveBorder(overrides.border);
+
+  if (overrides.rotationInterpolationState !== undefined) {
+    rotateDeg.interpolation.state = overrides.rotationInterpolationState;
+  }
+  if (overrides.rotationInterpolationOptions !== undefined) {
+    rotateDeg.interpolation.options = overrides.rotationInterpolationOptions;
+  }
+  if (overrides.lastCommandRotateDeg !== undefined) {
+    rotateDeg.interpolation.lastCommandValue = overrides.lastCommandRotateDeg;
+  }
+
+  if (overrides.offsetDegInterpolationState !== undefined) {
+    resolvedOffset.offsetDeg.interpolation.state =
+      overrides.offsetDegInterpolationState;
+  }
+  if (overrides.offsetMetersInterpolationState !== undefined) {
+    resolvedOffset.offsetMeters.interpolation.state =
+      overrides.offsetMetersInterpolationState;
+  }
+  if (overrides.lastCommandOffsetDeg !== undefined) {
+    resolvedOffset.offsetDeg.interpolation.lastCommandValue =
+      overrides.lastCommandOffsetDeg;
+  }
+  if (overrides.lastCommandOffsetMeters !== undefined) {
+    resolvedOffset.offsetMeters.interpolation.lastCommandValue =
+      overrides.lastCommandOffsetMeters;
+  }
+
+  if (overrides.opacityInterpolationState !== undefined) {
+    resolvedOpacity.interpolation.state = overrides.opacityInterpolationState;
+  }
+  if (overrides.opacityInterpolationOptions !== undefined) {
+    resolvedOpacity.interpolation.options =
+      overrides.opacityInterpolationOptions;
+  }
+  if (overrides.opacityTargetValue !== undefined) {
+    resolvedOpacity.interpolation.targetValue = overrides.opacityTargetValue;
+  }
+  if (overrides.lastCommandOpacityBase !== undefined) {
+    resolvedOpacity.interpolation.baseValue = overrides.lastCommandOpacityBase;
+  }
+  if (overrides.lastCommandOpacity !== undefined) {
+    resolvedOpacity.interpolation.lastCommandValue =
+      overrides.lastCommandOpacity;
+  }
   return {
     subLayer: overrides.subLayer ?? 0,
     order: overrides.order ?? 0,
@@ -317,6 +446,7 @@ const createImageState = (
     imageHandle: overrides.imageHandle ?? 0,
     mode: overrides.mode ?? 'billboard',
     opacity: resolvedOpacity,
+    lodOpacity: overrides.lodOpacity ?? 1,
     scale: overrides.scale ?? 1,
     anchor: overrides.anchor ?? DEFAULT_ANCHOR,
     border,
@@ -332,23 +462,6 @@ const createImageState = (
     originReferenceKey: overrides.originReferenceKey ?? originReferenceKey,
     originRenderTargetIndex:
       overrides.originRenderTargetIndex ?? SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
-    rotationInterpolationState: overrides.rotationInterpolationState ?? null,
-    rotationInterpolationOptions:
-      overrides.rotationInterpolationOptions ?? null,
-    offsetDegInterpolationState: overrides.offsetDegInterpolationState ?? null,
-    offsetMetersInterpolationState:
-      overrides.offsetMetersInterpolationState ?? null,
-    opacityInterpolationState: overrides.opacityInterpolationState ?? null,
-    opacityInterpolationOptions: overrides.opacityInterpolationOptions ?? null,
-    opacityTargetValue: overrides.opacityTargetValue ?? initialOpacity,
-    lodLastCommandOpacity: overrides.lodLastCommandOpacity ?? initialOpacity,
-    lastCommandRotateDeg: overrides.lastCommandRotateDeg ?? 0,
-    lastCommandOffsetDeg:
-      overrides.lastCommandOffsetDeg ?? resolvedOffset.offsetDeg.current,
-    lastCommandOffsetMeters:
-      overrides.lastCommandOffsetMeters ?? resolvedOffset.offsetMeters.current,
-    lastCommandOpacity: overrides.lastCommandOpacity ?? initialOpacity,
-    lastCommandOpacityBase: overrides.lastCommandOpacityBase ?? initialOpacity,
     interpolationDirty: overrides.interpolationDirty ?? false,
     surfaceShaderInputs: overrides.surfaceShaderInputs,
     hitTestCorners: overrides.hitTestCorners,
@@ -983,7 +1096,7 @@ describe('prepareDrawSpriteImages', () => {
     const prepared = prepareItems(context, items);
 
     __calculationHostTestInternals.applyVisibilityDistanceLod(prepared);
-    expect(image.opacityTargetValue).toBe(0);
+    expect(image.opacity.interpolation.targetValue).toBe(0);
     const params: RenderInterpolationParams<null> = {
       sprites: [sprite],
       timestamp: 0,
@@ -1041,7 +1154,7 @@ describe('prepareDrawSpriteImages', () => {
         prepared
       );
     expect(result.hasActiveInterpolation).toBe(true);
-    expect(image.opacityInterpolationState).not.toBeNull();
+    expect(image.opacity.interpolation.state).not.toBeNull();
   });
 
   it('advances opacity interpolation when processed after preparation', () => {
@@ -1066,7 +1179,7 @@ describe('prepareDrawSpriteImages', () => {
       initialParams,
       []
     );
-    expect(image.opacityInterpolationState?.startTimestamp).toBe(0);
+    expect(image.opacity.interpolation.state?.startTimestamp).toBe(0);
     expect(image.opacity.current).toBeCloseTo(1, 6);
 
     const nextParams: RenderInterpolationParams<null> = {
@@ -1078,7 +1191,7 @@ describe('prepareDrawSpriteImages', () => {
       []
     );
     expect(image.opacity.current).toBeCloseTo(0.5, 6);
-    expect(image.opacityInterpolationState?.startTimestamp).toBe(0);
+    expect(image.opacity.interpolation.state?.startTimestamp).toBe(0);
   });
 
   it('uses billboard shader geometry when enabled', () => {
