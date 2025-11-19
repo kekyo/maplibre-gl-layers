@@ -28,7 +28,7 @@ import type {
   SpriteOriginReference,
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
-  SpriteLocationInterpolationState,
+  SpriteInterpolationState,
 } from '../internalTypes';
 import {
   SURFACE_CORNER_DISPLACEMENT_COUNT,
@@ -425,7 +425,7 @@ const processInterpolationsViaWasm = (
 
 interface SpriteInterpolationWorkItem<TTag> {
   readonly sprite: InternalSpriteCurrentState<TTag>;
-  readonly state: SpriteLocationInterpolationState;
+  readonly state: SpriteInterpolationState<SpriteLocation>;
 }
 
 const applySpriteInterpolationEvaluations = <TTag>(

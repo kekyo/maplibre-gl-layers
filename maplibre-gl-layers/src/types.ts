@@ -325,15 +325,15 @@ export type SpriteInitCollection<TTag> =
 
 /**
  * Interpolated values.
- * @param T - Value type.
+ * @param TValue - Value type.
  */
-export interface SpriteInterpolatedValues<T> {
+export interface SpriteInterpolatedValues<TValue> {
   /** Current time value. */
-  readonly current: T;
+  readonly current: TValue;
   /** Requested value. */
-  readonly from: T | undefined;
+  readonly from: TValue | undefined;
   /** Will be reached value. */
-  readonly to: T | undefined;
+  readonly to: TValue | undefined;
   /** Marks whether the value was invalidated due to visibility changes. */
   readonly invalidated: boolean | undefined;
 }

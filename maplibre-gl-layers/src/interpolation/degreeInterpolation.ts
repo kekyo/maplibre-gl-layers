@@ -7,10 +7,10 @@
 import type { SpriteInterpolationOptions } from '../types';
 import { resolveEasing, type EasingFunction } from './easing';
 import type {
-  DegreeInterpolationState,
   DegreeInterpolationEvaluationResult,
   InternalSpriteImageState,
   MutableSpriteValueInterpolation,
+  SpriteInterpolationState,
 } from '../internalTypes';
 import { normalizeAngleDeg } from '../utils/math';
 
@@ -95,7 +95,7 @@ export interface CreateDegreeInterpolationStateParams {
  * @property {boolean} requiresInterpolation - Indicates whether the caller should animate or snap.
  */
 export interface CreateDegreeInterpolationStateResult {
-  readonly state: DegreeInterpolationState;
+  readonly state: SpriteInterpolationState<number>;
   readonly requiresInterpolation: boolean;
 }
 
@@ -128,7 +128,7 @@ export const createDegreeInterpolationState = (
   const requiresInterpolation =
     options.durationMs > 0 && Math.abs(delta) > NUMERIC_EPSILON;
 
-  const state: DegreeInterpolationState = {
+  const state: SpriteInterpolationState<number> = {
     mode: options.mode,
     durationMs: options.durationMs,
     easing: options.easing,
@@ -153,7 +153,7 @@ export const createDegreeInterpolationState = (
  * @property {number} timestamp - Timestamp in milliseconds used to sample the interpolation curve.
  */
 export interface EvaluateDegreeInterpolationParams {
-  state: DegreeInterpolationState;
+  state: SpriteInterpolationState<number>;
   timestamp: number;
 }
 
@@ -236,7 +236,7 @@ export const evaluateDegreeInterpolation = (
 interface DegreeInterpolationChannelDescriptor {
   readonly resolveInterpolation: (
     image: InternalSpriteImageState
-  ) => MutableSpriteValueInterpolation<number, DegreeInterpolationState>;
+  ) => MutableSpriteValueInterpolation<number>;
   readonly normalize?: (value: number) => number;
   readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
   readonly applyFinalValue?: (
@@ -272,7 +272,7 @@ const DEGREE_INTERPOLATION_CHANNELS: Record<
 const updateDegreeInterpolationState = (
   image: InternalSpriteImageState,
   descriptor: DegreeInterpolationChannelDescriptor,
-  nextState: DegreeInterpolationState | null
+  nextState: SpriteInterpolationState<number> | null
 ): void => {
   descriptor.resolveInterpolation(image).state = nextState;
 };
@@ -280,7 +280,7 @@ const updateDegreeInterpolationState = (
 export interface DegreeInterpolationWorkItem {
   readonly descriptor: DegreeInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
-  readonly state: DegreeInterpolationState;
+  readonly state: SpriteInterpolationState<number>;
 }
 
 export const collectDegreeInterpolationWorkItems = (

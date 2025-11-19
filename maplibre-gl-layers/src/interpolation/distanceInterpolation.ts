@@ -9,9 +9,9 @@ import { resolveEasing, type EasingFunction } from './easing';
 import type {
   DistanceInterpolationEvaluationParams,
   DistanceInterpolationEvaluationResult,
-  DistanceInterpolationState,
   InternalSpriteImageState,
   MutableSpriteValueInterpolation,
+  SpriteInterpolationState,
 } from '../internalTypes';
 import { clampOpacity } from '../utils/math';
 
@@ -47,7 +47,7 @@ export interface CreateDistanceInterpolationStateParams {
 }
 
 export interface CreateDistanceInterpolationStateResult {
-  readonly state: DistanceInterpolationState;
+  readonly state: SpriteInterpolationState<number>;
   readonly requiresInterpolation: boolean;
 }
 
@@ -73,7 +73,7 @@ export const createDistanceInterpolationState = (
   const requiresInterpolation =
     options.durationMs > 0 && Math.abs(delta) > DISTANCE_EPSILON;
 
-  const state: DistanceInterpolationState = {
+  const state: SpriteInterpolationState<number> = {
     mode: options.mode,
     durationMs: options.durationMs,
     easing: options.easing,
@@ -145,7 +145,7 @@ export const evaluateDistanceInterpolation = (
 interface DistanceInterpolationChannelDescriptor {
   readonly resolveInterpolation: (
     image: InternalSpriteImageState
-  ) => MutableSpriteValueInterpolation<number, DistanceInterpolationState>;
+  ) => MutableSpriteValueInterpolation<number>;
   readonly normalize?: (value: number) => number;
   readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
   readonly applyFinalValue?: (
@@ -192,7 +192,7 @@ export type DistanceInterpolationChannelName =
 export interface DistanceInterpolationWorkItem {
   readonly descriptor: DistanceInterpolationChannelDescriptorMap[DistanceInterpolationChannelName];
   readonly image: InternalSpriteImageState;
-  readonly state: DistanceInterpolationState;
+  readonly state: SpriteInterpolationState<number>;
 }
 
 export interface CollectDistanceInterpolationWorkItemOptions {
@@ -234,7 +234,7 @@ export const collectDistanceInterpolationWorkItems = (
 const updateDistanceInterpolationState = (
   image: InternalSpriteImageState,
   descriptor: DistanceInterpolationChannelDescriptor,
-  nextState: DistanceInterpolationState | null
+  nextState: SpriteInterpolationState<number> | null
 ): void => {
   descriptor.resolveInterpolation(image).state = nextState;
 };

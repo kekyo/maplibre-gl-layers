@@ -10,9 +10,9 @@ import type {
   SpriteLocation,
 } from '../types';
 import type {
-  SpriteLocationInterpolationState,
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
+  SpriteInterpolationState,
 } from '../internalTypes';
 
 import { resolveEasing } from './easing';
@@ -107,7 +107,7 @@ export interface CreateInterpolationStateParams {
  * @property requiresInterpolation - Indicates whether lerping is needed or an immediate snap is sufficient.
  */
 export interface CreateInterpolationStateResult {
-  readonly state: SpriteLocationInterpolationState;
+  readonly state: SpriteInterpolationState<SpriteLocation>;
   readonly requiresInterpolation: boolean;
 }
 
@@ -139,7 +139,7 @@ export const createInterpolationState = (
     options.durationMs > 0 &&
     !spriteLocationsEqual(from, pathTarget ?? commandTarget);
 
-  const state: SpriteLocationInterpolationState = {
+  const state: SpriteInterpolationState<SpriteLocation> = {
     mode: options.mode,
     durationMs: options.durationMs,
     easing: resolvedEasing.easing,

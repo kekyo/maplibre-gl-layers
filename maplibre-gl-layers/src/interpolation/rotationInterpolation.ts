@@ -5,7 +5,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type { SpriteInterpolationOptions } from '../types';
-import type { DegreeInterpolationState } from '../internalTypes';
+import type { SpriteInterpolationState } from '../internalTypes';
 import { createDegreeInterpolationState } from './degreeInterpolation';
 import { normalizeAngleDeg } from '../utils/math';
 
@@ -34,7 +34,7 @@ export interface ResolveRotationTargetParams {
  */
 export interface ResolveRotationTargetResult {
   readonly nextAngleDeg: number;
-  readonly interpolationState: DegreeInterpolationState | null;
+  readonly interpolationState: SpriteInterpolationState<number> | null;
 }
 
 /**

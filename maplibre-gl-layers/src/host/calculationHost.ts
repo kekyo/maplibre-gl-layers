@@ -64,7 +64,7 @@ import type {
   ProcessDrawSpriteImagesResult,
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
-  SpriteLocationInterpolationState,
+  SpriteInterpolationState,
 } from '../internalTypes';
 import { SPRITE_ORIGIN_REFERENCE_INDEX_NONE } from '../internalTypes';
 import type {
@@ -1662,7 +1662,7 @@ const defaultInterpolationEvaluationHandlers: ProcessInterpolationsEvaluationHan
 
 interface SpriteInterpolationWorkItem<TTag> {
   readonly sprite: InternalSpriteCurrentState<TTag>;
-  readonly state: SpriteLocationInterpolationState;
+  readonly state: SpriteInterpolationState<SpriteLocation>;
 }
 
 const applySpriteInterpolationEvaluations = <TTag>(

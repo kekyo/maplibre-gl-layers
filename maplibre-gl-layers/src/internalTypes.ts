@@ -218,17 +218,17 @@ export interface SpriteMercatorCoordinate {
  * Mutable counterpart to {@link SpriteInterpolatedValues}, used internally so SpriteLayer
  * can reuse object references while still exposing readonly snapshots publicly.
  */
-export interface MutableSpriteInterpolatedValues<T, TInterpolationState>
-  extends SpriteInterpolatedValues<T> {
-  current: T;
-  from: T | undefined;
-  to: T | undefined;
+export interface MutableSpriteInterpolatedValues<TValue>
+  extends SpriteInterpolatedValues<TValue> {
+  current: TValue;
+  from: TValue | undefined;
+  to: TValue | undefined;
   invalidated: boolean | undefined;
-  interpolation?: MutableSpriteValueInterpolation<T, TInterpolationState>;
+  interpolation: MutableSpriteValueInterpolation<TValue>;
 }
 
-export interface MutableSpriteValueInterpolation<TValue, TInterpolationState> {
-  state: TInterpolationState | null;
+export interface MutableSpriteValueInterpolation<TValue> {
+  state: SpriteInterpolationState<TValue> | null;
   options: Readonly<SpriteInterpolationOptions> | null;
   lastCommandValue: TValue;
   targetValue?: TValue;
@@ -236,35 +236,24 @@ export interface MutableSpriteValueInterpolation<TValue, TInterpolationState> {
 }
 
 export interface MutableSpriteLocationInterpolation
-  extends MutableSpriteValueInterpolation<
-    Readonly<SpriteLocation>,
-    SpriteLocationInterpolationState
-  > {
+  extends MutableSpriteValueInterpolation<Readonly<SpriteLocation>> {
   pendingOptions: Readonly<SpriteInterpolationOptions> | null;
 }
 
-export interface MutableSpriteManagedInterpolatedValues<
-  TValue,
-  TInterpolationState,
-> extends MutableSpriteInterpolatedValues<TValue, TInterpolationState> {
-  interpolation: MutableSpriteValueInterpolation<TValue, TInterpolationState>;
+export interface MutableSpriteManagedInterpolatedValues<TValue>
+  extends MutableSpriteInterpolatedValues<TValue> {
+  interpolation: MutableSpriteValueInterpolation<TValue>;
 }
 
-export interface MutableSpriteInterpolatedNumberValues<TInterpolationState>
-  extends MutableSpriteManagedInterpolatedValues<number, TInterpolationState> {}
-
 export interface MutableSpriteInterpolatedLocationValues
-  extends MutableSpriteInterpolatedValues<
-    Readonly<SpriteLocation>,
-    SpriteLocationInterpolationState
-  > {
+  extends MutableSpriteInterpolatedValues<Readonly<SpriteLocation>> {
   interpolation: MutableSpriteLocationInterpolation;
 }
 
 export interface MutableSpriteImageInterpolatedOffset
   extends SpriteImageInterpolatedOffset {
-  offsetMeters: MutableSpriteInterpolatedNumberValues<DistanceInterpolationState>;
-  offsetDeg: MutableSpriteInterpolatedNumberValues<DegreeInterpolationState>;
+  offsetMeters: MutableSpriteManagedInterpolatedValues<number>;
+  offsetDeg: MutableSpriteManagedInterpolatedValues<number>;
 }
 
 export interface Releasable {
@@ -535,15 +524,8 @@ export interface SpriteInterpolationState<TValue> {
   startTimestamp: number;
 }
 
-export type SpriteLocationInterpolationState = SpriteInterpolationState<
-  Readonly<SpriteLocation>
->;
-
-export type DegreeInterpolationState = SpriteInterpolationState<number>;
-export type DistanceInterpolationState = SpriteInterpolationState<number>;
-
 export interface DistanceInterpolationEvaluationParams {
-  readonly state: DistanceInterpolationState;
+  readonly state: SpriteInterpolationState<number>;
   readonly timestamp: number;
 }
 
@@ -554,7 +536,7 @@ export interface DistanceInterpolationEvaluationResult {
 }
 
 export interface DegreeInterpolationEvaluationParams {
-  readonly state: DegreeInterpolationState;
+  readonly state: SpriteInterpolationState<number>;
   readonly timestamp: number;
 }
 
@@ -565,7 +547,7 @@ export interface DegreeInterpolationEvaluationResult {
 }
 
 export interface SpriteInterpolationEvaluationParams {
-  readonly state: SpriteLocationInterpolationState;
+  readonly state: SpriteInterpolationState<SpriteLocation>;
   readonly timestamp: number;
 }
 
@@ -574,11 +556,6 @@ export interface SpriteInterpolationEvaluationResult {
   readonly completed: boolean;
   readonly effectiveStartTimestamp: number;
 }
-
-/**
- * Alias for the interpolation state used internally by sprites.
- */
-export type InternalSpriteInterpolationState = SpriteLocationInterpolationState;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -703,7 +680,7 @@ export interface InternalSpriteImageState extends SpriteImageState {
   imageId: string;
   imageHandle: number;
   mode: SpriteMode;
-  opacity: MutableSpriteInterpolatedNumberValues<DistanceInterpolationState>;
+  opacity: MutableSpriteInterpolatedValues<number>;
   lodOpacity: number;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
@@ -712,7 +689,7 @@ export interface InternalSpriteImageState extends SpriteImageState {
   leaderLine: ResolvedSpriteImageLineAttribute | undefined;
   leaderLinePixelWidth: number;
   offset: MutableSpriteImageInterpolatedOffset;
-  rotateDeg: MutableSpriteInterpolatedNumberValues<DegreeInterpolationState>;
+  rotateDeg: MutableSpriteInterpolatedValues<number>;
   rotationCommandDeg: number;
   displayedRotateDeg: number;
   autoRotation: boolean;
