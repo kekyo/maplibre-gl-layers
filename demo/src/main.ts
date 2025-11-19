@@ -4122,6 +4122,8 @@ const main = async () => {
         ? generatePseudoLodDistanceMeters()
         : undefined;
       const spriteBorder = resolveSpriteBorderDefinition(id);
+      const rotateInterpolation = createRotateInterpolationOptions();
+      const orbitInterpolation = createOrbitInterpolationOptions();
       return {
         spriteId: id,
         location: {
@@ -4142,14 +4144,7 @@ const main = async () => {
             rotateDeg: primaryPlacement.rotateDeg,
             anchor: primaryPlacement.anchor,
             ...(spriteBorder ?? {}),
-            interpolation: isRotateInterpolationEnabled
-              ? {
-                  rotateDeg: {
-                    mode: rotateInterpolationMode,
-                    durationMs: MOVEMENT_INTERVAL_MS,
-                  },
-                }
-              : undefined,
+            interpolation: rotateInterpolation,
           },
           // Orbiting satellite indicator.
           {
@@ -4170,28 +4165,7 @@ const main = async () => {
                   offset: secondaryOffset,
                 }
               : {}),
-            interpolation:
-              isOrbitDegInterpolationEnabled ||
-              isOrbitMetersInterpolationEnabled
-                ? {
-                    ...(isOrbitDegInterpolationEnabled
-                      ? {
-                          offsetDeg: {
-                            mode: orbitOffsetDegInterpolationMode,
-                            durationMs: MOVEMENT_INTERVAL_MS,
-                          },
-                        }
-                      : {}),
-                    ...(isOrbitMetersInterpolationEnabled
-                      ? {
-                          offsetMeters: {
-                            mode: orbitOffsetMetersInterpolationMode,
-                            durationMs: MOVEMENT_INTERVAL_MS,
-                          },
-                        }
-                      : {}),
-                  }
-                : undefined,
+            interpolation: orbitInterpolation,
           },
         ],
       };
