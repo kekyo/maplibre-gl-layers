@@ -30,12 +30,12 @@ describe('wasm easing presets', () => {
     const wasm = prepareWasmHost();
     const preset = { type: 'ease', mode: 'out', power: 2 } as const;
     const state: DistanceInterpolationState = {
+      mode: 'feedback',
       durationMs: 1000,
       easing: (t) => t,
       easingPreset: preset,
       from: 0,
       to: 10,
-      finalValue: 10,
       startTimestamp: 0,
     };
 
@@ -57,12 +57,12 @@ describe('wasm easing presets', () => {
     const wasm = prepareWasmHost();
     const preset = { type: 'bounce', bounces: 4, decay: 0.8 } as const;
     const state: DistanceInterpolationState = {
+      mode: 'feedback',
       durationMs: 1000,
       easing: (t) => t,
       easingPreset: preset,
       from: 0,
       to: 1,
-      finalValue: 1,
       startTimestamp: 0,
     };
 

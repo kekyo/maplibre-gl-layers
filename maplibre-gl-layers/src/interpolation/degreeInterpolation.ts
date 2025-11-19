@@ -129,12 +129,13 @@ export const createDegreeInterpolationState = (
     options.durationMs > 0 && Math.abs(delta) > NUMERIC_EPSILON;
 
   const state: DegreeInterpolationState = {
+    mode: options.mode,
     durationMs: options.durationMs,
     easing: options.easing,
     easingPreset: options.easingPreset,
     from: currentValue,
-    to: pathTarget,
-    finalValue: effectiveTarget,
+    to: targetValue,
+    pathTarget,
     startTimestamp: -1,
   };
 
@@ -198,6 +199,7 @@ export const evaluateDegreeInterpolation = (
   params: EvaluateDegreeInterpolationParams
 ): EvaluateDegreeInterpolationResult => {
   const { state } = params;
+  const targetValue = state.pathTarget ?? state.to;
   const timestamp = Number.isFinite(params.timestamp)
     ? params.timestamp
     : Date.now();
@@ -207,9 +209,9 @@ export const evaluateDegreeInterpolation = (
     state.startTimestamp >= 0 ? state.startTimestamp : timestamp;
 
   // When duration collapses or no meaningful delta exists, snap to the final value immediately.
-  if (duration === 0 || Math.abs(state.to - state.from) <= NUMERIC_EPSILON) {
+  if (duration === 0 || Math.abs(targetValue - state.from) <= NUMERIC_EPSILON) {
     return {
-      value: state.finalValue,
+      value: state.to,
       completed: true,
       effectiveStartTimestamp: effectiveStart,
     };
@@ -218,12 +220,12 @@ export const evaluateDegreeInterpolation = (
   const elapsed = timestamp - effectiveStart;
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
   const eased = clamp01(state.easing(rawProgress));
-  const interpolated = state.from + (state.to - state.from) * eased;
+  const interpolated = state.from + (targetValue - state.from) * eased;
   // rawProgress >= 1 indicates we've reached or passed the end of the animation window.
   const completed = rawProgress >= 1;
 
   return {
-    value: completed ? state.finalValue : interpolated,
+    value: completed ? state.to : interpolated,
     completed,
     effectiveStartTimestamp: effectiveStart,
   };
@@ -333,7 +335,7 @@ export const applyDegreeInterpolationEvaluations = (
     item.descriptor.applyValue(item.image, interpolatedValue);
 
     if (evaluation.completed) {
-      const finalValue = normalize(item.state.finalValue);
+      const finalValue = normalize(item.state.to);
       applyFinalValue(item.image, finalValue);
       updateDegreeInterpolationState(item.image, item.descriptor, null);
     } else {

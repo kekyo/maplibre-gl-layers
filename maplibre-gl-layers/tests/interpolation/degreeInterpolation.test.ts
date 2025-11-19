@@ -21,7 +21,7 @@ describe('createDegreeInterpolationState', () => {
     expect(requiresInterpolation).toBe(true);
     expect(state.from).toBe(0);
     expect(state.to).toBe(90);
-    expect(state.finalValue).toBe(90);
+    expect(state.pathTarget).toBeUndefined();
   });
 
   it('uses shortest path for large positive delta', () => {
@@ -32,8 +32,8 @@ describe('createDegreeInterpolationState', () => {
     });
 
     expect(requiresInterpolation).toBe(true);
-    expect(state.to).toBeCloseTo(-90);
-    expect(state.finalValue).toBe(270);
+    expect(state.pathTarget).toBeCloseTo(-90);
+    expect(state.to).toBe(270);
   });
 
   it('keeps forward rotation when delta is small positive even if exceeding 360', () => {
@@ -45,8 +45,8 @@ describe('createDegreeInterpolationState', () => {
 
     expect(requiresInterpolation).toBe(true);
     expect(state.from).toBe(359);
+    expect(state.pathTarget).toBeUndefined();
     expect(state.to).toBeCloseTo(375);
-    expect(state.finalValue).toBe(375);
   });
 });
 

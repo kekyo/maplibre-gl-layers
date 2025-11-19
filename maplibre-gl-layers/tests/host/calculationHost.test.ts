@@ -48,7 +48,7 @@ import type {
   ResolvedSpriteImageLineAttribute,
   DegreeInterpolationState,
   DistanceInterpolationState,
-  SpriteInterpolationState,
+  SpriteLocationInterpolationState,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -88,7 +88,7 @@ type SpriteStateOverrides = Partial<
   Omit<InternalSpriteCurrentState<null>, 'location'>
 > & {
   location?: Partial<MutableSpriteInterpolatedLocationValues>;
-  interpolationState?: SpriteInterpolationState | null;
+  interpolationState?: SpriteLocationInterpolationState | null;
   pendingInterpolationOptions?: SpriteInterpolationOptions | null;
   lastCommandLocation?: SpriteLocation;
 };

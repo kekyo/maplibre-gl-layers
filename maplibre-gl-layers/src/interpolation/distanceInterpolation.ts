@@ -74,12 +74,13 @@ export const createDistanceInterpolationState = (
     options.durationMs > 0 && Math.abs(delta) > DISTANCE_EPSILON;
 
   const state: DistanceInterpolationState = {
+    mode: options.mode,
     durationMs: options.durationMs,
     easing: options.easing,
     easingPreset: options.easingPreset,
     from: currentValue,
-    to: currentValue + delta,
-    finalValue: effectiveTarget,
+    to: targetValue,
+    pathTarget: currentValue + delta,
     startTimestamp: -1,
   };
 
@@ -106,6 +107,7 @@ export const evaluateDistanceInterpolation = (
   params: DistanceInterpolationEvaluationParams
 ): DistanceInterpolationEvaluationResult => {
   const { state } = params;
+  const targetValue = state.pathTarget ?? state.to;
   const timestamp = Number.isFinite(params.timestamp)
     ? params.timestamp
     : Date.now();
@@ -114,9 +116,12 @@ export const evaluateDistanceInterpolation = (
   const effectiveStart =
     state.startTimestamp >= 0 ? state.startTimestamp : timestamp;
 
-  if (duration === 0 || Math.abs(state.to - state.from) <= DISTANCE_EPSILON) {
+  if (
+    duration === 0 ||
+    Math.abs(targetValue - state.from) <= DISTANCE_EPSILON
+  ) {
     return {
-      value: state.finalValue,
+      value: state.to,
       completed: true,
       effectiveStartTimestamp: effectiveStart,
     };
@@ -125,11 +130,11 @@ export const evaluateDistanceInterpolation = (
   const elapsed = timestamp - effectiveStart;
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
   const eased = clamp01(state.easing(rawProgress));
-  const interpolated = state.from + (state.to - state.from) * eased;
+  const interpolated = state.from + (targetValue - state.from) * eased;
   const completed = rawProgress >= 1;
 
   return {
-    value: completed ? state.finalValue : interpolated,
+    value: completed ? state.to : interpolated,
     completed,
     effectiveStartTimestamp: effectiveStart,
   };
@@ -261,7 +266,7 @@ export const applyDistanceInterpolationEvaluations = (
     item.descriptor.applyValue(item.image, interpolatedValue);
 
     if (evaluation.completed) {
-      const finalValue = normalize(item.state.finalValue);
+      const finalValue = normalize(item.state.to);
       applyFinalValue(item.image, finalValue);
       updateDistanceInterpolationState(item.image, item.descriptor, null);
     } else {

@@ -64,7 +64,7 @@ import type {
   ProcessDrawSpriteImagesResult,
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
-  SpriteInterpolationState,
+  SpriteLocationInterpolationState,
 } from '../internalTypes';
 import { SPRITE_ORIGIN_REFERENCE_INDEX_NONE } from '../internalTypes';
 import type {
@@ -1662,7 +1662,7 @@ const defaultInterpolationEvaluationHandlers: ProcessInterpolationsEvaluationHan
 
 interface SpriteInterpolationWorkItem<TTag> {
   readonly sprite: InternalSpriteCurrentState<TTag>;
-  readonly state: SpriteInterpolationState;
+  readonly state: SpriteLocationInterpolationState;
 }
 
 const applySpriteInterpolationEvaluations = <TTag>(
@@ -1710,7 +1710,7 @@ const ensureOpacityInterpolationTarget = (
   );
   const interpolationState = image.opacity.interpolation.state;
   const currentStateTarget = interpolationState
-    ? clampOpacity(interpolationState.finalValue)
+    ? clampOpacity(interpolationState.pathTarget ?? interpolationState.to)
     : image.opacity.current;
   if (interpolationState) {
     if (Math.abs(currentStateTarget - target) <= OPACITY_TARGET_EPSILON) {

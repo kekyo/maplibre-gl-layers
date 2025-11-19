@@ -73,7 +73,7 @@ const stepDegreeInterpolationState = (
   applyValue(interpolatedValue);
 
   if (evaluation.completed) {
-    const finalValue = normalizeValue(interpolationState.finalValue);
+    const finalValue = normalizeValue(interpolationState.to);
     applyFinalValue(finalValue);
     return { state: null, active: false };
   }
@@ -235,7 +235,7 @@ const stepDistanceInterpolationState = (
   applyValue(interpolatedValue);
 
   if (evaluation.completed) {
-    const finalValue = normalizeValue(interpolationState.finalValue);
+    const finalValue = normalizeValue(interpolationState.to);
     applyFinalValue(finalValue);
     return { state: null, active: false };
   }

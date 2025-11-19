@@ -10,7 +10,7 @@ import type {
   SpriteLocation,
 } from '../types';
 import type {
-  SpriteInterpolationState,
+  SpriteLocationInterpolationState,
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
 } from '../internalTypes';
@@ -107,7 +107,7 @@ export interface CreateInterpolationStateParams {
  * @property requiresInterpolation - Indicates whether lerping is needed or an immediate snap is sufficient.
  */
 export interface CreateInterpolationStateResult {
-  readonly state: SpriteInterpolationState;
+  readonly state: SpriteLocationInterpolationState;
   readonly requiresInterpolation: boolean;
 }
 
@@ -125,26 +125,32 @@ export const createInterpolationState = (
   const from = cloneSpriteLocation(currentLocation);
   const resolvedEasing = resolveEasing(options.easing);
 
-  let to: SpriteLocation;
+  const commandTarget = cloneSpriteLocation(nextCommandLocation);
+  let pathTarget: SpriteLocation | undefined;
   // When feedforward is requested we extrapolate beyond the next command to smooth remote updates.
   if (options.mode === 'feedforward') {
-    to = computeFeedforwardTarget(lastCommandLocation, nextCommandLocation);
-  } else {
-    // Otherwise we perform feedback interpolation by targeting the commanded location exactly.
-    to = cloneSpriteLocation(nextCommandLocation);
+    pathTarget = computeFeedforwardTarget(
+      lastCommandLocation,
+      nextCommandLocation
+    );
   }
 
   const requiresInterpolation =
-    options.durationMs > 0 && !spriteLocationsEqual(from, to);
+    options.durationMs > 0 &&
+    !spriteLocationsEqual(from, pathTarget ?? commandTarget);
 
-  const state: SpriteInterpolationState = {
+  const state: SpriteLocationInterpolationState = {
     mode: options.mode,
     durationMs: options.durationMs,
     easing: resolvedEasing.easing,
     easingPreset: resolvedEasing.preset,
     startTimestamp: -1,
     from,
-    to,
+    to: commandTarget,
+    pathTarget:
+      pathTarget && !spriteLocationsEqual(pathTarget, commandTarget)
+        ? pathTarget
+        : undefined,
   };
 
   return { state, requiresInterpolation };
@@ -174,7 +180,9 @@ export const evaluateInterpolation = (
     state.startTimestamp >= 0 ? state.startTimestamp : timestamp;
 
   // Zero-duration animations snap to the target immediately, avoiding unnecessary easing work.
-  if (duration === 0) {
+  const target = state.pathTarget ?? state.to;
+
+  if (duration === 0 || spriteLocationsEqual(state.from, target)) {
     return {
       location: cloneSpriteLocation(state.to),
       completed: true,
@@ -186,7 +194,7 @@ export const evaluateInterpolation = (
   // Guard against non-positive durations to prevent division by zero, treating them as instantly complete.
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
   const eased = easingFn(rawProgress);
-  const location = lerpSpriteLocation(state.from, state.to, eased);
+  const location = lerpSpriteLocation(state.from, target, eased);
   const completed = rawProgress >= 1;
 
   return {

@@ -238,7 +238,7 @@ export interface MutableSpriteValueInterpolation<TValue, TInterpolationState> {
 export interface MutableSpriteLocationInterpolation
   extends MutableSpriteValueInterpolation<
     Readonly<SpriteLocation>,
-    SpriteInterpolationState
+    SpriteLocationInterpolationState
   > {
   pendingOptions: Readonly<SpriteInterpolationOptions> | null;
 }
@@ -256,7 +256,7 @@ export interface MutableSpriteInterpolatedNumberValues<TInterpolationState>
 export interface MutableSpriteInterpolatedLocationValues
   extends MutableSpriteInterpolatedValues<
     Readonly<SpriteLocation>,
-    SpriteInterpolationState
+    SpriteLocationInterpolationState
   > {
   interpolation: MutableSpriteLocationInterpolation;
 }
@@ -524,44 +524,23 @@ export interface SurfaceShaderInputs {
  * @property from - Origin sprite location cloned from the current render state.
  * @property to - Destination sprite location being interpolated towards.
  */
-export interface SpriteInterpolationState {
+export interface SpriteInterpolationState<TValue> {
   readonly mode: SpriteInterpolationMode;
   readonly durationMs: number;
   readonly easing: EasingFunction;
   readonly easingPreset: SpriteEasing;
-  readonly from: SpriteLocation;
-  readonly to: SpriteLocation;
+  readonly from: TValue;
+  readonly to: TValue;
+  readonly pathTarget?: TValue;
   startTimestamp: number;
 }
 
-/**
- * Runtime state tracked for numeric interpolations.
- * @property {number} durationMs - Total duration of the interpolation in milliseconds.
- * @property {EasingFunction} easing - Easing function applied to progress samples.
- * @property {number} from - Start value used for interpolation.
- * @property {number} to - Adjusted target along the shortest rotation path.
- * @property {number} finalValue - Caller-requested final value (used once interpolation completes).
- * @property {number} startTimestamp - Timestamp when interpolation began, `-1` until evaluation starts.
- */
-export interface DegreeInterpolationState {
-  readonly durationMs: number;
-  readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasing;
-  readonly from: number;
-  readonly to: number;
-  readonly finalValue: number;
-  startTimestamp: number;
-}
+export type SpriteLocationInterpolationState = SpriteInterpolationState<
+  Readonly<SpriteLocation>
+>;
 
-export interface DistanceInterpolationState {
-  readonly durationMs: number;
-  readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasing;
-  readonly from: number;
-  readonly to: number;
-  readonly finalValue: number;
-  startTimestamp: number;
-}
+export type DegreeInterpolationState = SpriteInterpolationState<number>;
+export type DistanceInterpolationState = SpriteInterpolationState<number>;
 
 export interface DistanceInterpolationEvaluationParams {
   readonly state: DistanceInterpolationState;
@@ -586,7 +565,7 @@ export interface DegreeInterpolationEvaluationResult {
 }
 
 export interface SpriteInterpolationEvaluationParams {
-  readonly state: SpriteInterpolationState;
+  readonly state: SpriteLocationInterpolationState;
   readonly timestamp: number;
 }
 
@@ -599,7 +578,7 @@ export interface SpriteInterpolationEvaluationResult {
 /**
  * Alias for the interpolation state used internally by sprites.
  */
-export type InternalSpriteInterpolationState = SpriteInterpolationState;
+export type InternalSpriteInterpolationState = SpriteLocationInterpolationState;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 

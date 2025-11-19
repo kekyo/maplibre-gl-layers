@@ -26,7 +26,7 @@ import type {
   RenderTargetEntryLike,
   DistanceInterpolationState,
   DegreeInterpolationState,
-  SpriteInterpolationState,
+  SpriteLocationInterpolationState,
   DistanceInterpolationEvaluationResult,
   DegreeInterpolationEvaluationResult,
   SpriteInterpolationEvaluationResult,
@@ -640,24 +640,24 @@ describe('processInterpolationsViaWasm', () => {
     const wasm = new MockWasmHost();
     const linear = (value: number): number => value;
     const distanceState: DistanceInterpolationState = {
+      mode: 'feedback',
       durationMs: 1000,
       easing: linear,
       easingPreset: { type: 'linear' },
       from: 0,
       to: 10,
-      finalValue: 10,
       startTimestamp: -1,
     };
     const degreeState: DegreeInterpolationState = {
+      mode: 'feedback',
       durationMs: 1000,
       easing: linear,
       easingPreset: { type: 'linear' },
       from: 0,
       to: 90,
-      finalValue: 90,
       startTimestamp: -1,
     };
-    const spriteState: SpriteInterpolationState = {
+    const spriteState: SpriteLocationInterpolationState = {
       mode: 'feedback',
       durationMs: 1000,
       easing: linear,

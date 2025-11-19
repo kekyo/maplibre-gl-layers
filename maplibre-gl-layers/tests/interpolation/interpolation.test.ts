@@ -51,9 +51,12 @@ describe('createInterpolationState', () => {
     expect(state.mode).toBe('feedforward');
     expect(requiresInterpolation).toBe(true);
     expect(spriteLocationsEqual(state.from, { lng: 1.5, lat: 2 })).toBe(true);
-    expect(state.to.lng).toBeCloseTo(3);
-    expect(state.to.lat).toBeCloseTo(5);
-    expect(state.to.z).toBeCloseTo(9);
+    expect(state.pathTarget?.lng).toBeCloseTo(3);
+    expect(state.pathTarget?.lat).toBeCloseTo(5);
+    expect(state.pathTarget?.z).toBeCloseTo(9);
+    expect(state.to.lng).toBeCloseTo(next.lng);
+    expect(state.to.lat).toBeCloseTo(next.lat);
+    expect(state.to.z).toBeCloseTo(next.z);
   });
 
   it('falls back to next location if feedforward lacks history', () => {
@@ -140,10 +143,11 @@ describe('evaluateInterpolation', () => {
     });
 
     expect(midResult.completed).toBe(false);
+    const target = state.pathTarget ?? state.to;
     expect(
       spriteLocationsEqual(
         midResult.location,
-        lerpSpriteLocation(state.from, state.to, 0.5)
+        lerpSpriteLocation(state.from, target, 0.5)
       )
     ).toBe(true);
 

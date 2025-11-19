@@ -56,9 +56,8 @@ describe('resolveRotationTarget', () => {
     const state = result.interpolationState;
     expect(state).not.toBeNull();
     expect(state?.from).toBeCloseTo(0);
-    // Shortest path should be -90 degrees => to == -90 (normalized via numeric interpolation as 270 relative)
-    expect(state?.to).toBeCloseTo(-90);
-    expect(state?.finalValue).toBeCloseTo(270);
+    expect(state?.pathTarget).toBeCloseTo(-90);
+    expect(state?.to).toBeCloseTo(270);
   });
 
   it('normalizes target angle and reuses shortest path interpolation', () => {
@@ -72,7 +71,7 @@ describe('resolveRotationTarget', () => {
     const state = result.interpolationState;
     expect(state).not.toBeNull();
     expect(state?.from).toBeCloseTo(350);
-    expect(state?.to).toBeCloseTo(370);
-    expect(state?.finalValue).toBeCloseTo(10);
+    expect(state?.pathTarget).toBeCloseTo(370);
+    expect(state?.to).toBeCloseTo(10);
   });
 });

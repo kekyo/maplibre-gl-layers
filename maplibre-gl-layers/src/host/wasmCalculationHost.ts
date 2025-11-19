@@ -28,7 +28,7 @@ import type {
   SpriteOriginReference,
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
-  SpriteInterpolationState,
+  SpriteLocationInterpolationState,
 } from '../internalTypes';
 import {
   SURFACE_CORNER_DISPLACEMENT_COUNT,
@@ -213,8 +213,8 @@ const encodeDistanceInterpolationRequest = (
   }
   buffer[cursor++] = state.durationMs;
   buffer[cursor++] = state.from;
+  buffer[cursor++] = state.pathTarget ?? state.to;
   buffer[cursor++] = state.to;
-  buffer[cursor++] = state.finalValue;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
   buffer[cursor++] = preset.id;
@@ -238,8 +238,8 @@ const encodeDegreeInterpolationRequest = (
   }
   buffer[cursor++] = state.durationMs;
   buffer[cursor++] = state.from;
+  buffer[cursor++] = state.pathTarget ?? state.to;
   buffer[cursor++] = state.to;
-  buffer[cursor++] = state.finalValue;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
   buffer[cursor++] = preset.id;
@@ -425,7 +425,7 @@ const processInterpolationsViaWasm = (
 
 interface SpriteInterpolationWorkItem<TTag> {
   readonly sprite: InternalSpriteCurrentState<TTag>;
-  readonly state: SpriteInterpolationState;
+  readonly state: SpriteLocationInterpolationState;
 }
 
 const applySpriteInterpolationEvaluations = <TTag>(
