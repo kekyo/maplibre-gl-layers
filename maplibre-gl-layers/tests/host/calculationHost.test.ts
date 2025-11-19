@@ -348,6 +348,7 @@ const createImageState = (
     lastCommandOffsetMeters:
       overrides.lastCommandOffsetMeters ?? resolvedOffset.offsetMeters.current,
     lastCommandOpacity: overrides.lastCommandOpacity ?? initialOpacity,
+    lastCommandOpacityBase: overrides.lastCommandOpacityBase ?? initialOpacity,
     interpolationDirty: overrides.interpolationDirty ?? false,
     surfaceShaderInputs: overrides.surfaceShaderInputs,
     hitTestCorners: overrides.hitTestCorners,
@@ -383,6 +384,7 @@ const createSpriteState = (
     handle: overrides.handle ?? 0,
     isEnabled: overrides.isEnabled ?? true,
     visibilityDistanceMeters: overrides.visibilityDistanceMeters,
+    opacityMultiplier: overrides.opacityMultiplier ?? 1,
     location,
     images: layers,
     tag: overrides.tag ?? null,

@@ -714,6 +714,7 @@ export interface InternalSpriteImageState extends SpriteImageState {
   opacityInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
   opacityTargetValue: number;
   lodLastCommandOpacity: number;
+  lastCommandOpacityBase: number;
   lastCommandRotateDeg: number;
   lastCommandOffsetDeg: number;
   lastCommandOffsetMeters: number;
@@ -736,6 +737,7 @@ export interface InternalSpriteCurrentState<TTag> {
   handle: IdHandle;
   isEnabled: boolean;
   visibilityDistanceMeters?: number;
+  opacityMultiplier: number;
   location: MutableSpriteInterpolatedValues<Readonly<SpriteLocation>>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;

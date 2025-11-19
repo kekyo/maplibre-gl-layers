@@ -191,6 +191,19 @@ const updateImageInterpolationDirtyState = <T>(
   }
 };
 
+const reapplySpriteOpacityMultiplier = <T>(
+  sprite: InternalSpriteCurrentState<T>
+): void => {
+  const multiplier = sprite.opacityMultiplier || 1;
+  sprite.images.forEach((orderMap) => {
+    orderMap.forEach((image) => {
+      const baseOpacity = image.lastCommandOpacityBase;
+      const interpolationOption = image.opacityInterpolationOptions ?? null;
+      applyOpacityUpdate(image, baseOpacity, interpolationOption, multiplier);
+    });
+  });
+};
+
 /**
  * Applies auto-rotation to all images within a sprite when movement exceeds the configured threshold.
  * @template T Arbitrary sprite tag type.
@@ -399,6 +412,18 @@ const sanitizeVisibilityDistanceMeters = (
   return value;
 };
 
+const sanitizeOpacityMultiplier = (
+  value: number | null | undefined
+): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 1;
+  }
+  if (value <= 0) {
+    return 0;
+  }
+  return value;
+};
+
 /**
  * Creates internal sprite image state from initialization data and layer bookkeeping fields.
  * @param {SpriteImageDefinitionInit} imageInit - Caller-provided image definition.
@@ -468,6 +493,7 @@ export const createImageStateFromInit = (
     opacityInterpolationOptions: null,
     opacityTargetValue: initialOpacity,
     lodLastCommandOpacity: initialOpacity,
+    lastCommandOpacityBase: initialOpacity,
     lastCommandRotateDeg: initialRotateDeg,
     lastCommandOffsetDeg: initialOffset.offsetDeg,
     lastCommandOffsetMeters: initialOffset.offsetMeters,
@@ -937,6 +963,11 @@ export const createSpriteLayer = <T = any>(
     image.opacityTargetValue = image.opacity.current;
     image.lastCommandOpacity = image.opacity.current;
     image.lodLastCommandOpacity = image.opacity.current;
+    const spriteOpacityMultiplier = sprite.opacityMultiplier || 1;
+    image.lastCommandOpacityBase =
+      spriteOpacityMultiplier > 0
+        ? clampOpacity(image.opacity.current / spriteOpacityMultiplier)
+        : 0;
 
     updateImageInterpolationDirtyState(sprite, image);
   };
@@ -2399,6 +2430,7 @@ export const createSpriteLayer = <T = any>(
       // Sprites default to enabled unless explicitly disabled in the init payload.
       isEnabled: init.isEnabled ?? true,
       visibilityDistanceMeters: spriteVisibilityDistanceMeters ?? undefined,
+      opacityMultiplier: sanitizeOpacityMultiplier(init.opacityMultiplier),
       location: {
         current: currentLocation,
         from: undefined,
@@ -2821,7 +2853,8 @@ export const createSpriteLayer = <T = any>(
       applyOpacityUpdate(
         state,
         imageUpdate.opacity,
-        resolvedOpacityInterpolationOption
+        resolvedOpacityInterpolationOption,
+        sprite.opacityMultiplier
       );
       state.opacityTargetValue = state.lastCommandOpacity;
       state.lodLastCommandOpacity = state.lastCommandOpacity;
@@ -3159,12 +3192,25 @@ export const createSpriteLayer = <T = any>(
               }
               applyOpacityUpdate(
                 image,
-                image.lastCommandOpacity,
-                image.opacityInterpolationOptions
+                image.lastCommandOpacityBase,
+                image.opacityInterpolationOptions,
+                sprite.opacityMultiplier
               );
             });
           });
         }
+      }
+    }
+
+    if (update.opacityMultiplier !== undefined) {
+      const nextMultiplier = sanitizeOpacityMultiplier(
+        update.opacityMultiplier
+      );
+      if (nextMultiplier !== sprite.opacityMultiplier) {
+        sprite.opacityMultiplier = nextMultiplier;
+        reapplySpriteOpacityMultiplier(sprite);
+        updated = true;
+        isRequiredRender = true;
       }
     }
 

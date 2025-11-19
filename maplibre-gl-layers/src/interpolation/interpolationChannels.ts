@@ -360,10 +360,13 @@ const stepOffsetMetersInterpolation = (
 export const applyOpacityUpdate = (
   image: InternalSpriteImageState,
   nextOpacity: number,
-  interpolationOptions?: SpriteInterpolationOptions | null
+  interpolationOptions?: SpriteInterpolationOptions | null,
+  spriteOpacityMultiplier = 1
 ): void => {
-  const clampedTarget = clampOpacity(nextOpacity);
+  const clampedBase = clampOpacity(nextOpacity);
+  const clampedTarget = clampOpacity(clampedBase * spriteOpacityMultiplier);
   const options = interpolationOptions;
+  image.lastCommandOpacityBase = clampedBase;
 
   if (!options || options.durationMs <= 0) {
     image.opacity.current = clampedTarget;

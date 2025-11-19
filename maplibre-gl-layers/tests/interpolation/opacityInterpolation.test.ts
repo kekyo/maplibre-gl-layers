@@ -44,6 +44,7 @@ const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   opacityInterpolationOptions: null,
   opacityTargetValue: opacity,
   lodLastCommandOpacity: opacity,
+  lastCommandOpacityBase: opacity,
   lastCommandRotateDeg: 0,
   lastCommandOffsetDeg: 0,
   lastCommandOffsetMeters: 0,
@@ -94,5 +95,13 @@ describe('applyOpacityUpdate', () => {
     stepSpriteImageInterpolations(image, 200);
 
     expect(image.opacity.current).toBe(1);
+  });
+
+  it('applies sprite opacity multiplier to targets', () => {
+    const image = createMockImageState(0.4);
+    applyOpacityUpdate(image, 0.6, null, 0.5);
+    expect(image.opacity.current).toBe(0.3);
+    expect(image.lastCommandOpacityBase).toBe(0.6);
+    expect(image.lastCommandOpacity).toBe(0.3);
   });
 });

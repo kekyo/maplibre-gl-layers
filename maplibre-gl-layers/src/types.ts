@@ -294,6 +294,10 @@ export interface SpriteInit<TTag> {
    * Default interpolation settings applied to initial location updates until overridden.
    */
   interpolation?: SpriteInterpolationOptions;
+  /**
+   * Multiplier applied to every image opacity belonging to the sprite. Defaults to 1.0.
+   */
+  opacityMultiplier?: number;
   /** Array of zero or more images. */
   images: SpriteImageDefinitionInitEntry[];
   /** Optional tag value; null or omission means no tag. */
@@ -422,6 +426,8 @@ export interface SpriteCurrentState<TTag> {
   readonly spriteId: string;
   /** Indicates whether the sprite is enabled. */
   readonly isEnabled: boolean;
+  /** Multiplier applied to every image opacity. */
+  readonly opacityMultiplier: number;
   /**
    * Pseudo LOD threshold for the sprite. When the camera distance exceeds this value,
    * the sprite's images become invisible.
@@ -461,6 +467,10 @@ export interface SpriteUpdateEntryBase<TTag> {
    * `null` to clear the current threshold, or leave `undefined` to keep the existing value.
    */
   visibilityDistanceMeters?: number | null;
+  /**
+   * Optional multiplier applied to every image opacity. When omitted the previous multiplier is preserved.
+   */
+  opacityMultiplier?: number;
 }
 
 /**

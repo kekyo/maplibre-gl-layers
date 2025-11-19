@@ -109,6 +109,7 @@ const MOVEMENT_INTERVAL_MS = 1000;
 
 /** Opacity waving sequence */
 const PRIMARY_OPACITY_WAVING_SEQUENCE = [0.4, 1.0] as const;
+const ALL_SPRITE_OPACITY_WAVING_SEQUENCE = [0.4, 1.0] as const;
 
 /** Minimum pseudo LOD distance in meters applied when enabled. */
 const PSEUDO_LOD_DISTANCE_MIN_METERS = 5000;
@@ -569,7 +570,7 @@ interface DemoSpriteTag {
  */
 type AnimationMode = 'random' | 'linear';
 
-type PrimaryOpacityMode = 'show' | 'wave';
+type PrimaryOpacityMode = 'show' | 'wave' | 'waveAll';
 
 /** Identifiers for the base maps available in the demo. */
 type BasemapId = 'osm' | 'carto';
@@ -1244,6 +1245,17 @@ const createHud = () => {
             data-testid="toggle-opacity-wave"
           >
             Wave
+          </button>
+          <button
+            type="button"
+            class="toggle-button${primaryOpacityMode === 'waveAll' ? ' active' : ''}"
+            data-control="primary-opacity-mode"
+            data-option="waveAll"
+            data-label="Wave All"
+            aria-pressed="${primaryOpacityMode === 'waveAll'}"
+            data-testid="toggle-opacity-wave-all"
+          >
+            Wave All
           </button>
         </div>
         <div>
@@ -2455,6 +2467,52 @@ const main = async () => {
       });
     };
 
+    const resetPrimaryImageOpacity = (
+      preferInterpolation: boolean
+    ): void => {
+      const shouldInterpolate =
+        preferInterpolation && isOpacityInterpolationEnabled;
+      spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        sprite.images.forEach((orderMap) => {
+          orderMap.forEach((image) => {
+            if (image.subLayer !== PRIMARY_SUB_LAYER) {
+              return;
+            }
+            const imageUpdate: SpriteImageDefinitionUpdate = {
+              opacity: 1,
+            };
+            if (isOpacityInterpolationEnabled) {
+              imageUpdate.interpolation = shouldInterpolate
+                ? {
+                    opacity: {
+                      durationMs: MOVEMENT_INTERVAL_MS,
+                      easing: resolveEasingOption(opacityEasingKey),
+                    },
+                  }
+                : { opacity: null };
+            } else {
+              imageUpdate.interpolation = { opacity: null };
+            }
+            spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
+          });
+        });
+        return true;
+      });
+      if (isOpacityInterpolationEnabled && !shouldInterpolate) {
+        applyOpacityInterpolationOptionsToAll();
+      }
+    };
+
+    const applySpriteOpacityMultiplierValue = (multiplier: number): void => {
+      if (!spriteLayer) {
+        return;
+      }
+      spriteLayer.updateForEach((_sprite, spriteUpdate) => {
+        spriteUpdate.opacityMultiplier = multiplier;
+        return true;
+      });
+    };
+
     const applyPrimaryOpacityValue = (
       opacity: number,
       preferInterpolation: boolean
@@ -2463,6 +2521,7 @@ const main = async () => {
       const shouldInterpolate =
         preferInterpolation && isOpacityInterpolationEnabled;
       spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        spriteUpdate.opacityMultiplier = 1;
         sprite.images.forEach((orderMap) => {
           orderMap.forEach((image) => {
             if (image.subLayer !== PRIMARY_SUB_LAYER) {
@@ -2494,15 +2553,29 @@ const main = async () => {
     };
 
     const advancePrimaryOpacityWave = (forceImmediate = false): void => {
-      if (!forceImmediate && primaryOpacityMode !== 'wave') {
+      if (!forceImmediate && primaryOpacityMode === 'show') {
         return;
       }
-      const value =
-        PRIMARY_OPACITY_WAVING_SEQUENCE[primaryOpacityWaveIndex] ??
-        PRIMARY_OPACITY_WAVING_SEQUENCE[0];
-      primaryOpacityWaveIndex =
-        (primaryOpacityWaveIndex + 1) % PRIMARY_OPACITY_WAVING_SEQUENCE.length;
-      applyPrimaryOpacityValue(value, true);
+      if (primaryOpacityMode === 'wave') {
+        const value =
+          PRIMARY_OPACITY_WAVING_SEQUENCE[primaryOpacityWaveIndex] ??
+          PRIMARY_OPACITY_WAVING_SEQUENCE[0];
+        primaryOpacityWaveIndex =
+          (primaryOpacityWaveIndex + 1) %
+          PRIMARY_OPACITY_WAVING_SEQUENCE.length;
+        applyPrimaryOpacityValue(value, true);
+      } else if (primaryOpacityMode === 'waveAll') {
+        if (!forceImmediate && primaryOpacityMode !== 'waveAll') {
+          return;
+        }
+        const value =
+          ALL_SPRITE_OPACITY_WAVING_SEQUENCE[primaryOpacityWaveIndex] ??
+          ALL_SPRITE_OPACITY_WAVING_SEQUENCE[0];
+        primaryOpacityWaveIndex =
+          (primaryOpacityWaveIndex + 1) %
+          ALL_SPRITE_OPACITY_WAVING_SEQUENCE.length;
+        applySpriteOpacityMultiplierValue(value);
+      }
     };
 
     const setPrimaryOpacityMode = (mode: PrimaryOpacityMode): void => {
@@ -2512,8 +2585,13 @@ const main = async () => {
       primaryOpacityMode = mode;
       primaryOpacityWaveIndex = 0;
       if (mode === 'show') {
+        applySpriteOpacityMultiplierValue(1);
         applyPrimaryOpacityValue(1.0, true);
-      } else {
+      } else if (mode === 'wave') {
+        applySpriteOpacityMultiplierValue(1);
+        advancePrimaryOpacityWave(true);
+      } else if (mode === 'waveAll') {
+        resetPrimaryImageOpacity(true);
         advancePrimaryOpacityWave(true);
       }
       updatePrimaryOpacityButtons?.();
