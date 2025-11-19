@@ -1712,16 +1712,16 @@ describe('prepareDrawSpriteImages', () => {
 describe('processInterpolationsInternal', () => {
   it('delegates preset easing to evaluation handlers', () => {
     const timestamp = 500;
-    const image = createImageState({
-      imageHandle: 1,
-      offset: { offsetMeters: 0, offsetDeg: 0 },
-    });
     const { state: distanceState } = createDistanceInterpolationState({
       currentValue: 0,
       targetValue: 10,
       options: { durationMs: 1000, easing: { type: 'linear' } },
     });
-    image.offsetMetersInterpolationState = distanceState;
+    const image = createImageState({
+      imageHandle: 1,
+      offset: { offsetMeters: 0, offsetDeg: 0 },
+      offsetMetersInterpolationState: distanceState,
+    });
 
     const currentLocation: SpriteLocation = { lng: 0, lat: 0 };
     const { state: spriteState } = createInterpolationState({
@@ -1774,16 +1774,16 @@ describe('processInterpolationsInternal', () => {
   });
 
   it('routes distance interpolation through handlers when easing preset is linear', () => {
-    const image = createImageState({
-      imageHandle: 1,
-      offset: { offsetMeters: 2, offsetDeg: 0 },
-    });
     const { state: distanceState } = createDistanceInterpolationState({
       currentValue: 2,
       targetValue: 6,
       options: { durationMs: 0 },
     });
-    image.offsetMetersInterpolationState = distanceState;
+    const image = createImageState({
+      imageHandle: 1,
+      offset: { offsetMeters: 2, offsetDeg: 0 },
+      offsetMetersInterpolationState: distanceState,
+    });
 
     const sprite = createSpriteState('sprite-2', [image]);
 
@@ -1806,6 +1806,6 @@ describe('processInterpolationsInternal', () => {
     expect(handlers.prepare).toHaveBeenCalledTimes(1);
     expect(handlers.evaluateDistance).toHaveBeenCalledTimes(1);
     expect(image.offset.offsetMeters.current).toBe(6);
-    expect(image.offsetMetersInterpolationState).toBeNull();
+    expect(image.offset.offsetMeters.interpolation.state).toBeNull();
   });
 });

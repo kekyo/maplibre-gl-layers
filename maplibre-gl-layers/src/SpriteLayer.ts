@@ -3217,21 +3217,18 @@ export const createSpriteLayer = <T = any>(
         ) {
           sprite.images.forEach((orderMap) => {
             orderMap.forEach((image) => {
-              if (
-                !(
-                  Number.isFinite(
-                    image.opacity.interpolation.lastCommandValue
-                  ) && image.opacity.interpolation.lastCommandValue > 0
-                )
-              ) {
+              const baseOpacity =
+                image.opacity.interpolation.baseValue ?? image.opacity.current;
+              if (!(Number.isFinite(baseOpacity) && baseOpacity > 0)) {
                 return;
               }
               if (image.opacity.current > 0) {
                 return;
               }
+              image.lodOpacity = 1;
               applyOpacityUpdate(
                 image,
-                image.opacity.interpolation.baseValue ?? image.opacity.current,
+                baseOpacity,
                 image.opacity.interpolation.options,
                 sprite.opacityMultiplier
               );

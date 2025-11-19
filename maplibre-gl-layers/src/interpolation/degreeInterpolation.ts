@@ -123,6 +123,10 @@ export const createDegreeInterpolationState = (
 
   const delta = normalizeDelta(effectiveTarget - currentValue);
   const pathTarget = currentValue + delta;
+  const normalizedPathTarget =
+    Math.abs(pathTarget - targetValue) <= NUMERIC_EPSILON
+      ? undefined
+      : pathTarget;
 
   // Duration must be positive and delta must exceed epsilon before we animate.
   const requiresInterpolation =
@@ -135,7 +139,7 @@ export const createDegreeInterpolationState = (
     easingPreset: options.easingPreset,
     from: currentValue,
     to: targetValue,
-    pathTarget,
+    pathTarget: normalizedPathTarget,
     startTimestamp: -1,
   };
 

@@ -73,6 +73,12 @@ export const createDistanceInterpolationState = (
   const requiresInterpolation =
     options.durationMs > 0 && Math.abs(delta) > DISTANCE_EPSILON;
 
+  const pathTarget = currentValue + delta;
+  const normalizedPathTarget =
+    Math.abs(pathTarget - targetValue) <= DISTANCE_EPSILON
+      ? undefined
+      : pathTarget;
+
   const state: SpriteInterpolationState<number> = {
     mode: options.mode,
     durationMs: options.durationMs,
@@ -80,7 +86,7 @@ export const createDistanceInterpolationState = (
     easingPreset: options.easingPreset,
     from: currentValue,
     to: targetValue,
-    pathTarget: currentValue + delta,
+    pathTarget: normalizedPathTarget,
     startTimestamp: -1,
   };
 

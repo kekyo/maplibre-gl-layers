@@ -400,8 +400,8 @@ const runOpacityTargetTransition = (
 export const applyOpacityUpdate = (
   image: InternalSpriteImageState,
   nextOpacity: number,
-  interpolationOptions: SpriteInterpolationOptions | null,
-  spriteOpacityMultiplier: number
+  interpolationOptions?: SpriteInterpolationOptions | null,
+  spriteOpacityMultiplier = 1
 ): void => {
   const clampedBase = clampOpacity(nextOpacity);
   const lodMultiplier =
@@ -410,16 +410,20 @@ export const applyOpacityUpdate = (
   runOpacityTargetTransition(
     image,
     clampedBase * spriteOpacityMultiplier * lodMultiplier,
-    interpolationOptions
+    interpolationOptions ?? null
   );
 };
 
 export const applyResolvedOpacityTarget = (
   image: InternalSpriteImageState,
   resolvedTarget: number,
-  interpolationOptions: SpriteInterpolationOptions | null
+  interpolationOptions?: SpriteInterpolationOptions | null
 ): void => {
-  runOpacityTargetTransition(image, resolvedTarget, interpolationOptions);
+  runOpacityTargetTransition(
+    image,
+    resolvedTarget,
+    interpolationOptions ?? null
+  );
 };
 
 const stepOpacityInterpolation = (
