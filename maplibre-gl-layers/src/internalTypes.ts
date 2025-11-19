@@ -744,6 +744,7 @@ export interface InternalSpriteCurrentState<TTag> {
   lastCommandLocation: Readonly<SpriteLocation>;
   lastAutoRotationLocation: Readonly<SpriteLocation>;
   lastAutoRotationAngleDeg: number;
+  autoRotationInvalidated: boolean;
   interpolationDirty: boolean;
   cachedMercator: Readonly<SpriteMercatorCoordinate>;
   cachedMercatorLng: number;

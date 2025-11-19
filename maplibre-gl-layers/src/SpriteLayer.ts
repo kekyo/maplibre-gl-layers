@@ -200,7 +200,8 @@ const updateImageInterpolationDirtyState = <T>(
  */
 export const applyAutoRotation = <T>(
   sprite: InternalSpriteCurrentState<T>,
-  nextLocation: SpriteLocation
+  nextLocation: SpriteLocation,
+  forceAutoRotation: boolean
 ): boolean => {
   let hasAutoRotation = false;
   let requiredDistance = 0;
@@ -221,6 +222,10 @@ export const applyAutoRotation = <T>(
   });
 
   // No auto-rotating images means nothing to update.
+  if (forceAutoRotation) {
+    requiredDistance = 0;
+  }
+
   if (!hasAutoRotation) {
     return false;
   }
@@ -939,15 +944,15 @@ export const createSpriteLayer = <T = any>(
   const invalidateSpriteInterpolationState = <TTag>(
     sprite: InternalSpriteCurrentState<TTag>
   ): void => {
+    const currentSnapshot = cloneSpriteLocation(sprite.location.current);
     sprite.location.from = undefined;
     sprite.location.to = undefined;
     sprite.location.invalidated = true;
     sprite.interpolationState = null;
     sprite.pendingInterpolationOptions = null;
-    sprite.lastCommandLocation = cloneSpriteLocation(sprite.location.current);
-    sprite.lastAutoRotationLocation = cloneSpriteLocation(
-      sprite.location.current
-    );
+    sprite.lastCommandLocation = cloneSpriteLocation(currentSnapshot);
+    sprite.lastAutoRotationLocation = cloneSpriteLocation(currentSnapshot);
+    sprite.autoRotationInvalidated = true;
     sprite.interpolationDirty = false;
 
     sprite.images.forEach((orderMap) => {
@@ -2408,6 +2413,7 @@ export const createSpriteLayer = <T = any>(
       lastCommandLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationLocation: cloneSpriteLocation(currentLocation),
       lastAutoRotationAngleDeg: 0,
+      autoRotationInvalidated: false,
       interpolationDirty: false,
       cachedMercator: initialMercator,
       cachedMercatorLng: currentLocation.lng,
@@ -2943,7 +2949,7 @@ export const createSpriteLayer = <T = any>(
     }
 
     if (shouldReapplyAutoRotation) {
-      const applied = applyAutoRotation(sprite, sprite.location.current);
+      const applied = applyAutoRotation(sprite, sprite.location.current, true);
       if (!applied && state.autoRotation) {
         state.resolvedBaseRotateDeg = sprite.lastAutoRotationAngleDeg;
         requireRotationSync = true;
@@ -3278,8 +3284,16 @@ export const createSpriteLayer = <T = any>(
 
       sprite.pendingInterpolationOptions = null;
 
-      // Auto-rotation should react immediately to the most recent command location.
-      applyAutoRotation(sprite, newCommandLocation);
+      if (!mapCurrentlyVisible) {
+        sprite.autoRotationInvalidated = true;
+        sprite.lastAutoRotationLocation =
+          cloneSpriteLocation(newCommandLocation);
+      } else {
+        const forceAutoRotation = sprite.autoRotationInvalidated;
+        sprite.autoRotationInvalidated = false;
+        // Auto-rotation should react immediately to the most recent command location.
+        applyAutoRotation(sprite, newCommandLocation, forceAutoRotation);
+      }
       needsHitTestRefresh = true;
     }
 
