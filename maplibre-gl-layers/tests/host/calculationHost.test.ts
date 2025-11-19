@@ -44,9 +44,11 @@ import type {
   RenderInterpolationParams,
   MutableSpriteImageInterpolatedOffset,
   MutableSpriteInterpolatedValues,
+  MutableSpriteInterpolatedLocationValues,
   ResolvedSpriteImageLineAttribute,
   DegreeInterpolationState,
   DistanceInterpolationState,
+  SpriteInterpolationState,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -81,6 +83,15 @@ const IDENTITY_MATRIX = new Float64Array([
 const DEFAULT_ANCHOR: SpriteAnchor = { x: 0, y: 0 };
 const DEFAULT_OFFSET: SpriteImageOffset = { offsetMeters: 0, offsetDeg: 0 };
 const DEFAULT_CLIP_CONTEXT: ClipContext = { mercatorMatrix: IDENTITY_MATRIX };
+
+type SpriteStateOverrides = Partial<
+  Omit<InternalSpriteCurrentState<null>, 'location'>
+> & {
+  location?: Partial<MutableSpriteInterpolatedLocationValues>;
+  interpolationState?: SpriteInterpolationState | null;
+  pendingInterpolationOptions?: SpriteInterpolationOptions | null;
+  lastCommandLocation?: SpriteLocation;
+};
 
 type ProjectOverride = (
   location: Readonly<SpriteLocation>
@@ -471,7 +482,7 @@ const createImageState = (
 const createSpriteState = (
   spriteId: string,
   images: readonly InternalSpriteImageState[],
-  overrides: Partial<InternalSpriteCurrentState<null>> = {}
+  overrides: SpriteStateOverrides = {}
 ): InternalSpriteCurrentState<null> => {
   const layers = new Map<number, Map<number, InternalSpriteImageState>>();
   images.forEach((image) => {
@@ -481,15 +492,30 @@ const createSpriteState = (
     layers.get(image.subLayer)!.set(image.order, image);
   });
 
-  const currentLocation =
+  const baseLocation =
     overrides.location?.current ?? ({ lng: 0, lat: 0, z: 0 } as SpriteLocation);
   const cachedMercator =
     overrides.cachedMercator ??
-    MercatorCoordinate.fromLngLat(currentLocation, currentLocation.z ?? 0);
+    MercatorCoordinate.fromLngLat(baseLocation, baseLocation.z ?? 0);
+  const interpolationOverride = overrides.location?.interpolation;
   const location: InternalSpriteCurrentState<null>['location'] = {
-    current: currentLocation,
+    current: baseLocation,
     from: overrides.location?.from,
     to: overrides.location?.to,
+    invalidated: overrides.location?.invalidated ?? false,
+    interpolation: {
+      state:
+        interpolationOverride?.state ?? overrides.interpolationState ?? null,
+      options: interpolationOverride?.options ?? null,
+      pendingOptions:
+        interpolationOverride?.pendingOptions ??
+        overrides.pendingInterpolationOptions ??
+        null,
+      lastCommandValue:
+        interpolationOverride?.lastCommandValue ??
+        overrides.lastCommandLocation ??
+        baseLocation,
+    },
   };
 
   return {
@@ -501,11 +527,8 @@ const createSpriteState = (
     location,
     images: layers,
     tag: overrides.tag ?? null,
-    interpolationState: overrides.interpolationState ?? null,
-    pendingInterpolationOptions: overrides.pendingInterpolationOptions ?? null,
-    lastCommandLocation: overrides.lastCommandLocation ?? currentLocation,
     lastAutoRotationLocation:
-      overrides.lastAutoRotationLocation ?? currentLocation,
+      overrides.lastAutoRotationLocation ?? baseLocation,
     lastAutoRotationAngleDeg: overrides.lastAutoRotationAngleDeg ?? 0,
     interpolationDirty: overrides.interpolationDirty ?? false,
     cachedMercator,
@@ -1747,7 +1770,7 @@ describe('processInterpolationsInternal', () => {
     expect(handlers.evaluateSprite).toHaveBeenCalledTimes(1);
     expect(image.offset.offsetMeters.current).toBeCloseTo(4);
     expect(sprite.location.current.lng).toBeCloseTo(3);
-    expect(sprite.interpolationState).not.toBeNull();
+    expect(sprite.location.interpolation.state).not.toBeNull();
   });
 
   it('routes distance interpolation through handlers when easing preset is linear', () => {

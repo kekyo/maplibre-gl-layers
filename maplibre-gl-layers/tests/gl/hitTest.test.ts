@@ -908,11 +908,8 @@ describe('setInterpolationCalculation', () => {
       });
       layer.render?.(gl, {} as any);
 
-      const state = layer.getSpriteState('moving') as unknown as {
-        interpolationState?: unknown;
-        location: { to?: { lng: number } };
-      };
-      expect(state?.interpolationState).toBeTruthy();
+      const state = layer.getSpriteState('moving');
+      expect(state?.location.interpolation.state).toBeTruthy();
 
       const currentLng = () =>
         layer.getSpriteState('moving')?.location.current.lng ?? 0;

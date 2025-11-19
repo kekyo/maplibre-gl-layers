@@ -1691,7 +1691,7 @@ const applySpriteInterpolationEvaluations = <TTag>(
       sprite.location.current = cloneSpriteLocation(state.to);
       sprite.location.from = undefined;
       sprite.location.to = undefined;
-      sprite.interpolationState = null;
+      sprite.location.interpolation.state = null;
     } else {
       active = true;
     }
@@ -1766,7 +1766,8 @@ export const processInterpolationsInternal = <TTag>(
   let hasActiveInterpolation = false;
 
   for (const sprite of sprites) {
-    const state = sprite.interpolationState;
+    const locationInterpolation = sprite.location.interpolation;
+    const state = locationInterpolation.state;
     if (state) {
       spriteInterpolationWorkItems.push({ sprite, state });
     }

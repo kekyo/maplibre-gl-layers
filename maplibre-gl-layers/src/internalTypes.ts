@@ -218,10 +218,8 @@ export interface SpriteMercatorCoordinate {
  * Mutable counterpart to {@link SpriteInterpolatedValues}, used internally so SpriteLayer
  * can reuse object references while still exposing readonly snapshots publicly.
  */
-export interface MutableSpriteInterpolatedValues<
-  T,
-  TInterpolationState = undefined,
-> extends SpriteInterpolatedValues<T> {
+export interface MutableSpriteInterpolatedValues<T, TInterpolationState>
+  extends SpriteInterpolatedValues<T> {
   current: T;
   from: T | undefined;
   to: T | undefined;
@@ -237,6 +235,14 @@ export interface MutableSpriteValueInterpolation<TValue, TInterpolationState> {
   baseValue?: TValue;
 }
 
+export interface MutableSpriteLocationInterpolation
+  extends MutableSpriteValueInterpolation<
+    Readonly<SpriteLocation>,
+    SpriteInterpolationState
+  > {
+  pendingOptions: Readonly<SpriteInterpolationOptions> | null;
+}
+
 export interface MutableSpriteManagedInterpolatedValues<
   TValue,
   TInterpolationState,
@@ -246,6 +252,14 @@ export interface MutableSpriteManagedInterpolatedValues<
 
 export interface MutableSpriteInterpolatedNumberValues<TInterpolationState>
   extends MutableSpriteManagedInterpolatedValues<number, TInterpolationState> {}
+
+export interface MutableSpriteInterpolatedLocationValues
+  extends MutableSpriteInterpolatedValues<
+    Readonly<SpriteLocation>,
+    SpriteInterpolationState
+  > {
+  interpolation: MutableSpriteLocationInterpolation;
+}
 
 export interface MutableSpriteImageInterpolatedOffset
   extends SpriteImageInterpolatedOffset {
@@ -515,9 +529,9 @@ export interface SpriteInterpolationState {
   readonly durationMs: number;
   readonly easing: EasingFunction;
   readonly easingPreset: SpriteEasing;
-  startTimestamp: number;
   readonly from: SpriteLocation;
   readonly to: SpriteLocation;
+  startTimestamp: number;
 }
 
 /**
@@ -747,12 +761,9 @@ export interface InternalSpriteCurrentState<TTag> {
   isEnabled: boolean;
   visibilityDistanceMeters?: number;
   opacityMultiplier: number;
-  location: MutableSpriteInterpolatedValues<Readonly<SpriteLocation>>;
+  location: MutableSpriteInterpolatedLocationValues;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
-  interpolationState: InternalSpriteInterpolationState | null;
-  pendingInterpolationOptions: SpriteInterpolationOptions | null;
-  lastCommandLocation: Readonly<SpriteLocation>;
   lastAutoRotationLocation: Readonly<SpriteLocation>;
   lastAutoRotationAngleDeg: number;
   autoRotationInvalidated: boolean;
