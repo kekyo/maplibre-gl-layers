@@ -165,7 +165,7 @@ export interface SpriteEasingBack {
 /**
  * Union of supported easing definitions.
  */
-export type SpriteEasing =
+export type SpriteEasingAttributes =
   | SpriteEasingLinear
   | SpriteEasingEase
   | SpriteEasingExponential
@@ -178,7 +178,7 @@ export type SpriteEasing =
 /**
  * Easing types.
  */
-export type SpriteEasingType = SpriteEasing['type'];
+export type SpriteEasingType = SpriteEasingAttributes['type'];
 
 /**
  * Defines interpolation modes.
@@ -194,7 +194,7 @@ export interface SpriteInterpolationOptions {
   /** Duration in milliseconds. */
   durationMs: number;
   /** Easing definition. Defaults to `linear`. */
-  easing?: SpriteEasing;
+  easing?: SpriteEasingAttributes;
 }
 
 /**

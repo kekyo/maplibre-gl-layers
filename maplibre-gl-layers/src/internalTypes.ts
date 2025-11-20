@@ -20,7 +20,7 @@ import type {
   SpriteInterpolationMode,
   SpriteScreenPoint,
   SpritePoint,
-  SpriteEasing,
+  SpriteEasingAttributes,
   SpriteImageLineAttributeState,
   SpriteImageState,
   SpriteInterpolatedValues,
@@ -31,6 +31,10 @@ import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
 import type { RgbaColor } from './utils/color';
 
 //////////////////////////////////////////////////////////////////////////////////////////
+
+export interface Releasable {
+  readonly release: () => void;
+}
 
 /**
  * Represents a projected three dimensional position.
@@ -238,16 +242,6 @@ export interface MutableSpriteInterpolatedValues<TValue>
   interpolation: MutableSpriteInterpolation<TValue>;
 }
 
-//export interface MutableSpriteLocationInterpolation
-//  extends MutableSpriteInterpolation<Readonly<SpriteLocation>> {
-//  pendingOptions: Readonly<SpriteInterpolationOptions> | null;
-//}
-//
-//export interface MutableSpriteInterpolatedLocationValues
-//  extends MutableSpriteInterpolatedValues<Readonly<SpriteLocation>> {
-//  interpolation: MutableSpriteLocationInterpolation;
-//}
-
 export interface MutableSpriteImageInterpolatedOffset
   extends SpriteImageInterpolatedOffset {
   offsetMeters: MutableSpriteInterpolatedValues<number>;
@@ -255,10 +249,6 @@ export interface MutableSpriteImageInterpolatedOffset
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
-
-export interface Releasable {
-  readonly release: () => void;
-}
 
 /**
  * Mimimum abstraction that exposes projection-related helpers.
@@ -505,22 +495,23 @@ export interface SurfaceShaderInputs {
 /**
  * Runtime state describing the active interpolation between two sprite locations.
  * Consumers reuse the same state across ticks to avoid re-allocations while animation is running.
- *
- * @property mode - Strategy used to resolve the target location (feedback or feedforward).
- * @property durationMs - Total time allocated for the interpolation in milliseconds.
- * @property easing - Resolved easing function applied to raw progress values.
- * @property startTimestamp - Epoch millisecond when the interpolation started, or -1 when uninitialized.
- * @property from - Origin sprite location cloned from the current render state.
- * @property to - Destination sprite location being interpolated towards.
  */
 export interface SpriteInterpolationState<TValue> {
+  /** Strategy used to resolve the target location (feedback or feedforward). */
   readonly mode: SpriteInterpolationMode;
+  /** Total time allocated for the interpolation in milliseconds. */
   readonly durationMs: number;
-  readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasing;
+  /** Easing attributes */
+  readonly easingAttributes: SpriteEasingAttributes;
+  /** Resolved easing function applied to raw progress values. */
+  readonly easingFunction: EasingFunction;
+  /** Origin sprite location cloned from the current render state. */
   readonly from: TValue;
+  /** Destination sprite location being interpolated towards.  */
   readonly to: TValue;
+  /** */
   readonly pathTarget?: TValue;
+  /** Epoch millisecond when the interpolation started, or -1 when uninitialized. */
   startTimestamp: number;
 }
 

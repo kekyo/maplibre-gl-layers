@@ -34,7 +34,7 @@ import type {
   SpriteTextGlyphOptions,
   SpriteImageRegisterOptions,
   SpriteLayerInterface,
-  SpriteEasing,
+  SpriteEasingAttributes,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -580,22 +580,22 @@ const EASING_OPTION_PRESETS = [
   {
     key: 'linear',
     label: 'Linear',
-    easing: { type: 'linear' } as SpriteEasing,
+    easing: { type: 'linear' } as SpriteEasingAttributes,
   },
   {
     key: 'ease-in',
     label: 'Ease In (pow 3)',
-    easing: { type: 'ease', mode: 'in', power: 3 } as SpriteEasing,
+    easing: { type: 'ease', mode: 'in', power: 3 } as SpriteEasingAttributes,
   },
   {
     key: 'ease-out',
     label: 'Ease Out (pow 3)',
-    easing: { type: 'ease', mode: 'out', power: 3 } as SpriteEasing,
+    easing: { type: 'ease', mode: 'out', power: 3 } as SpriteEasingAttributes,
   },
   {
     key: 'ease-in-out',
     label: 'Ease In-Out (pow 4)',
-    easing: { type: 'ease', mode: 'in-out', power: 4 } as SpriteEasing,
+    easing: { type: 'ease', mode: 'in-out', power: 4 } as SpriteEasingAttributes,
   },
   {
     key: 'exponential',
@@ -604,32 +604,32 @@ const EASING_OPTION_PRESETS = [
       type: 'exponential',
       exponent: 6,
       mode: 'in-out',
-    } as SpriteEasing,
+    } as SpriteEasingAttributes,
   },
   {
     key: 'quadratic',
     label: 'Quadratic (in)',
-    easing: { type: 'quadratic', mode: 'in' } as SpriteEasing,
+    easing: { type: 'quadratic', mode: 'in' } as SpriteEasingAttributes,
   },
   {
     key: 'cubic',
     label: 'Cubic (out)',
-    easing: { type: 'cubic', mode: 'out' } as SpriteEasing,
+    easing: { type: 'cubic', mode: 'out' } as SpriteEasingAttributes,
   },
   {
     key: 'sine',
     label: 'Sine (in-out, amp 1.2)',
-    easing: { type: 'sine', mode: 'in-out', amplitude: 1.2 } as SpriteEasing,
+    easing: { type: 'sine', mode: 'in-out', amplitude: 1.2 } as SpriteEasingAttributes,
   },
   {
     key: 'bounce',
     label: 'Bounce (4x, 0.7)',
-    easing: { type: 'bounce', bounces: 4, decay: 0.7 } as SpriteEasing,
+    easing: { type: 'bounce', bounces: 4, decay: 0.7 } as SpriteEasingAttributes,
   },
   {
     key: 'back',
     label: 'Back (overshoot 2.2)',
-    easing: { type: 'back', overshoot: 2.2 } as SpriteEasing,
+    easing: { type: 'back', overshoot: 2.2 } as SpriteEasingAttributes,
   },
 ] as const;
 
@@ -637,7 +637,7 @@ type EasingOptionKey = (typeof EASING_OPTION_PRESETS)[number]['key'];
 
 const isEasingEnabled = (key: EasingOptionKey): boolean => key !== 'off';
 
-const resolveEasingOption = (key: EasingOptionKey): SpriteEasing | undefined =>
+const resolveEasingOption = (key: EasingOptionKey): SpriteEasingAttributes | undefined =>
   EASING_OPTION_PRESETS.find((entry) => entry.key === key)?.easing;
 
 const renderEasingOptions = (current: EasingOptionKey): string =>

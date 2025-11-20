@@ -4,7 +4,10 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { SpriteInterpolationOptions } from '../types';
+import type {
+  SpriteEasingAttributes,
+  SpriteInterpolationOptions,
+} from '../types';
 import { resolveEasing, type EasingFunction } from './easing';
 import type {
   DegreeInterpolationEvaluationResult,
@@ -60,15 +63,15 @@ const normalizeOptions = (
   options: SpriteInterpolationOptions
 ): {
   durationMs: number;
-  easing: EasingFunction;
-  easingPreset: ReturnType<typeof resolveEasing>['preset'];
+  easingFunction: EasingFunction;
+  easingAttributes: SpriteEasingAttributes;
   mode: 'feedback' | 'feedforward';
 } => {
   const resolved = resolveEasing(options.easing);
   return {
     durationMs: normalizeDuration(options.durationMs),
-    easing: resolved.easing,
-    easingPreset: resolved.preset,
+    easingFunction: resolved.func,
+    easingAttributes: resolved.param,
     mode: options.mode ?? 'feedback',
   };
 };
@@ -135,8 +138,8 @@ export const createDegreeInterpolationState = (
   const state: SpriteInterpolationState<number> = {
     mode: options.mode,
     durationMs: options.durationMs,
-    easing: options.easing,
-    easingPreset: options.easingPreset,
+    easingFunction: options.easingFunction,
+    easingAttributes: options.easingAttributes,
     from: currentValue,
     to: targetValue,
     pathTarget: normalizedPathTarget,
@@ -223,7 +226,7 @@ export const evaluateDegreeInterpolation = (
 
   const elapsed = timestamp - effectiveStart;
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
-  const eased = clamp01(state.easing(rawProgress));
+  const eased = clamp01(state.easingFunction(rawProgress));
   const interpolated = state.from + (targetValue - state.from) * eased;
   // rawProgress >= 1 indicates we've reached or passed the end of the animation window.
   const completed = rawProgress >= 1;

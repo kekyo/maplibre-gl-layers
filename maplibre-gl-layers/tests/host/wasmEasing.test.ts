@@ -35,8 +35,8 @@ describe('wasm easing presets', () => {
     const state: SpriteInterpolationState<number> = {
       mode: 'feedback',
       durationMs: 1000,
-      easing: (t: number) => t,
-      easingPreset: preset,
+      easingFunction: (t: number) => t,
+      easingAttributes: preset,
       from: 0,
       to: 10,
       startTimestamp: 0,
@@ -62,8 +62,8 @@ describe('wasm easing presets', () => {
     const state: SpriteInterpolationState<number> = {
       mode: 'feedback',
       durationMs: 1000,
-      easing: (t: number) => t,
-      easingPreset: preset,
+      easingFunction: (t: number) => t,
+      easingAttributes: preset,
       from: 0,
       to: 1,
       startTimestamp: 0,

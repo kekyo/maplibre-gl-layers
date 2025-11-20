@@ -34,8 +34,8 @@ describe('createInterpolationState', () => {
     expect(spriteLocationsEqual(state.to, next)).toBe(true);
     expect(state.from).not.toBe(current);
     expect(state.to).not.toBe(next);
-    expect(state.easing).toBe(linearEasing);
-    expect(state.easingPreset.type).toBe('linear');
+    expect(state.easingFunction).toBe(linearEasing);
+    expect(state.easingAttributes.type).toBe('linear');
   });
 
   it('predicts feedforward target based on velocity', () => {
@@ -79,8 +79,8 @@ describe('createInterpolationState', () => {
       options: { durationMs: 1000, easing: { type: 'linear' } },
     });
 
-    expect(state.easing).toBe(linearEasing);
-    expect(state.easingPreset.type).toBe('linear');
+    expect(state.easingFunction).toBe(linearEasing);
+    expect(state.easingAttributes.type).toBe('linear');
   });
 
   it('marks interpolation as unnecessary when duration is zero', () => {

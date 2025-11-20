@@ -43,7 +43,7 @@ import type {
   SpriteLocation,
   SpritePoint,
   SpriteMode,
-  SpriteEasing,
+  SpriteEasingAttributes,
   SpriteEasingType,
   SpriteImageOffset,
 } from '../types';
@@ -131,7 +131,9 @@ type EncodedEasingPreset = {
   readonly param2: number;
 };
 
-const encodeEasingPreset = (preset: SpriteEasing): EncodedEasingPreset => {
+const encodeEasingPreset = (
+  preset: SpriteEasingAttributes
+): EncodedEasingPreset => {
   const id = EASING_PRESET_IDS[preset.type] ?? -1;
   switch (preset.type) {
     case 'ease': {
@@ -205,7 +207,7 @@ const encodeDistanceInterpolationRequest = (
   request: DistanceInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const preset = encodeEasingPreset(state.easingPreset);
+  const preset = encodeEasingPreset(state.easingAttributes);
   if (preset.id < 0) {
     throw new Error(
       'Distance interpolation request missing preset easing function.'
@@ -230,7 +232,7 @@ const encodeDegreeInterpolationRequest = (
   request: DegreeInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const preset = encodeEasingPreset(state.easingPreset);
+  const preset = encodeEasingPreset(state.easingAttributes);
   if (preset.id < 0) {
     throw new Error(
       'Degree interpolation request missing preset easing function.'
@@ -255,7 +257,7 @@ const encodeSpriteInterpolationRequest = (
   request: SpriteInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const preset = encodeEasingPreset(state.easingPreset);
+  const preset = encodeEasingPreset(state.easingAttributes);
   if (preset.id < 0) {
     throw new Error(
       'Sprite interpolation request missing preset easing function.'

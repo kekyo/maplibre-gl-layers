@@ -5,7 +5,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type {
-  SpriteEasing,
+  SpriteEasingAttributes,
   SpriteEasingBack,
   SpriteEasingBounce,
   SpriteEasingCubic,
@@ -171,17 +171,19 @@ const createBackEasing = (overshoot: number): EasingFunction => {
 };
 
 export interface ResolvedEasing {
-  readonly easing: EasingFunction;
-  readonly preset: SpriteEasing;
+  readonly func: EasingFunction;
+  readonly param: SpriteEasingAttributes;
 }
 
 /**
  * Resolves an easing definition into its implementation, defaulting to linear when unspecified or unknown.
  */
-export const resolveEasing = (easing?: SpriteEasing): ResolvedEasing => {
+export const resolveEasing = (
+  easing?: SpriteEasingAttributes
+): ResolvedEasing => {
   const fallback: ResolvedEasing = {
-    easing: linearEasing,
-    preset: { type: 'linear' },
+    func: linearEasing,
+    param: { type: 'linear' },
   };
   if (!easing) {
     return fallback;
@@ -189,34 +191,34 @@ export const resolveEasing = (easing?: SpriteEasing): ResolvedEasing => {
 
   switch (easing.type) {
     case 'linear': {
-      const preset: SpriteEasingLinear = { type: 'linear' };
-      return { easing: linearEasing, preset };
+      const param: SpriteEasingLinear = { type: 'linear' };
+      return { func: linearEasing, param };
     }
     case 'ease': {
       const power = normalizePower(easing.power, 3);
       const mode = normalizeMode(easing.mode, 'in-out');
-      const preset: SpriteEasingEase = { type: 'ease', power, mode };
-      return { easing: createPowerEasing(power, mode), preset };
+      const param: SpriteEasingEase = { type: 'ease', power, mode };
+      return { func: createPowerEasing(power, mode), param };
     }
     case 'exponential': {
       const exponent = normalizePower(easing.exponent, 5);
       const mode = normalizeMode(easing.mode, 'in-out');
-      const preset: SpriteEasingExponential = {
+      const param: SpriteEasingExponential = {
         type: 'exponential',
         exponent,
         mode,
       };
-      return { easing: createExponentialEasing(exponent, mode), preset };
+      return { func: createExponentialEasing(exponent, mode), param };
     }
     case 'quadratic': {
       const mode = normalizeMode(easing.mode, 'in-out');
-      const preset: SpriteEasingQuadratic = { type: 'quadratic', mode };
-      return { easing: createPowerEasing(2, mode), preset };
+      const param: SpriteEasingQuadratic = { type: 'quadratic', mode };
+      return { func: createPowerEasing(2, mode), param };
     }
     case 'cubic': {
       const mode = normalizeMode(easing.mode, 'in-out');
-      const preset: SpriteEasingCubic = { type: 'cubic', mode };
-      return { easing: createPowerEasing(3, mode), preset };
+      const param: SpriteEasingCubic = { type: 'cubic', mode };
+      return { func: createPowerEasing(3, mode), param };
     }
     case 'sine': {
       const mode = normalizeMode(easing.mode, 'in-out');
@@ -224,8 +226,8 @@ export const resolveEasing = (easing?: SpriteEasing): ResolvedEasing => {
         Number.isFinite(easing.amplitude) && easing.amplitude! > 0
           ? easing.amplitude!
           : 1;
-      const preset: SpriteEasingSine = { type: 'sine', mode, amplitude };
-      return { easing: createSineEasing(mode, amplitude), preset };
+      const param: SpriteEasingSine = { type: 'sine', mode, amplitude };
+      return { func: createSineEasing(mode, amplitude), param };
     }
     case 'bounce': {
       const bounces =
@@ -236,20 +238,20 @@ export const resolveEasing = (easing?: SpriteEasing): ResolvedEasing => {
         Number.isFinite(easing.decay) && easing.decay! > 0
           ? easing.decay!
           : 0.5;
-      const preset: SpriteEasingBounce = {
+      const param: SpriteEasingBounce = {
         type: 'bounce',
         bounces,
         decay,
       };
-      return { easing: createBounceEasing(bounces, decay), preset };
+      return { func: createBounceEasing(bounces, decay), param };
     }
     case 'back': {
       const overshoot =
         Number.isFinite(easing.overshoot) && easing.overshoot !== undefined
           ? easing.overshoot
           : 1.70158;
-      const preset: SpriteEasingBack = { type: 'back', overshoot };
-      return { easing: createBackEasing(overshoot), preset };
+      const param: SpriteEasingBack = { type: 'back', overshoot };
+      return { func: createBackEasing(overshoot), param };
     }
     default:
       return fallback;
