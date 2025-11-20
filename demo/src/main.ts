@@ -30,6 +30,8 @@ import type {
   SpriteAnchor,
   SpriteImageInterpolationOptions,
   SpriteImageDefinitionUpdate,
+  SpriteImageState,
+  SpriteCurrentState,
   SpriteInitEntry,
   SpriteTextGlyphOptions,
   SpriteImageRegisterOptions,
@@ -106,6 +108,10 @@ const INITIAL_NUMBER_OF_SPRITES = isTestMode ? 1 : 1000;
  * Interval in milliseconds between movement updates.
  */
 const MOVEMENT_INTERVAL_MS = 1000;
+/**
+ * Interval in milliseconds between selected sprite detail refreshes.
+ */
+const SELECTED_SPRITE_REFRESH_INTERVAL_MS = 100;
 
 /** Opacity waving sequence */
 const PRIMARY_OPACITY_WAVING_SEQUENCE = [0.4, 1.0] as const;
@@ -674,6 +680,7 @@ let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
 let spriteScalingMode: 'standard' | 'unlimited' = 'unlimited';
 let showSpriteBorders = false;
 let selectedSpriteId: string | null = null;
+let selectedSpriteImageRef: { subLayer: number; order: number } | null = null;
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
@@ -716,6 +723,8 @@ let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
 let isMouseEventsMonitoringEnabled = false;
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
+/** Timer handle for selected sprite detail updates. */
+let selectedSpriteDetailsIntervalId: number | undefined;
 /** UI updater for the movement speed slider. */
 let updateMovementSpeedUI: ((scale: number) => void) | undefined;
 /** Indicates whether supplemental images have been registered. */
@@ -739,7 +748,10 @@ let updateSpriteBordersButton: (() => void) | undefined;
 /** Clears any selected sprite highlight and resets the detail panel. */
 let clearSpriteSelection: () => void = () => {};
 /** Marks a sprite as selected and updates highlighting. */
-let selectSprite: (spriteId: string) => void = () => {};
+let selectSprite: (
+  spriteId: string,
+  imageState?: { subLayer: number; order: number } | null
+) => void = () => {};
 /** Timestamp of the last sprite click to suppress map click clearing. */
 let lastSpriteClickAt = 0;
 
@@ -976,6 +988,22 @@ const createHud = () => {
               class="status-value"
               data-selected-field="rotate"
               data-testid="selected-rotate"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-rotate-resolved">
+            <span class="status-label">Resolved Base</span>
+            <span
+              class="status-value"
+              data-selected-field="rotateResolved"
+              data-testid="selected-rotate-resolved"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-rotate-displayed">
+            <span class="status-label">Displayed</span>
+            <span
+              class="status-value"
+              data-selected-field="rotateDisplayed"
+              data-testid="selected-rotate-displayed"
             >--</span>
           </div>
           <div class="status-row" data-testid="selected-row-offset">
@@ -1686,6 +1714,12 @@ const main = async () => {
     rotateDeg: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="rotate"]'
     ),
+    rotateResolved: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotateResolved"]'
+    ),
+    rotateDisplayed: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotateDisplayed"]'
+    ),
     offset: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="offset"]'
     ),
@@ -1886,6 +1920,12 @@ const main = async () => {
     if (selectedFieldEls.rotateDeg) {
       selectedFieldEls.rotateDeg.textContent = `${imageState.rotateDeg.current.toFixed(2)}°`;
     }
+    if (selectedFieldEls.rotateResolved) {
+      selectedFieldEls.rotateResolved.textContent = `${imageState.resolvedBaseRotateDeg.toFixed(2)}°`;
+    }
+    if (selectedFieldEls.rotateDisplayed) {
+      selectedFieldEls.rotateDisplayed.textContent = `${imageState.displayedRotateDeg.toFixed(2)}°`;
+    }
     if (selectedFieldEls.offset) {
       selectedFieldEls.offset.textContent = `meters=${imageState.offset.offsetMeters.current.toFixed(
         2
@@ -2023,7 +2063,7 @@ const main = async () => {
       return;
     }
 
-    selectSprite(spriteState.spriteId);
+    selectSprite(spriteState.spriteId, imageState);
     renderSpriteDetails(event);
   };
 
@@ -2271,9 +2311,11 @@ const main = async () => {
       // Advance the orbit angle.
       secondaryImageOrbitDegrees =
         (secondaryImageOrbitDegrees + SECONDARY_ORBIT_STEP_DEG) % 360;
-      
-      const orbitRadiusMeters = currentSecondaryImageType === 'text' ?
-        SECONDARY_ORBIT_TEXT_RADIUS_METERS : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
+
+      const orbitRadiusMeters =
+        currentSecondaryImageType === 'text'
+          ? SECONDARY_ORBIT_TEXT_RADIUS_METERS
+          : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
 
       // Iterate over every sprite.
       spriteLayer.updateForEach((sprite, update) => {
@@ -2712,7 +2754,76 @@ const main = async () => {
       });
     };
 
+    const stopSelectedSpriteDetailsInterval = (): void => {
+      if (selectedSpriteDetailsIntervalId === undefined) {
+        return;
+      }
+      window.clearInterval(selectedSpriteDetailsIntervalId);
+      selectedSpriteDetailsIntervalId = undefined;
+    };
+
+    const resolveSelectedImageState = (
+      spriteState: SpriteCurrentState<DemoSpriteTag>
+    ): SpriteImageState | undefined => {
+      if (selectedSpriteImageRef) {
+        const candidate = spriteState.images
+          .get(selectedSpriteImageRef.subLayer)
+          ?.get(selectedSpriteImageRef.order);
+        if (candidate) {
+          return candidate;
+        }
+      }
+      for (const orderMap of spriteState.images.values()) {
+        const iterator = orderMap.values().next();
+        if (!iterator.done) {
+          selectedSpriteImageRef = {
+            subLayer: iterator.value.subLayer,
+            order: iterator.value.order,
+          };
+          return iterator.value;
+        }
+      }
+      return undefined;
+    };
+
+    const refreshSelectedSpriteDetails = (): void => {
+      if (!selectedSpriteId || !spriteLayer) {
+        return;
+      }
+      const spriteState = spriteLayer.getSpriteState(selectedSpriteId);
+      if (!spriteState) {
+        clearSpriteSelection();
+        return;
+      }
+      const imageState = resolveSelectedImageState(spriteState);
+      const projected = map.project({
+        lng: spriteState.location.current.lng,
+        lat: spriteState.location.current.lat,
+      });
+      renderSpriteDetails({
+        type: 'spriteclick',
+        sprite: spriteState,
+        image: imageState,
+        screenPoint: { x: projected.x, y: projected.y },
+        originalEvent: new MouseEvent('click'),
+      });
+    };
+
+    const startSelectedSpriteDetailsInterval = (): void => {
+      stopSelectedSpriteDetailsInterval();
+      if (!selectedSpriteId) {
+        return;
+      }
+      refreshSelectedSpriteDetails();
+      selectedSpriteDetailsIntervalId = window.setInterval(
+        refreshSelectedSpriteDetails,
+        SELECTED_SPRITE_REFRESH_INTERVAL_MS
+      );
+    };
+
     clearSpriteSelection = (): void => {
+      stopSelectedSpriteDetailsInterval();
+      selectedSpriteImageRef = null;
       if (!selectedSpriteId) {
         renderPlaceholderDetails();
         return;
@@ -2722,12 +2833,19 @@ const main = async () => {
       renderPlaceholderDetails();
     };
 
-    selectSprite = (spriteId: string): void => {
-      if (selectedSpriteId === spriteId) {
-        return;
-      }
+    selectSprite = (
+      spriteId: string,
+      imageState?: { subLayer: number; order: number } | null
+    ): void => {
+      const isSameSprite = selectedSpriteId === spriteId;
       selectedSpriteId = spriteId;
-      applySpriteBordersToAll();
+      selectedSpriteImageRef = imageState
+        ? { subLayer: imageState.subLayer, order: imageState.order }
+        : null;
+      if (!isSameSprite) {
+        applySpriteBordersToAll();
+      }
+      startSelectedSpriteDetailsInterval();
     };
 
     /**
@@ -2932,8 +3050,10 @@ const main = async () => {
             ? SECONDARY_SHIFT_ANGLE_DEG
             : 0;
 
-      const orbitRadiusMeters = currentSecondaryImageType === 'text' ?
-        SECONDARY_ORBIT_TEXT_RADIUS_METERS : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
+      const orbitRadiusMeters =
+        currentSecondaryImageType === 'text'
+          ? SECONDARY_ORBIT_TEXT_RADIUS_METERS
+          : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
 
       spriteLayer.updateForEach((sprite, update) => {
         sprite.images.forEach((orderMap) => {
@@ -4218,8 +4338,10 @@ const main = async () => {
           }
         | undefined;
 
-      const orbitRadiusMeters = currentSecondaryImageType === 'text' ?
-        SECONDARY_ORBIT_TEXT_RADIUS_METERS : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
+      const orbitRadiusMeters =
+        currentSecondaryImageType === 'text'
+          ? SECONDARY_ORBIT_TEXT_RADIUS_METERS
+          : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
 
       switch (currentSecondaryImageOrbitMode) {
         case 'hidden':
@@ -4351,7 +4473,7 @@ const main = async () => {
       spriteLayerRebuildPromise = (async () => {
         stopMovementInterval();
         detachSpriteMouseEvents();
-        selectedSpriteId = null;
+        clearSpriteSelection();
         if (map.getLayer(SPRITE_LAYER_ID)) {
           map.removeLayer(SPRITE_LAYER_ID);
         }
