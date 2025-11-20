@@ -239,10 +239,14 @@ const SECONDARY_LEADER_LINE_STYLE = {
   color: '#00aa00',
   widthMeters: 4,
 } as const;
-/** Distance in meters that secondary images orbit from their primary marker. */
-const SECONDARY_ORBIT_RADIUS_METERS = 180;
+
+/** Distance in meters that secondary images orbit image from their primary marker. */
+const SECONDARY_ORBIT_IMAGE_RADIUS_METERS = 180;
+/** Distance in meters that secondary images orbit image from their primary marker. */
+const SECONDARY_ORBIT_TEXT_RADIUS_METERS = 270;
+
 /** Angular increment in degrees applied to the orbiting image during each step. */
-const SECONDARY_ORBIT_STEP_DEG = 45;
+const SECONDARY_ORBIT_STEP_DEG = 90;
 /** Fixed angle (deg) used when the orbit mode is set to Shift. */
 const SECONDARY_SHIFT_ANGLE_DEG = 120;
 
@@ -702,7 +706,7 @@ let isSecondaryLeaderLineEnabled = false;
 let orbitDegEasingKey: EasingOptionKey = 'linear';
 let isOrbitDegInterpolationEnabled = isEasingEnabled(orbitDegEasingKey);
 /** Whether we interpolate the orbital distance of the secondary image. */
-let orbitMetersEasingKey: EasingOptionKey = 'exponential';
+let orbitMetersEasingKey: EasingOptionKey = 'sine';
 let isOrbitMetersInterpolationEnabled = isEasingEnabled(orbitMetersEasingKey);
 /** Interpolation mode applied to orbital angle changes. */
 let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
@@ -2267,6 +2271,9 @@ const main = async () => {
       // Advance the orbit angle.
       secondaryImageOrbitDegrees =
         (secondaryImageOrbitDegrees + SECONDARY_ORBIT_STEP_DEG) % 360;
+      
+      const orbitRadiusMeters = currentSecondaryImageType === 'text' ?
+        SECONDARY_ORBIT_TEXT_RADIUS_METERS : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
 
       // Iterate over every sprite.
       spriteLayer.updateForEach((sprite, update) => {
@@ -2279,7 +2286,7 @@ const main = async () => {
               const imageUpdate: SpriteImageDefinitionUpdate = {
                 offset: {
                   offsetDeg: secondaryImageOrbitDegrees, // Apply the computed angle.
-                  offsetMeters: SECONDARY_ORBIT_RADIUS_METERS, // Maintain the configured orbit radius.
+                  offsetMeters: orbitRadiusMeters, // Maintain the configured orbit radius.
                 },
               };
               const orbitInterpolation = createOrbitInterpolationOptions();
@@ -2497,7 +2504,7 @@ const main = async () => {
       }
       const interpolation: SpriteImageInterpolationOptions = {
         opacity: {
-          durationMs: MOVEMENT_INTERVAL_MS,
+          durationMs: 500,
           easing: resolveEasingOption(opacityEasingKey),
         },
       };
@@ -2535,7 +2542,7 @@ const main = async () => {
               imageUpdate.interpolation = shouldInterpolate
                 ? {
                     opacity: {
-                      durationMs: MOVEMENT_INTERVAL_MS,
+                      durationMs: 500,
                       easing: resolveEasingOption(opacityEasingKey),
                     },
                   }
@@ -2584,7 +2591,7 @@ const main = async () => {
               if (shouldInterpolate) {
                 imageUpdate.interpolation = {
                   opacity: {
-                    durationMs: MOVEMENT_INTERVAL_MS,
+                    durationMs: 500,
                     easing: resolveEasingOption(opacityEasingKey),
                   },
                 };
@@ -2925,6 +2932,9 @@ const main = async () => {
             ? SECONDARY_SHIFT_ANGLE_DEG
             : 0;
 
+      const orbitRadiusMeters = currentSecondaryImageType === 'text' ?
+        SECONDARY_ORBIT_TEXT_RADIUS_METERS : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
+
       spriteLayer.updateForEach((sprite, update) => {
         sprite.images.forEach((orderMap) => {
           orderMap.forEach((image) => {
@@ -2954,7 +2964,7 @@ const main = async () => {
                 opacity: 1.0,
                 autoRotation: false,
                 offset: {
-                  offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+                  offsetMeters: orbitRadiusMeters,
                   offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
                 },
               };
@@ -2964,7 +2974,7 @@ const main = async () => {
                 opacity: 1.0,
                 autoRotation: false,
                 offset: {
-                  offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+                  offsetMeters: orbitRadiusMeters,
                   offsetDeg: secondaryImageOrbitDegrees,
                 },
               };
@@ -4208,6 +4218,9 @@ const main = async () => {
           }
         | undefined;
 
+      const orbitRadiusMeters = currentSecondaryImageType === 'text' ?
+        SECONDARY_ORBIT_TEXT_RADIUS_METERS : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
+
       switch (currentSecondaryImageOrbitMode) {
         case 'hidden':
           secondaryOpacity = 0.0;
@@ -4220,13 +4233,13 @@ const main = async () => {
           break;
         case 'shift':
           secondaryOffset = {
-            offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+            offsetMeters: orbitRadiusMeters,
             offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
           };
           break;
         case 'orbit':
           secondaryOffset = {
-            offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+            offsetMeters: orbitRadiusMeters,
             offsetDeg: secondaryImageOrbitDegrees,
           };
           break;

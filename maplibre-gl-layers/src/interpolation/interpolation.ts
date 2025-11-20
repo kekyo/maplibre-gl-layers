@@ -56,14 +56,13 @@ const computeFeedforwardTarget = (
 
 /**
  * Normalized representation of interpolation options with defaults applied.
- *
- * @property durationMs - Clamped non-negative duration in milliseconds.
- * @property mode - Strategy that guides how the destination is computed.
- * @property easing - Optional easing preset carried through for later resolution.
  */
 interface NormalizedInterpolationOptions {
+  /** Clamped non-negative duration in milliseconds. */
   durationMs: number;
+  /** Strategy that guides how the destination is computed. */
   mode: SpriteInterpolationMode;
+  /** Optional easing preset carried through for later resolution. */
   easing?: SpriteInterpolationOptions['easing'];
 }
 
@@ -87,27 +86,25 @@ const normalizeOptions = (
 
 /**
  * Parameters required to create a fresh interpolation state for the next animation segment.
- *
- * @property currentLocation - Sprite location currently rendered on screen.
- * @property lastCommandLocation - Previously commanded target, used for feedforward extrapolation.
- * @property nextCommandLocation - Upcoming commanded target that the sprite should reach.
- * @property options - Raw interpolation options supplied by the caller.
  */
 export interface CreateInterpolationStateParams {
+  /** Sprite location currently rendered on screen. */
   currentLocation: SpriteLocation;
+  /** Previously commanded target, used for feedforward extrapolation. */
   lastCommandLocation?: SpriteLocation;
+  /** Upcoming commanded target that the sprite should reach. */
   nextCommandLocation: SpriteLocation;
+  /** Raw interpolation options supplied by the caller. */
   options: SpriteInterpolationOptions;
 }
 
 /**
  * Result of preparing interpolation state, including a flag denoting whether any lerp is needed.
- *
- * @property state - Prepared interpolation state ready for evaluation.
- * @property requiresInterpolation - Indicates whether lerping is needed or an immediate snap is sufficient.
  */
 export interface CreateInterpolationStateResult {
+  /** Prepared interpolation state ready for evaluation. */
   readonly state: SpriteInterpolationState<SpriteLocation>;
+  /** Indicates whether lerping is needed or an immediate snap is sufficient. */
   readonly requiresInterpolation: boolean;
 }
 

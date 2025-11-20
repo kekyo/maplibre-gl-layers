@@ -497,10 +497,6 @@ export interface SpriteUpdateEntryBase<TTag> {
 
 /**
  * Update entry describing a sprite image modification.
- *
- * @property {number} subLayer - Target sub-layer that contains the image.
- * @property {number} order - Order slot within the sub-layer.
- * @property {SpriteImageDefinitionUpdate | null} image - Update payload, or `null` to remove the image.
  */
 export interface SpriteImageDefinitionUpdateEntry {
   /** Target sub-layer that contains the image. */

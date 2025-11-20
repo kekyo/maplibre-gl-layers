@@ -82,25 +82,25 @@ const normalizeOptions = (
 
 /**
  * Parameters required to construct a {@link DegreeInterpolationState}.
- * @property {number} currentValue - Current numeric value rendered on screen.
- * @property {number} targetValue - Desired value after interpolation completes.
- * @property {number | undefined} previousCommandValue - Prior commanded value used for feed-forward prediction.
- * @property {SpriteInterpolationOptions} options - Timing and easing configuration.
  */
 export interface CreateDegreeInterpolationStateParams {
+  /** Current numeric value rendered on screen. */
   currentValue: number;
+  /** Desired value after interpolation completes. */
   targetValue: number;
+  /** Prior commanded value used for feed-forward prediction. */
   previousCommandValue?: number;
+  /** Timing and easing configuration. */
   options: SpriteInterpolationOptions;
 }
 
 /**
  * Result returned by {@link createDegreeInterpolationState} containing state and a flag for activation.
- * @property {DegreeInterpolationState} state - Resolved state object.
- * @property {boolean} requiresInterpolation - Indicates whether the caller should animate or snap.
  */
 export interface CreateDegreeInterpolationStateResult {
+  /** Resolved state object. */
   readonly state: SpriteInterpolationState<number>;
+  /** Indicates whether the caller should animate or snap. */
   readonly requiresInterpolation: boolean;
 }
 
@@ -158,23 +158,23 @@ export const createDegreeInterpolationState = (
 
 /**
  * Parameters describing interpolation evaluation state.
- * @property {DegreeInterpolationState} state - State generated via {@link createDegreeInterpolationState}.
- * @property {number} timestamp - Timestamp in milliseconds used to sample the interpolation curve.
  */
 export interface EvaluateDegreeInterpolationParams {
+  /** State generated via {@link createDegreeInterpolationState}. */
   state: SpriteInterpolationState<number>;
+  /** Timestamp in milliseconds used to sample the interpolation curve. */
   timestamp: number;
 }
 
 /**
  * Result of evaluating a numeric interpolation at a specific timestamp.
- * @property {number} value - Current interpolated value (or final value after completion).
- * @property {boolean} completed - Indicates whether interpolation reached the end.
- * @property {number} effectiveStartTimestamp - Start timestamp applied during evaluation.
  */
 export interface EvaluateDegreeInterpolationResult {
+  /** Current interpolated value (or final value after completion). */
   readonly value: number;
+  /** Indicates whether interpolation reached the end. */
   readonly completed: boolean;
+  /** Start timestamp applied during evaluation. */
   readonly effectiveStartTimestamp: number;
 }
 

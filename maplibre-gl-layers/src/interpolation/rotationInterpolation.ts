@@ -15,25 +15,25 @@ export { normalizeAngleDeg } from '../utils/math';
 
 /**
  * Parameters describing the rotation update request.
- * @property {number} currentAngleDeg - Current angle already applied to the sprite in degrees.
- * @property {number} targetAngleDeg - Desired angle in degrees that should be reached.
- * @property {number | undefined} previousCommandAngleDeg - Previous commanded angle for feed-forward prediction.
- * @property {SpriteInterpolationOptions | null} [options] - Optional interpolation configuration.
  */
 export interface ResolveRotationTargetParams {
+  /** Current angle already applied to the sprite in degrees. */
   currentAngleDeg: number;
+  /** Desired angle in degrees that should be reached. */
   targetAngleDeg: number;
+  /** Previous commanded angle for feed-forward prediction. */
   previousCommandAngleDeg?: number;
+  /** Optional interpolation configuration. */
   options?: SpriteInterpolationOptions | null;
 }
 
 /**
  * Result produced by {@link resolveRotationTarget} when determining the next rotation step.
- * @property {number} nextAngleDeg - Angle that should be applied immediately.
- * @property {DegreeInterpolationState | null} interpolationState - Optional state for animating toward the target.
  */
 export interface ResolveRotationTargetResult {
+  /** Angle that should be applied immediately. */
   readonly nextAngleDeg: number;
+  /** Optional state for animating toward the target. */
   readonly interpolationState: SpriteInterpolationState<number> | null;
 }
 
