@@ -17,7 +17,7 @@ import type { ProjectionHostParams } from '../../src/host/projectionHost';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
-  MutableSpriteInterpolatedLocationValues,
+  MutableSpriteInterpolatedValues,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
@@ -102,7 +102,7 @@ vi.mock('../../src/gl/shader', async (importOriginal) => {
 });
 
 import { createSpriteLayer } from '../../src/SpriteLayer';
-import type { SpriteLayerClickEvent } from '../../src/types';
+import type { SpriteLayerClickEvent, SpriteLocation } from '../../src/types';
 
 class FakeCanvas {
   readonly width: number;
@@ -910,7 +910,7 @@ describe('setInterpolationCalculation', () => {
       layer.render?.(gl, {} as any);
 
       const state = layer.getSpriteState('moving') as unknown as {
-        location: MutableSpriteInterpolatedLocationValues;
+        location: MutableSpriteInterpolatedValues<SpriteLocation>;
       };
       expect(state?.location.interpolation.state).toBeTruthy();
 

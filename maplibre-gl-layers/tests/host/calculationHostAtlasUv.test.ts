@@ -98,7 +98,6 @@ const createSpriteState = (
       interpolation: {
         state: null,
         options: null,
-        pendingOptions: null,
         lastCommandValue: location,
       },
     },

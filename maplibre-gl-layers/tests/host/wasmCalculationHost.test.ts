@@ -242,7 +242,6 @@ const createSprite = (
       interpolation: {
         state: null,
         options: null,
-        pendingOptions: null,
         lastCommandValue: location,
       },
     },

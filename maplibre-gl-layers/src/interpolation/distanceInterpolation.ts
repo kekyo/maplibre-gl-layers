@@ -10,7 +10,7 @@ import type {
   DistanceInterpolationEvaluationParams,
   DistanceInterpolationEvaluationResult,
   InternalSpriteImageState,
-  MutableSpriteValueInterpolation,
+  MutableSpriteInterpolation,
   SpriteInterpolationState,
 } from '../internalTypes';
 import { clampOpacity } from '../utils/math';
@@ -151,7 +151,7 @@ export const evaluateDistanceInterpolation = (
 interface DistanceInterpolationChannelDescriptor {
   readonly resolveInterpolation: (
     image: InternalSpriteImageState
-  ) => MutableSpriteValueInterpolation<number>;
+  ) => MutableSpriteInterpolation<number>;
   readonly normalize?: (value: number) => number;
   readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
   readonly applyFinalValue?: (

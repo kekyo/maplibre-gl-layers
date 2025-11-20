@@ -9,7 +9,7 @@ import { resolveEasing, type EasingFunction } from './easing';
 import type {
   DegreeInterpolationEvaluationResult,
   InternalSpriteImageState,
-  MutableSpriteValueInterpolation,
+  MutableSpriteInterpolation,
   SpriteInterpolationState,
 } from '../internalTypes';
 import { normalizeAngleDeg } from '../utils/math';
@@ -240,7 +240,7 @@ export const evaluateDegreeInterpolation = (
 interface DegreeInterpolationChannelDescriptor {
   readonly resolveInterpolation: (
     image: InternalSpriteImageState
-  ) => MutableSpriteValueInterpolation<number>;
+  ) => MutableSpriteInterpolation<number>;
   readonly normalize?: (value: number) => number;
   readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
   readonly applyFinalValue?: (

@@ -351,6 +351,8 @@ const createInterpolatedOffsetState = (
         state: null,
         options: null,
         lastCommandValue: base.offsetMeters,
+        baseValue: undefined,
+        targetValue: undefined,
       },
     },
     offsetDeg: {
@@ -362,6 +364,8 @@ const createInterpolatedOffsetState = (
         state: null,
         options: null,
         lastCommandValue: base.offsetDeg,
+        baseValue: undefined,
+        targetValue: undefined,
       },
     },
   };
@@ -499,6 +503,8 @@ export const createImageStateFromInit = (
         state: null,
         options: null,
         lastCommandValue: initialRotateDeg,
+        baseValue: undefined,
+        targetValue: undefined,
       },
     },
     rotationCommandDeg: initialRotateDeg,
@@ -1008,7 +1014,6 @@ export const createSpriteLayer = <T = any>(
     sprite.location.to = undefined;
     sprite.location.invalidated = true;
     sprite.location.interpolation.state = null;
-    sprite.location.interpolation.pendingOptions = null;
     sprite.location.interpolation.options = null;
     sprite.location.interpolation.lastCommandValue =
       cloneSpriteLocation(currentSnapshot);
@@ -2476,8 +2481,9 @@ export const createSpriteLayer = <T = any>(
         interpolation: {
           state: null,
           options: initialInterpolationOptions,
-          pendingOptions: initialInterpolationOptions,
           lastCommandValue: cloneSpriteLocation(currentLocation),
+          baseValue: undefined,
+          targetValue: undefined,
         },
       },
       images,
@@ -3269,12 +3275,10 @@ export const createSpriteLayer = <T = any>(
       if (update.interpolation === null) {
         // Explicit null clears any pending animations so the sprite snaps instantly.
         if (
-          locationInterpolation.pendingOptions !== null ||
           locationInterpolation.state !== null ||
           locationState.from !== undefined ||
           locationState.to !== undefined
         ) {
-          locationInterpolation.pendingOptions = null;
           locationInterpolation.state = null;
           locationInterpolation.options = null;
           locationState.from = undefined;
@@ -3286,13 +3290,12 @@ export const createSpriteLayer = <T = any>(
         const nextOptions = cloneInterpolationOptions(update.interpolation);
         // Replace the cached interpolation configuration only when a parameter changed.
         if (
-          !locationInterpolation.pendingOptions ||
-          locationInterpolation.pendingOptions.durationMs !==
-            nextOptions.durationMs ||
-          locationInterpolation.pendingOptions.mode !== nextOptions.mode ||
-          locationInterpolation.pendingOptions.easing !== nextOptions.easing
+          !locationInterpolation.options ||
+          locationInterpolation.options.durationMs !== nextOptions.durationMs ||
+          locationInterpolation.options.mode !== nextOptions.mode ||
+          locationInterpolation.options.easing !== nextOptions.easing
         ) {
-          locationInterpolation.pendingOptions = nextOptions;
+          locationInterpolation.options = nextOptions;
           updated = true;
         }
         interpolationOptionsForLocation = nextOptions;
@@ -3309,8 +3312,8 @@ export const createSpriteLayer = <T = any>(
       const optionsForLocation = interpolationExplicitlySpecified
         ? // When new interpolation parameters accompanied the update, prefer them (or null to disable).
           (interpolationOptionsForLocation ?? null)
-        : // Otherwise reuse any previously cached interpolation request.
-          locationInterpolation.pendingOptions;
+        : // Otherwise reuse any previously interpolation request.
+          locationInterpolation.options;
 
       const effectiveOptions =
         // Treat `undefined` as "no interpolation change" whereas explicit `null` disables interpolation.
@@ -3368,8 +3371,6 @@ export const createSpriteLayer = <T = any>(
       if (mapCurrentlyVisible && locationState.invalidated) {
         locationState.invalidated = false;
       }
-
-      locationInterpolation.pendingOptions = null;
 
       if (!mapCurrentlyVisible) {
         sprite.autoRotationInvalidated = true;

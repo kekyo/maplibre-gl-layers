@@ -33,6 +33,18 @@ import type { RgbaColor } from './utils/color';
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * Represents a projected three dimensional position.
+ * `MercatorCoordinate` uses the web mercator projection ([EPSG:3857](https://epsg.io/3857)) with slightly different units:
+ * - the size of 1 unit is the width of the projected world instead of the "mercator meter"
+ * - the origin of the coordinate space is at the north-west corner instead of the middle
+ */
+export interface SpriteMercatorCoordinate {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/**
  * The handle value that using the instance.
  */
 export type IdHandle = number;
@@ -203,15 +215,14 @@ export interface RenderTargetBucketBuffers {
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Represents a projected three dimensional position.
- * `MercatorCoordinate` uses the web mercator projection ([EPSG:3857](https://epsg.io/3857)) with slightly different units:
- * - the size of 1 unit is the width of the projected world instead of the "mercator meter"
- * - the origin of the coordinate space is at the north-west corner instead of the middle
+ * Mutable interpolation states.
  */
-export interface SpriteMercatorCoordinate {
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
+export interface MutableSpriteInterpolation<TValue> {
+  state: SpriteInterpolationState<TValue> | null;
+  options: Readonly<SpriteInterpolationOptions> | null;
+  lastCommandValue: TValue;
+  baseValue: TValue | undefined;
+  targetValue: TValue | undefined;
 }
 
 /**
@@ -224,37 +235,26 @@ export interface MutableSpriteInterpolatedValues<TValue>
   from: TValue | undefined;
   to: TValue | undefined;
   invalidated: boolean | undefined;
-  interpolation: MutableSpriteValueInterpolation<TValue>;
+  interpolation: MutableSpriteInterpolation<TValue>;
 }
 
-export interface MutableSpriteValueInterpolation<TValue> {
-  state: SpriteInterpolationState<TValue> | null;
-  options: Readonly<SpriteInterpolationOptions> | null;
-  lastCommandValue: TValue;
-  targetValue?: TValue;
-  baseValue?: TValue;
-}
-
-export interface MutableSpriteLocationInterpolation
-  extends MutableSpriteValueInterpolation<Readonly<SpriteLocation>> {
-  pendingOptions: Readonly<SpriteInterpolationOptions> | null;
-}
-
-export interface MutableSpriteManagedInterpolatedValues<TValue>
-  extends MutableSpriteInterpolatedValues<TValue> {
-  interpolation: MutableSpriteValueInterpolation<TValue>;
-}
-
-export interface MutableSpriteInterpolatedLocationValues
-  extends MutableSpriteInterpolatedValues<Readonly<SpriteLocation>> {
-  interpolation: MutableSpriteLocationInterpolation;
-}
+//export interface MutableSpriteLocationInterpolation
+//  extends MutableSpriteInterpolation<Readonly<SpriteLocation>> {
+//  pendingOptions: Readonly<SpriteInterpolationOptions> | null;
+//}
+//
+//export interface MutableSpriteInterpolatedLocationValues
+//  extends MutableSpriteInterpolatedValues<Readonly<SpriteLocation>> {
+//  interpolation: MutableSpriteLocationInterpolation;
+//}
 
 export interface MutableSpriteImageInterpolatedOffset
   extends SpriteImageInterpolatedOffset {
-  offsetMeters: MutableSpriteManagedInterpolatedValues<number>;
-  offsetDeg: MutableSpriteManagedInterpolatedValues<number>;
+  offsetMeters: MutableSpriteInterpolatedValues<number>;
+  offsetDeg: MutableSpriteInterpolatedValues<number>;
 }
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 export interface Releasable {
   readonly release: () => void;
@@ -717,7 +717,8 @@ export interface InternalSpriteCurrentState<TTag> {
   isEnabled: boolean;
   visibilityDistanceMeters?: number;
   opacityMultiplier: number;
-  location: MutableSpriteInterpolatedLocationValues;
+  //location: MutableSpriteInterpolatedLocationValues;
+  location: MutableSpriteInterpolatedValues<SpriteLocation>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
   lastAutoRotationLocation: Readonly<SpriteLocation>;

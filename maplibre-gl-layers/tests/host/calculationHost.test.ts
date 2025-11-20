@@ -44,7 +44,6 @@ import type {
   RenderInterpolationParams,
   MutableSpriteImageInterpolatedOffset,
   MutableSpriteInterpolatedValues,
-  MutableSpriteInterpolatedLocationValues,
   ResolvedSpriteImageLineAttribute,
   SpriteInterpolationState,
 } from '../../src/internalTypes';
@@ -85,7 +84,7 @@ const DEFAULT_CLIP_CONTEXT: ClipContext = { mercatorMatrix: IDENTITY_MATRIX };
 type SpriteStateOverrides = Partial<
   Omit<InternalSpriteCurrentState<null>, 'location'>
 > & {
-  location?: Partial<MutableSpriteInterpolatedLocationValues>;
+  location?: Partial<MutableSpriteInterpolatedValues<SpriteLocation>>;
   interpolationState?: SpriteInterpolationState<SpriteLocation> | null;
   pendingInterpolationOptions?: SpriteInterpolationOptions | null;
   lastCommandLocation?: SpriteLocation;
@@ -249,6 +248,8 @@ const cloneDistanceInterpolatedValues = (
       state: value?.interpolation?.state ?? null,
       options: value?.interpolation?.options ?? null,
       lastCommandValue: value?.interpolation?.lastCommandValue ?? current,
+      baseValue: undefined,
+      targetValue: undefined,
     },
   };
 };
@@ -267,6 +268,8 @@ const cloneDegreeInterpolatedValues = (
       state: value?.interpolation?.state ?? null,
       options: value?.interpolation?.options ?? null,
       lastCommandValue: value?.interpolation?.lastCommandValue ?? current,
+      baseValue: undefined,
+      targetValue: undefined,
     },
   };
 };
@@ -500,14 +503,12 @@ const createSpriteState = (
       state:
         interpolationOverride?.state ?? overrides.interpolationState ?? null,
       options: interpolationOverride?.options ?? null,
-      pendingOptions:
-        interpolationOverride?.pendingOptions ??
-        overrides.pendingInterpolationOptions ??
-        null,
       lastCommandValue:
         interpolationOverride?.lastCommandValue ??
         overrides.lastCommandLocation ??
         baseLocation,
+      baseValue: undefined,
+      targetValue: undefined,
     },
   };
 
