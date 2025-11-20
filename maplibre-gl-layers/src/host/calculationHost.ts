@@ -1566,7 +1566,7 @@ export const applyVisibilityDistanceLod = <TTag>(
     const baseOpacity =
       image.opacity.interpolation.baseValue ?? image.opacity.current;
     const combinedTarget = clampOpacity(
-      baseOpacity * (sprite.opacityMultiplier || 1) * lodMultiplier
+      baseOpacity * (sprite.opacityMultiplier ?? 1) * lodMultiplier
     );
     applyResolvedOpacityTarget(
       image,
@@ -1705,7 +1705,7 @@ const ensureOpacityInterpolationTarget = (
 ): void => {
   const target = clampOpacity(
     (image.opacity.interpolation.baseValue ?? image.opacity.current) *
-      (sprite.opacityMultiplier || 1) *
+      (sprite.opacityMultiplier ?? 1) *
       (image.lodOpacity ?? 1)
   );
   const interpolationState = image.opacity.interpolation.state;
