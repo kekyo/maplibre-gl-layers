@@ -668,12 +668,59 @@ spriteLayer.updateSprite('vehicle-lod', {
 });
 ```
 
+## Opacity and Show-up Control
+
+The opacity used for drawing is determined by multiplying the following three factors:
+
+1. The `opacity` value for each sprite image
+2. The opacity value from pseudo-LOD
+3. The sprite's `opacityMultiplier` value
+
+After multiplying these values, the result obtained through a dedicated opacity interpolator is used as the rendering opacity.
+Therefore, use `opacityMultiplier` if you want to apply a uniform opacity to all images of a sprite.
+
+```typescript
+// Make all images in the sprite layer semi-transparent
+spriteLayer.addSprite('vehicle-half', {
+  location: { lng: 136.8852, lat: 35.17 },
+  opacityMultiplier: 0.5,  // Semi-transparent
+  images: [
+    // ...
+  ],
+});
+```
+
+On the demo page, you can test switching between elements 1 and 3 using the `Wave` and `Wave All` buttons.
+
+Additionally, `isEnabled` serves as the value for toggling a sprite's visibility.
+This switches the sprite's rendering pipeline on or off.
+Therefore, setting `isEnabled` to `false` is strictly different from the opacity calculation result being 0.0.
+
+```typescript
+// Disable the sprite
+spriteLayer.addSprite('vehicle-half', {
+  location: { lng: 136.8852, lat: 35.17 },
+  isEnabled: false,  // Disabled
+  images: [
+    // ...
+  ],
+});
+```
+
+Setting `isEnabled` to `false` significantly reduces calculations for that sprite, which can be used to improve performance.
+However, if your goal is to hide the sprite, be aware that it will disappear suddenly.
+This means no interpolation processing is applied until the sprite vanishes.
+If interpolation during disappearance is needed for accent effects, you must apply an opacity of 0.0.
+
+Note: When the opacity calculation result is 0.0, the first-step coordinate processing is performed,
+but the data transfer to WebGL and the actual display (by GPU shader) are skipped.
+Therefore, hiding elements using opacity also has some impact on performance.
+
 ## Borders
 
 Each sprite image can draw its own border.
 This helps emphasize an icon or show selection state without changing the texture itself.
 Additionally, the event handler described later indicates the area used as the criteria for determining the sprite image.
-
 
 ![borders](./images/borders1.png)
 
