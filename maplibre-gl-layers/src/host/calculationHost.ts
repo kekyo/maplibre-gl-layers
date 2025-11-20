@@ -115,6 +115,7 @@ import { evaluateInterpolation } from '../interpolation/interpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
+  applyResolvedOpacityTarget,
 } from '../interpolation/interpolationChannels';
 
 const resolveImageOffset = (
@@ -1528,12 +1529,10 @@ const prepareDrawSpriteImages = <TTag>(
   return preparedItems;
 };
 
-const resolveVisibilityTargetOpacity = <TTag>(
+const resolveVisibilityLodMultiplier = <TTag>(
   sprite: InternalSpriteCurrentState<TTag>,
-  image: InternalSpriteImageState,
   cameraDistanceMeters: number
 ): number => {
-  const baseOpacity = clampOpacity(image.lastCommandOpacity);
   const threshold = sprite.visibilityDistanceMeters;
   if (
     threshold === undefined ||
@@ -1541,9 +1540,9 @@ const resolveVisibilityTargetOpacity = <TTag>(
     threshold <= 0 ||
     !Number.isFinite(cameraDistanceMeters)
   ) {
-    return baseOpacity;
+    return 1;
   }
-  return cameraDistanceMeters >= threshold ? 0 : baseOpacity;
+  return cameraDistanceMeters >= threshold ? 0 : 1;
 };
 
 export const applyVisibilityDistanceLod = <TTag>(
@@ -1555,18 +1554,25 @@ export const applyVisibilityDistanceLod = <TTag>(
   for (const prepared of preparedItems) {
     const image = prepared.imageEntry;
     const sprite = prepared.spriteEntry;
-    const targetOpacity = resolveVisibilityTargetOpacity(
+    const lodMultiplier = resolveVisibilityLodMultiplier(
       sprite,
-      image,
       prepared.cameraDistanceMeters
     );
-    if (
-      !Number.isFinite(image.opacityTargetValue) ||
-      Math.abs(image.opacityTargetValue - targetOpacity) >
-        OPACITY_TARGET_EPSILON
-    ) {
-      image.opacityTargetValue = targetOpacity;
+    const previousLod = image.lodOpacity ?? 1;
+    if (Math.abs(previousLod - lodMultiplier) <= OPACITY_TARGET_EPSILON) {
+      continue;
     }
+    image.lodOpacity = lodMultiplier;
+    const baseOpacity =
+      image.opacity.interpolation.baseValue ?? image.opacity.current;
+    const combinedTarget = clampOpacity(
+      baseOpacity * (sprite.opacityMultiplier || 1) * lodMultiplier
+    );
+    applyResolvedOpacityTarget(
+      image,
+      combinedTarget,
+      image.opacity.interpolation.options ?? null
+    );
   }
 };
 
@@ -1656,7 +1662,7 @@ const defaultInterpolationEvaluationHandlers: ProcessInterpolationsEvaluationHan
 
 interface SpriteInterpolationWorkItem<TTag> {
   readonly sprite: InternalSpriteCurrentState<TTag>;
-  readonly state: SpriteInterpolationState;
+  readonly state: SpriteInterpolationState<SpriteLocation>;
 }
 
 const applySpriteInterpolationEvaluations = <TTag>(
@@ -1685,7 +1691,7 @@ const applySpriteInterpolationEvaluations = <TTag>(
       sprite.location.current = cloneSpriteLocation(state.to);
       sprite.location.from = undefined;
       sprite.location.to = undefined;
-      sprite.interpolationState = null;
+      sprite.location.interpolation.state = null;
     } else {
       active = true;
     }
@@ -1694,16 +1700,17 @@ const applySpriteInterpolationEvaluations = <TTag>(
 };
 
 const ensureOpacityInterpolationTarget = (
+  sprite: InternalSpriteCurrentState<any>,
   image: InternalSpriteImageState
 ): void => {
   const target = clampOpacity(
-    image.opacityTargetValue ??
-      image.lastCommandOpacity ??
-      image.opacity.current
+    (image.opacity.interpolation.baseValue ?? image.opacity.current) *
+      (sprite.opacityMultiplier || 1) *
+      (image.lodOpacity ?? 1)
   );
-  const interpolationState = image.opacityInterpolationState;
+  const interpolationState = image.opacity.interpolation.state;
   const currentStateTarget = interpolationState
-    ? clampOpacity(interpolationState.finalValue)
+    ? clampOpacity(interpolationState.pathTarget ?? interpolationState.to)
     : image.opacity.current;
   if (interpolationState) {
     if (Math.abs(currentStateTarget - target) <= OPACITY_TARGET_EPSILON) {
@@ -1714,20 +1721,18 @@ const ensureOpacityInterpolationTarget = (
     Math.abs(image.opacity.current - target) <= OPACITY_TARGET_EPSILON
   ) {
     // No interpolation state and current opacity already matches the target.
-    image.lodLastCommandOpacity = target;
     return;
   }
-  const options = image.opacityInterpolationOptions;
+  const options = image.opacity.interpolation.options;
   if (options && options.durationMs > 0) {
     const { state, requiresInterpolation } = createDistanceInterpolationState({
       currentValue: clampOpacity(image.opacity.current),
       targetValue: target,
-      previousCommandValue: image.lodLastCommandOpacity,
+      previousCommandValue: image.opacity.interpolation.lastCommandValue,
       options,
     });
-    image.lodLastCommandOpacity = target;
     if (requiresInterpolation) {
-      image.opacityInterpolationState = state;
+      image.opacity.interpolation.state = state;
       image.opacity.from = image.opacity.current;
       image.opacity.to = target;
       return;
@@ -1736,8 +1741,9 @@ const ensureOpacityInterpolationTarget = (
   image.opacity.current = target;
   image.opacity.from = undefined;
   image.opacity.to = undefined;
-  image.opacityInterpolationState = null;
-  image.lodLastCommandOpacity = target;
+  image.opacity.interpolation.state = null;
+  image.opacity.interpolation.lastCommandValue = target;
+  image.opacity.interpolation.targetValue = target;
 };
 
 export const processInterpolationsInternal = <TTag>(
@@ -1760,7 +1766,8 @@ export const processInterpolationsInternal = <TTag>(
   let hasActiveInterpolation = false;
 
   for (const sprite of sprites) {
-    const state = sprite.interpolationState;
+    const locationInterpolation = sprite.location.interpolation;
+    const state = locationInterpolation.state;
     if (state) {
       spriteInterpolationWorkItems.push({ sprite, state });
     }
@@ -1768,7 +1775,7 @@ export const processInterpolationsInternal = <TTag>(
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
         const hasOffsetMetersInterpolation =
-          image.offsetMetersInterpolationState !== null;
+          image.offset.offsetMeters.interpolation.state !== null;
         if (hasOffsetMetersInterpolation) {
           collectDistanceInterpolationWorkItems(
             image,
@@ -1779,14 +1786,14 @@ export const processInterpolationsInternal = <TTag>(
           );
         }
 
-        ensureOpacityInterpolationTarget(image);
+        ensureOpacityInterpolationTarget(sprite, image);
 
         const hasOpacityInterpolation =
-          image.opacityInterpolationState !== null;
+          image.opacity.interpolation.state !== null;
 
         const hasDegreeInterpolation =
-          image.rotationInterpolationState !== null ||
-          image.offsetDegInterpolationState !== null;
+          image.rotateDeg.interpolation.state !== null ||
+          image.offset.offsetDeg.interpolation.state !== null;
         if (hasDegreeInterpolation) {
           collectDegreeInterpolationWorkItems(
             image,
@@ -1925,8 +1932,8 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
   for (const sprite of sprites) {
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
-        ensureOpacityInterpolationTarget(image);
-        if (image.opacityInterpolationState !== null) {
+        ensureOpacityInterpolationTarget(sprite, image);
+        if (image.opacity.interpolation.state !== null) {
           collectDistanceInterpolationWorkItems(image, opacityWorkItems, {
             includeOffsetMeters: false,
           });

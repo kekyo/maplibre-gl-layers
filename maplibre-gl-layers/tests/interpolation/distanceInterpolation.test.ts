@@ -21,7 +21,7 @@ describe('createDistanceInterpolationState', () => {
     expect(requiresInterpolation).toBe(true);
     expect(state.from).toBe(180);
     expect(state.to).toBe(0);
-    expect(state.finalValue).toBe(0);
+    expect(state.pathTarget).toBeUndefined();
   });
 
   it('performs feedforward extrapolation without wrapping', () => {
@@ -32,8 +32,8 @@ describe('createDistanceInterpolationState', () => {
       options: { durationMs: 1000, mode: 'feedforward' },
     });
 
-    expect(state.to).toBe(180);
-    expect(state.finalValue).toBe(180);
+    expect(state.pathTarget).toBe(180);
+    expect(state.to).toBe(150);
   });
 
   it('disables interpolation when duration is zero', () => {

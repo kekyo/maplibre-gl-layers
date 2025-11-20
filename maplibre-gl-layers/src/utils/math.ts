@@ -167,21 +167,21 @@ export const multiplyMatrixAndVector = (
 
 /**
  * Structure holding resolved sprite scaling options.
- * @property {number} metersPerPixel - Effective number of meters represented by each rendered pixel.
- * @property {number} zoomMin - Lowest zoom level at which scaling interpolation begins.
- * @property {number} zoomMax - Highest zoom level at which scaling interpolation ends.
- * @property {number} scaleMin - Scale multiplier applied at {@link ResolvedSpriteScalingOptions.zoomMin}.
- * @property {number} scaleMax - Scale multiplier applied at {@link ResolvedSpriteScalingOptions.zoomMax}.
- * @property {number} spriteMinPixel - Lower clamp for sprite size in pixels.
- * @property {number} spriteMaxPixel - Upper clamp for sprite size in pixels.
  */
 export interface ResolvedSpriteScalingOptions {
+  /** Effective number of meters represented by each rendered pixel. */
   metersPerPixel: number;
+  /** Lowest zoom level at which scaling interpolation begins. */
   zoomMin: number;
+  /** Highest zoom level at which scaling interpolation ends. */
   zoomMax: number;
+  /** Scale multiplier applied at {@link ResolvedSpriteScalingOptions.zoomMin}. */
   scaleMin: number;
+  /** Scale multiplier applied at {@link ResolvedSpriteScalingOptions.zoomMax}. */
   scaleMax: number;
+  /** Lower clamp for sprite size in pixels. */
   spriteMinPixel: number;
+  /** Upper clamp for sprite size in pixels. */
   spriteMaxPixel: number;
 }
 
@@ -999,54 +999,53 @@ export type ProjectLngLatFn = (
 
 /**
  * Parameters required to resolve a billboard center position.
- * @typedef BillboardCenterParams
- * @property {SpriteScreenPoint} base - Reference screen-space position (usually anchor point).
- * @property {number} [imageWidth] - Source bitmap width in pixels.
- * @property {number} [imageHeight] - Source bitmap height in pixels.
- * @property {number} baseMetersPerPixel - Meters represented by a pixel at the sprite latitude.
- * @property {number} imageScale - User-provided scaling multiplier.
- * @property {number} zoomScaleFactor - Zoom-dependent scale multiplier.
- * @property {number} effectivePixelsPerMeter - Pixels per meter after perspective adjustments.
- * @property {number} spriteMinPixel - Lower clamp for the sprite's largest pixel dimension.
- * @property {number} spriteMaxPixel - Upper clamp for the sprite's largest pixel dimension.
- * @property {number} totalRotateDeg - Aggregate rotation applied to the sprite in degrees.
- * @property {SpriteAnchor} [anchor] - Anchor definition normalized between -1 and 1.
- * @property {SpriteImageOffset} [offset] - Offset definition applied in meters/deg.
  */
 export interface BillboardCenterParams {
+  /** Reference screen-space position (usually anchor point). */
   base: Readonly<SpriteScreenPoint>;
+  /** Source bitmap width in pixels. */
   imageWidth?: number;
+  /** Source bitmap height in pixels. */
   imageHeight?: number;
+  /** Meters represented by a pixel at the sprite latitude. */
   baseMetersPerPixel: number;
+  /** User-provided scaling multiplier. */
   imageScale: number;
+  /** Zoom-dependent scale multiplier. */
   zoomScaleFactor: number;
+  /** Pixels per meter after perspective adjustments. */
   effectivePixelsPerMeter: number;
+  /** Lower clamp for the sprite's largest pixel dimension. */
   spriteMinPixel: number;
+  /** Upper clamp for the sprite's largest pixel dimension. */
   spriteMaxPixel: number;
+  /** Aggregate rotation applied to the sprite in degrees. */
   totalRotateDeg: number;
+  /** Anchor definition normalized between -1 and 1. */
   anchor?: Readonly<SpriteAnchor>;
+  /** Offset definition applied in meters/deg. */
   offset?: Readonly<SpriteImageOffset>;
 }
 
 /**
  * Resolved properties describing the billboard center and derived dimensions.
- * @typedef BillboardCenterResult
- * @property {SpriteScreenPoint} center - Screen-space coordinate after offset adjustments.
- * @property {number} halfWidth - Half of the clamped pixel width.
- * @property {number} halfHeight - Half of the clamped pixel height.
- * @property {number} pixelWidth - Full pixel width after scaling and clamping.
- * @property {number} pixelHeight - Full pixel height after scaling and clamping.
- * @property {SpritePoint} anchorShift - Pixel delta caused by anchor rotation.
- * @property {SpritePoint} offsetShift - Pixel delta caused by radial offset.
  */
 export interface BillboardCenterResult {
+  /** Screen-space coordinate after offset adjustments. */
   center: SpriteScreenPoint;
+  /** Half of the clamped pixel width. */
   halfWidth: number;
+  /** Half of the clamped pixel height. */
   halfHeight: number;
+  /** Full pixel width after scaling and clamping. */
   pixelWidth: number;
+  /** Full pixel height after scaling and clamping. */
   pixelHeight: number;
+  /** Pixel delta caused by anchor rotation. */
   anchorShift: SpritePoint;
+  /** Pixel delta caused by radial offset. */
   offsetShift: SpritePoint;
+  /** Scaling adjustment applied during pixel dimension calculation. */
   scaleAdjustment: number;
 }
 
@@ -1122,29 +1121,27 @@ export const calculateBillboardCenterPosition = (
 
 /**
  * Parameters controlling how billboard corners are computed in screen space.
- * @typedef BillboardCornerParams
- * @property {SpriteScreenPoint} center - Screen-space coordinate for the billboard center after offsets.
- * @property {number} halfWidth - Half of the billboard width in pixels.
- * @property {number} halfHeight - Half of the billboard height in pixels.
- * @property {SpriteAnchor} [anchor] - Optional anchor definition normalized between -1 and 1.
- * @property {number} totalRotateDeg - Total rotation applied to the billboard in degrees.
  */
 export interface BillboardCornerParams {
+  /** Screen-space coordinate for the billboard center after offsets. */
   center: Readonly<SpriteScreenPoint>;
+  /** Half of the billboard width in pixels. */
   halfWidth: number;
+  /** Half of the billboard height in pixels. */
   halfHeight: number;
+  /** Optional anchor definition normalized between -1 and 1. */
   anchor?: Readonly<SpriteAnchor>;
+  /** Total rotation applied to the billboard in degrees. */
   totalRotateDeg: number;
 }
 
 /**
  * Screen-space coordinates combined with UV data for a quad corner.
- * @typedef QuadCorner
- * @property {number} u - Texture u coordinate.
- * @property {number} v - Texture v coordinate.
  */
 export interface QuadCorner extends SpriteScreenPoint {
+  /** Texture u coordinate. */
   readonly u: number;
+  /** Texture v coordinate. */
   readonly v: number;
 }
 
@@ -1278,69 +1275,67 @@ export const computeSurfaceCornerShaderModel = (
 
 /**
  * Parameters for projecting a surface sprite's center into screen space.
- * @typedef SurfaceCenterParams
- * @property {SpriteLocation} baseLngLat - Base geographic location of the sprite.
- * @property {number} [imageWidth] - Source bitmap width in pixels.
- * @property {number} [imageHeight] - Source bitmap height in pixels.
- * @property {number} baseMetersPerPixel - Base meters per pixel at the sprite latitude.
- * @property {number} imageScale - User-provided scaling multiplier.
- * @property {number} zoomScaleFactor - Zoom-dependent scale multiplier.
- * @property {number} totalRotateDeg - Rotation applied to the sprite in degrees.
- * @property {SpriteAnchor} [anchor] - Anchor definition normalized between -1 and 1.
- * @property {SpriteImageOffset} [offset] - Offset definition applied in meters/deg.
- * @property {number} [effectivePixelsPerMeter] - Conversion rate from meters to on-screen pixels.
- * @property {number} [spriteMinPixel] - Lower clamp for the sprite's largest pixel dimension.
- * @property {number} [spriteMaxPixel] - Upper clamp for the sprite's largest pixel dimension.
- * @property {ProjectLngLatFn} [project] - Projection function mapping longitude/latitude to screen space.
- * @property {ProjectToClipSpaceFn} [projectToClipSpace] - Projection into clip space when available.
- * @property {number} [drawingBufferWidth] - WebGL drawing buffer width in device pixels.
- * @property {number} [drawingBufferHeight] - WebGL drawing buffer height in device pixels.
- * @property {number} [pixelRatio] - Device pixel ratio relating CSS pixels to device pixels.
- * @property {boolean} [resolveAnchorless] - When true, also computes the anchorless center.
  */
 export interface SurfaceCenterParams {
+  /** Base geographic location of the sprite. */
   baseLngLat: Readonly<SpriteLocation>;
+  /** Source bitmap width in pixels. */
   imageWidth?: number;
+  /** Source bitmap height in pixels. */
   imageHeight?: number;
+  /** Base meters per pixel at the sprite latitude. */
   baseMetersPerPixel: number;
+  /** User-provided scaling multiplier. */
   imageScale: number;
+  /** Zoom-dependent scale multiplier. */
   zoomScaleFactor: number;
+  /** Rotation applied to the sprite in degrees. */
   totalRotateDeg: number;
+  /** Anchor definition normalized between -1 and 1. */
   anchor?: Readonly<SpriteAnchor>;
+  /** Offset definition applied in meters/deg. */
   offset?: Readonly<SpriteImageOffset>;
+  /** Conversion rate from meters to on-screen pixels. */
   effectivePixelsPerMeter?: number;
+  /** Lower clamp for the sprite's largest pixel dimension. */
   spriteMinPixel?: number;
+  /** Upper clamp for the sprite's largest pixel dimension. */
   spriteMaxPixel?: number;
+  /** Projection function mapping longitude/latitude to screen space. */
   project?: ProjectLngLatFn;
+  /** Projection into clip space when available. */
   projectToClipSpace?: ProjectToClipSpaceFn;
+  /** WebGL drawing buffer width in device pixels. */
   drawingBufferWidth?: number;
+  /** WebGL drawing buffer height in device pixels. */
   drawingBufferHeight?: number;
+  /** Device pixel ratio relating CSS pixels to device pixels. */
   pixelRatio?: number;
+  /** When true, also computes the anchorless center. */
   resolveAnchorless?: boolean;
 }
 
 /**
  * Output describing the resolved surface center and displacement details.
- * @typedef SurfaceCenterResult
- * @property {SpriteScreenPoint | undefined} center - Projected screen coordinates or `undefined` when projection fails.
- * @property {{ width: number; height: number; scaleAdjustment: number }} worldDimensions - Sprite dimensions in world meters.
- * @property {SurfaceCorner} totalDisplacement - Combined anchor and offset displacement in meters.
- * @property {SpriteLocation} displacedLngLat - Geographic coordinates after applying displacement.
- * @property {SpriteScreenPoint | null | undefined} [anchorlessCenter] - Anchorless screen coordinates when requested.
- * @property {SurfaceCorner | undefined} [anchorlessDisplacement] - Offset-only displacement when requested.
- * @property {SpriteLocation | undefined} [anchorlessLngLat] - Anchorless geographic coordinate when requested.
  */
 export interface SurfaceCenterResult {
+  /** Projected screen coordinates or `undefined` when projection fails. */
   center: Readonly<SpriteScreenPoint> | undefined;
+  /** Sprite dimensions in world meters. */
   worldDimensions: Readonly<{
     width: number;
     height: number;
     scaleAdjustment: number;
   }>;
+  /** Combined anchor and offset displacement in meters. */
   totalDisplacement: Readonly<SurfaceCorner>;
+  /** Geographic coordinates after applying displacement. */
   displacedLngLat: Readonly<SpriteLocation>;
+  /** Anchorless screen coordinates when requested. */
   anchorlessCenter?: Readonly<SpriteScreenPoint> | null;
+  /** Offset-only displacement when requested. */
   anchorlessDisplacement?: Readonly<SurfaceCorner>;
+  /** Anchorless geographic coordinate when requested. */
   anchorlessLngLat?: Readonly<SpriteLocation>;
 }
 
@@ -1466,29 +1461,27 @@ export const calculateSurfaceCenterPosition = (
 
 /**
  * Parameters describing how to compute each surface corner displacement.
- * @typedef SurfaceCornerParams
- * @property {number} worldWidthMeters - Width of the sprite footprint in meters.
- * @property {number} worldHeightMeters - Height of the sprite footprint in meters.
- * @property {SpriteAnchor} anchor - Anchor definition normalized between -1 and 1.
- * @property {number} totalRotateDeg - Rotation applied to the surface in degrees.
- * @property {SurfaceCorner} offsetMeters - Additional displacement applied uniformly to all corners.
  */
 export interface SurfaceCornerParams {
+  /** Width of the sprite footprint in meters. */
   worldWidthMeters: number;
+  /** Height of the sprite footprint in meters. */
   worldHeightMeters: number;
+  /** Anchor definition normalized between -1 and 1. */
   anchor: Readonly<SpriteAnchor>;
+  /** Rotation applied to the surface in degrees. */
   totalRotateDeg: number;
+  /** Additional displacement applied uniformly to all corners. */
   offsetMeters: Readonly<SurfaceCorner>;
 }
 
 /**
  * East/north displacement for an individual surface corner.
- * @typedef SurfaceCorner
- * @property {number} east - Eastward offset in meters relative to the base center.
- * @property {number} north - Northward offset in meters relative to the base center.
  */
 export interface SurfaceCorner {
+  /** Eastward offset in meters relative to the base center. */
   readonly east: number;
+  /** Northward offset in meters relative to the base center. */
   readonly north: number;
 }
 

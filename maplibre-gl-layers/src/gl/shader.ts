@@ -24,6 +24,7 @@ import type {
   RegisteredImage,
   Releasable,
   ResolvedTextureFilteringOptions,
+  RgbaColor,
   SurfaceShaderInputs,
 } from '../internalTypes';
 import type {
@@ -32,7 +33,6 @@ import type {
   AtlasPageState,
 } from './atlas';
 import { DEG2RAD, UV_CORNERS } from '../const';
-import type { RgbaColor } from '../utils/color';
 import { DEFAULT_TEXTURE_FILTERING_OPTIONS } from '../default';
 
 //////////////////////////////////////////////////////////////////////////////////////

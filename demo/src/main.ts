@@ -30,11 +30,13 @@ import type {
   SpriteAnchor,
   SpriteImageInterpolationOptions,
   SpriteImageDefinitionUpdate,
+  SpriteImageState,
+  SpriteCurrentState,
   SpriteInitEntry,
   SpriteTextGlyphOptions,
   SpriteImageRegisterOptions,
   SpriteLayerInterface,
-  SpriteEasing,
+  SpriteEasingParam,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -106,9 +108,14 @@ const INITIAL_NUMBER_OF_SPRITES = isTestMode ? 1 : 1000;
  * Interval in milliseconds between movement updates.
  */
 const MOVEMENT_INTERVAL_MS = 1000;
+/**
+ * Interval in milliseconds between selected sprite detail refreshes.
+ */
+const SELECTED_SPRITE_REFRESH_INTERVAL_MS = 100;
 
 /** Opacity waving sequence */
 const PRIMARY_OPACITY_WAVING_SEQUENCE = [0.4, 1.0] as const;
+const ALL_SPRITE_OPACITY_WAVING_SEQUENCE = [0.4, 1.0] as const;
 
 /** Minimum pseudo LOD distance in meters applied when enabled. */
 const PSEUDO_LOD_DISTANCE_MIN_METERS = 5000;
@@ -158,13 +165,12 @@ const mapSourceSpecification: SourceSpecifications = {
 const SPRITE_LAYER_ID = 'demo-sprite';
 
 /**
- * @typedef {Object} IconSpec
- * @property {string} id - Identifier used when registering the image in the MapLibre overlay.
- * @property {string} color - Fill color applied when drawing the arrow icon.
  * Referenced while `createArrowBitmap` builds the ImageBitmap.
  */
 type IconSpec = {
+  /** Identifier used when registering the image in the MapLibre overlay. */
   id: string;
+  /** Fill color applied when drawing the arrow icon. */
   color: string;
 };
 
@@ -239,10 +245,14 @@ const SECONDARY_LEADER_LINE_STYLE = {
   color: '#00aa00',
   widthMeters: 4,
 } as const;
-/** Distance in meters that secondary images orbit from their primary marker. */
-const SECONDARY_ORBIT_RADIUS_METERS = 180;
+
+/** Distance in meters that secondary images orbit image from their primary marker. */
+const SECONDARY_ORBIT_IMAGE_RADIUS_METERS = 180;
+/** Distance in meters that secondary images orbit image from their primary marker. */
+const SECONDARY_ORBIT_TEXT_RADIUS_METERS = 270;
+
 /** Angular increment in degrees applied to the orbiting image during each step. */
-const SECONDARY_ORBIT_STEP_DEG = 45;
+const SECONDARY_ORBIT_STEP_DEG = 90;
 /** Fixed angle (deg) used when the orbit mode is set to Shift. */
 const SECONDARY_SHIFT_ANGLE_DEG = 120;
 
@@ -525,37 +535,31 @@ const generatePseudoLodDistanceMeters = (): number => {
  * Internal types used to manage sprite state in the demo, including velocity vectors
  * and rendering modes required for animation.
  */
-/**
- * @typedef {Object} LinearPath
- * @property {number} startLng - Starting longitude.
- * @property {number} startLat - Starting latitude.
- * @property {number} endLng - Ending longitude reached in linear animation mode.
- * @property {number} endLat - Ending latitude reached in linear animation mode.
- * @property {number} progress - Progress along the segment (0.0–1.0). Looping is achieved by incrementing and wrapping this value.
- * @property {number} speed - Fractional step size. Multiplied by MOVEMENT_STEP_FACTOR to obtain actual movement.
- */
 interface LinearPath {
+  /** Starting longitude. */
   startLng: number;
+  /** Starting latitude. */
   startLat: number;
+  /** Ending longitude reached in linear animation mode. */
   endLng: number;
+  /** Ending latitude reached in linear animation mode. */
   endLat: number;
+  /** Progress along the segment (0.0–1.0). Looping is achieved by incrementing and wrapping this value. */
   progress: number;
+  /** Fractional step size. Multiplied by MOVEMENT_STEP_FACTOR to obtain actual movement. */
   speed: number;
 }
 
-/**
- * @typedef {Object} DemoSpriteTag
- * @property {number} dx - Longitude velocity used in the previous step. Updated when reflecting at bounds.
- * @property {number} dy - Latitude velocity used in the previous step.
- * @property {LinearPath} [path] - Travel path when linear mode is active. Undefined during random walk mode.
- * @property {number} lastStepLng - Previous longitude delta applied. Used to compute orientation.
- * @property {number} lastStepLat - Previous latitude delta applied.
- */
 interface DemoSpriteTag {
+  /** Longitude velocity used in the previous step. Updated when reflecting at bounds. */
   dx: number;
+  /** Latitude velocity used in the previous step. */
   dy: number;
+  /** Travel path when linear mode is active. Undefined during random walk mode. */
   path?: LinearPath;
+  /** Previous longitude delta applied. Used to compute orientation. */
   lastStepLng: number;
+  /** Previous latitude delta applied. */
   lastStepLat: number;
   orderIndex: number;
   iconSpecId: string;
@@ -564,12 +568,11 @@ interface DemoSpriteTag {
 }
 
 /**
- * @typedef {'random'|'linear'} AnimationMode
  * `random` performs a boundary-reflecting random walk, while `linear` loops over predefined paths.
  */
 type AnimationMode = 'random' | 'linear';
 
-type PrimaryOpacityMode = 'show' | 'wave';
+type PrimaryOpacityMode = 'show' | 'wave' | 'waveAll';
 
 /** Identifiers for the base maps available in the demo. */
 type BasemapId = 'osm' | 'carto';
@@ -579,22 +582,26 @@ const EASING_OPTION_PRESETS = [
   {
     key: 'linear',
     label: 'Linear',
-    easing: { type: 'linear' } as SpriteEasing,
+    easing: { type: 'linear' } as SpriteEasingParam,
   },
   {
     key: 'ease-in',
     label: 'Ease In (pow 3)',
-    easing: { type: 'ease', mode: 'in', power: 3 } as SpriteEasing,
+    easing: { type: 'ease', mode: 'in', power: 3 } as SpriteEasingParam,
   },
   {
     key: 'ease-out',
     label: 'Ease Out (pow 3)',
-    easing: { type: 'ease', mode: 'out', power: 3 } as SpriteEasing,
+    easing: { type: 'ease', mode: 'out', power: 3 } as SpriteEasingParam,
   },
   {
     key: 'ease-in-out',
     label: 'Ease In-Out (pow 4)',
-    easing: { type: 'ease', mode: 'in-out', power: 4 } as SpriteEasing,
+    easing: {
+      type: 'ease',
+      mode: 'in-out',
+      power: 4,
+    } as SpriteEasingParam,
   },
   {
     key: 'exponential',
@@ -603,32 +610,40 @@ const EASING_OPTION_PRESETS = [
       type: 'exponential',
       exponent: 6,
       mode: 'in-out',
-    } as SpriteEasing,
+    } as SpriteEasingParam,
   },
   {
     key: 'quadratic',
     label: 'Quadratic (in)',
-    easing: { type: 'quadratic', mode: 'in' } as SpriteEasing,
+    easing: { type: 'quadratic', mode: 'in' } as SpriteEasingParam,
   },
   {
     key: 'cubic',
     label: 'Cubic (out)',
-    easing: { type: 'cubic', mode: 'out' } as SpriteEasing,
+    easing: { type: 'cubic', mode: 'out' } as SpriteEasingParam,
   },
   {
     key: 'sine',
     label: 'Sine (in-out, amp 1.2)',
-    easing: { type: 'sine', mode: 'in-out', amplitude: 1.2 } as SpriteEasing,
+    easing: {
+      type: 'sine',
+      mode: 'in-out',
+      amplitude: 1.2,
+    } as SpriteEasingParam,
   },
   {
     key: 'bounce',
     label: 'Bounce (4x, 0.7)',
-    easing: { type: 'bounce', bounces: 4, decay: 0.7 } as SpriteEasing,
+    easing: {
+      type: 'bounce',
+      bounces: 4,
+      decay: 0.7,
+    } as SpriteEasingParam,
   },
   {
     key: 'back',
     label: 'Back (overshoot 2.2)',
-    easing: { type: 'back', overshoot: 2.2 } as SpriteEasing,
+    easing: { type: 'back', overshoot: 2.2 } as SpriteEasingParam,
   },
 ] as const;
 
@@ -636,7 +651,9 @@ type EasingOptionKey = (typeof EASING_OPTION_PRESETS)[number]['key'];
 
 const isEasingEnabled = (key: EasingOptionKey): boolean => key !== 'off';
 
-const resolveEasingOption = (key: EasingOptionKey): SpriteEasing | undefined =>
+const resolveEasingOption = (
+  key: EasingOptionKey
+): SpriteEasingParam | undefined =>
   EASING_OPTION_PRESETS.find((entry) => entry.key === key)?.easing;
 
 const renderEasingOptions = (current: EasingOptionKey): string =>
@@ -663,6 +680,7 @@ let requestedCalculationVariant: SpriteLayerCalculationVariant = 'simd';
 let spriteScalingMode: 'standard' | 'unlimited' = 'unlimited';
 let showSpriteBorders = false;
 let selectedSpriteId: string | null = null;
+let selectedSpriteImageRef: { subLayer: number; order: number } | null = null;
 /** Interpolation mode applied to sprite location updates. */
 let locationInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether the primary image uses rotation interpolation. */
@@ -695,7 +713,7 @@ let isSecondaryLeaderLineEnabled = false;
 let orbitDegEasingKey: EasingOptionKey = 'linear';
 let isOrbitDegInterpolationEnabled = isEasingEnabled(orbitDegEasingKey);
 /** Whether we interpolate the orbital distance of the secondary image. */
-let orbitMetersEasingKey: EasingOptionKey = 'exponential';
+let orbitMetersEasingKey: EasingOptionKey = 'sine';
 let isOrbitMetersInterpolationEnabled = isEasingEnabled(orbitMetersEasingKey);
 /** Interpolation mode applied to orbital angle changes. */
 let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
@@ -705,6 +723,8 @@ let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
 let isMouseEventsMonitoringEnabled = false;
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
+/** Timer handle for selected sprite detail updates. */
+let selectedSpriteDetailsIntervalId: number | undefined;
 /** UI updater for the movement speed slider. */
 let updateMovementSpeedUI: ((scale: number) => void) | undefined;
 /** Indicates whether supplemental images have been registered. */
@@ -728,7 +748,10 @@ let updateSpriteBordersButton: (() => void) | undefined;
 /** Clears any selected sprite highlight and resets the detail panel. */
 let clearSpriteSelection: () => void = () => {};
 /** Marks a sprite as selected and updates highlighting. */
-let selectSprite: (spriteId: string) => void = () => {};
+let selectSprite: (
+  spriteId: string,
+  imageState?: { subLayer: number; order: number } | null
+) => void = () => {};
 /** Timestamp of the last sprite click to suppress map click clearing. */
 let lastSpriteClickAt = 0;
 
@@ -957,6 +980,46 @@ const createHud = () => {
               class="status-value"
               data-selected-field="visible"
               data-testid="selected-visible"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-rotate">
+            <span class="status-label">Rotate Deg</span>
+            <span
+              class="status-value"
+              data-selected-field="rotate"
+              data-testid="selected-rotate"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-rotate-resolved">
+            <span class="status-label">Resolved Base</span>
+            <span
+              class="status-value"
+              data-selected-field="rotateResolved"
+              data-testid="selected-rotate-resolved"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-rotate-displayed">
+            <span class="status-label">Displayed</span>
+            <span
+              class="status-value"
+              data-selected-field="rotateDisplayed"
+              data-testid="selected-rotate-displayed"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset">
+            <span class="status-label">Offset</span>
+            <span
+              class="status-value"
+              data-selected-field="offset"
+              data-testid="selected-offset"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-opacity">
+            <span class="status-label">Opacity</span>
+            <span
+              class="status-value"
+              data-selected-field="opacity"
+              data-testid="selected-opacity"
             >--</span>
           </div>
           <div class="status-row" data-testid="selected-row-lnglat">
@@ -1244,6 +1307,17 @@ const createHud = () => {
             data-testid="toggle-opacity-wave"
           >
             Wave
+          </button>
+          <button
+            type="button"
+            class="toggle-button${primaryOpacityMode === 'waveAll' ? ' active' : ''}"
+            data-control="primary-opacity-mode"
+            data-option="waveAll"
+            data-label="Wave All"
+            aria-pressed="${primaryOpacityMode === 'waveAll'}"
+            data-testid="toggle-opacity-wave-all"
+          >
+            Wave All
           </button>
         </div>
         <div>
@@ -1637,6 +1711,21 @@ const main = async () => {
       '[data-selected-field="screen"]'
     ),
     tag: document.querySelector<HTMLSpanElement>('[data-selected-field="tag"]'),
+    rotateDeg: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotate"]'
+    ),
+    rotateResolved: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotateResolved"]'
+    ),
+    rotateDisplayed: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotateDisplayed"]'
+    ),
+    offset: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offset"]'
+    ),
+    opacity: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="opacity"]'
+    ),
   } as const;
 
   let updateCameraControls: (() => void) | undefined;
@@ -1828,6 +1917,25 @@ const main = async () => {
       selectedFieldEls.visible.textContent =
         imageState.opacity.current !== 0.0 ? 'Visible' : 'Hidden';
     }
+    if (selectedFieldEls.rotateDeg) {
+      selectedFieldEls.rotateDeg.textContent = `${imageState.rotateDeg.current.toFixed(2)}°`;
+    }
+    if (selectedFieldEls.rotateResolved) {
+      selectedFieldEls.rotateResolved.textContent = `${imageState.resolvedBaseRotateDeg.toFixed(2)}°`;
+    }
+    if (selectedFieldEls.rotateDisplayed) {
+      selectedFieldEls.rotateDisplayed.textContent = `${imageState.displayedRotateDeg.toFixed(2)}°`;
+    }
+    if (selectedFieldEls.offset) {
+      selectedFieldEls.offset.textContent = `meters=${imageState.offset.offsetMeters.current.toFixed(
+        2
+      )}, deg=${imageState.offset.offsetDeg.current.toFixed(2)}`;
+    }
+    if (selectedFieldEls.opacity) {
+      selectedFieldEls.opacity.textContent = `${imageState.opacity.current.toFixed(
+        3
+      )}`;
+    }
     if (selectedFieldEls.lnglat) {
       // Show the geographic coordinates for the sprite's current location.
       selectedFieldEls.lnglat.textContent = formatLngLat(
@@ -1955,7 +2063,7 @@ const main = async () => {
       return;
     }
 
-    selectSprite(spriteState.spriteId);
+    selectSprite(spriteState.spriteId, imageState);
     renderSpriteDetails(event);
   };
 
@@ -2204,6 +2312,11 @@ const main = async () => {
       secondaryImageOrbitDegrees =
         (secondaryImageOrbitDegrees + SECONDARY_ORBIT_STEP_DEG) % 360;
 
+      const orbitRadiusMeters =
+        currentSecondaryImageType === 'text'
+          ? SECONDARY_ORBIT_TEXT_RADIUS_METERS
+          : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
+
       // Iterate over every sprite.
       spriteLayer.updateForEach((sprite, update) => {
         // Traverse every image registered on the sprite.
@@ -2215,7 +2328,7 @@ const main = async () => {
               const imageUpdate: SpriteImageDefinitionUpdate = {
                 offset: {
                   offsetDeg: secondaryImageOrbitDegrees, // Apply the computed angle.
-                  offsetMeters: SECONDARY_ORBIT_RADIUS_METERS, // Maintain the configured orbit radius.
+                  offsetMeters: orbitRadiusMeters, // Maintain the configured orbit radius.
                 },
               };
               const orbitInterpolation = createOrbitInterpolationOptions();
@@ -2433,7 +2546,7 @@ const main = async () => {
       }
       const interpolation: SpriteImageInterpolationOptions = {
         opacity: {
-          durationMs: MOVEMENT_INTERVAL_MS,
+          durationMs: 500,
           easing: resolveEasingOption(opacityEasingKey),
         },
       };
@@ -2455,6 +2568,50 @@ const main = async () => {
       });
     };
 
+    const resetPrimaryImageOpacity = (preferInterpolation: boolean): void => {
+      const shouldInterpolate =
+        preferInterpolation && isOpacityInterpolationEnabled;
+      spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        sprite.images.forEach((orderMap) => {
+          orderMap.forEach((image) => {
+            if (image.subLayer !== PRIMARY_SUB_LAYER) {
+              return;
+            }
+            const imageUpdate: SpriteImageDefinitionUpdate = {
+              opacity: 1,
+            };
+            if (isOpacityInterpolationEnabled) {
+              imageUpdate.interpolation = shouldInterpolate
+                ? {
+                    opacity: {
+                      durationMs: 500,
+                      easing: resolveEasingOption(opacityEasingKey),
+                    },
+                  }
+                : { opacity: null };
+            } else {
+              imageUpdate.interpolation = { opacity: null };
+            }
+            spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
+          });
+        });
+        return true;
+      });
+      if (isOpacityInterpolationEnabled && !shouldInterpolate) {
+        applyOpacityInterpolationOptionsToAll();
+      }
+    };
+
+    const applySpriteOpacityMultiplierValue = (multiplier: number): void => {
+      if (!spriteLayer) {
+        return;
+      }
+      spriteLayer.updateForEach((_sprite, spriteUpdate) => {
+        spriteUpdate.opacityMultiplier = multiplier;
+        return true;
+      });
+    };
+
     const applyPrimaryOpacityValue = (
       opacity: number,
       preferInterpolation: boolean
@@ -2463,6 +2620,7 @@ const main = async () => {
       const shouldInterpolate =
         preferInterpolation && isOpacityInterpolationEnabled;
       spriteLayer.updateForEach((sprite, spriteUpdate) => {
+        spriteUpdate.opacityMultiplier = 1;
         sprite.images.forEach((orderMap) => {
           orderMap.forEach((image) => {
             if (image.subLayer !== PRIMARY_SUB_LAYER) {
@@ -2475,7 +2633,7 @@ const main = async () => {
               if (shouldInterpolate) {
                 imageUpdate.interpolation = {
                   opacity: {
-                    durationMs: MOVEMENT_INTERVAL_MS,
+                    durationMs: 500,
                     easing: resolveEasingOption(opacityEasingKey),
                   },
                 };
@@ -2494,15 +2652,29 @@ const main = async () => {
     };
 
     const advancePrimaryOpacityWave = (forceImmediate = false): void => {
-      if (!forceImmediate && primaryOpacityMode !== 'wave') {
+      if (!forceImmediate && primaryOpacityMode === 'show') {
         return;
       }
-      const value =
-        PRIMARY_OPACITY_WAVING_SEQUENCE[primaryOpacityWaveIndex] ??
-        PRIMARY_OPACITY_WAVING_SEQUENCE[0];
-      primaryOpacityWaveIndex =
-        (primaryOpacityWaveIndex + 1) % PRIMARY_OPACITY_WAVING_SEQUENCE.length;
-      applyPrimaryOpacityValue(value, true);
+      if (primaryOpacityMode === 'wave') {
+        const value =
+          PRIMARY_OPACITY_WAVING_SEQUENCE[primaryOpacityWaveIndex] ??
+          PRIMARY_OPACITY_WAVING_SEQUENCE[0];
+        primaryOpacityWaveIndex =
+          (primaryOpacityWaveIndex + 1) %
+          PRIMARY_OPACITY_WAVING_SEQUENCE.length;
+        applyPrimaryOpacityValue(value, true);
+      } else if (primaryOpacityMode === 'waveAll') {
+        if (!forceImmediate && primaryOpacityMode !== 'waveAll') {
+          return;
+        }
+        const value =
+          ALL_SPRITE_OPACITY_WAVING_SEQUENCE[primaryOpacityWaveIndex] ??
+          ALL_SPRITE_OPACITY_WAVING_SEQUENCE[0];
+        primaryOpacityWaveIndex =
+          (primaryOpacityWaveIndex + 1) %
+          ALL_SPRITE_OPACITY_WAVING_SEQUENCE.length;
+        applySpriteOpacityMultiplierValue(value);
+      }
     };
 
     const setPrimaryOpacityMode = (mode: PrimaryOpacityMode): void => {
@@ -2512,8 +2684,13 @@ const main = async () => {
       primaryOpacityMode = mode;
       primaryOpacityWaveIndex = 0;
       if (mode === 'show') {
+        applySpriteOpacityMultiplierValue(1);
         applyPrimaryOpacityValue(1.0, true);
-      } else {
+      } else if (mode === 'wave') {
+        applySpriteOpacityMultiplierValue(1);
+        advancePrimaryOpacityWave(true);
+      } else if (mode === 'waveAll') {
+        resetPrimaryImageOpacity(true);
         advancePrimaryOpacityWave(true);
       }
       updatePrimaryOpacityButtons?.();
@@ -2577,7 +2754,76 @@ const main = async () => {
       });
     };
 
+    const stopSelectedSpriteDetailsInterval = (): void => {
+      if (selectedSpriteDetailsIntervalId === undefined) {
+        return;
+      }
+      window.clearInterval(selectedSpriteDetailsIntervalId);
+      selectedSpriteDetailsIntervalId = undefined;
+    };
+
+    const resolveSelectedImageState = (
+      spriteState: SpriteCurrentState<DemoSpriteTag>
+    ): SpriteImageState | undefined => {
+      if (selectedSpriteImageRef) {
+        const candidate = spriteState.images
+          .get(selectedSpriteImageRef.subLayer)
+          ?.get(selectedSpriteImageRef.order);
+        if (candidate) {
+          return candidate;
+        }
+      }
+      for (const orderMap of spriteState.images.values()) {
+        const iterator = orderMap.values().next();
+        if (!iterator.done) {
+          selectedSpriteImageRef = {
+            subLayer: iterator.value.subLayer,
+            order: iterator.value.order,
+          };
+          return iterator.value;
+        }
+      }
+      return undefined;
+    };
+
+    const refreshSelectedSpriteDetails = (): void => {
+      if (!selectedSpriteId || !spriteLayer) {
+        return;
+      }
+      const spriteState = spriteLayer.getSpriteState(selectedSpriteId);
+      if (!spriteState) {
+        clearSpriteSelection();
+        return;
+      }
+      const imageState = resolveSelectedImageState(spriteState);
+      const projected = map.project({
+        lng: spriteState.location.current.lng,
+        lat: spriteState.location.current.lat,
+      });
+      renderSpriteDetails({
+        type: 'spriteclick',
+        sprite: spriteState,
+        image: imageState,
+        screenPoint: { x: projected.x, y: projected.y },
+        originalEvent: new MouseEvent('click'),
+      });
+    };
+
+    const startSelectedSpriteDetailsInterval = (): void => {
+      stopSelectedSpriteDetailsInterval();
+      if (!selectedSpriteId) {
+        return;
+      }
+      refreshSelectedSpriteDetails();
+      selectedSpriteDetailsIntervalId = window.setInterval(
+        refreshSelectedSpriteDetails,
+        SELECTED_SPRITE_REFRESH_INTERVAL_MS
+      );
+    };
+
     clearSpriteSelection = (): void => {
+      stopSelectedSpriteDetailsInterval();
+      selectedSpriteImageRef = null;
       if (!selectedSpriteId) {
         renderPlaceholderDetails();
         return;
@@ -2587,12 +2833,19 @@ const main = async () => {
       renderPlaceholderDetails();
     };
 
-    selectSprite = (spriteId: string): void => {
-      if (selectedSpriteId === spriteId) {
-        return;
-      }
+    selectSprite = (
+      spriteId: string,
+      imageState?: { subLayer: number; order: number } | null
+    ): void => {
+      const isSameSprite = selectedSpriteId === spriteId;
       selectedSpriteId = spriteId;
-      applySpriteBordersToAll();
+      selectedSpriteImageRef = imageState
+        ? { subLayer: imageState.subLayer, order: imageState.order }
+        : null;
+      if (!isSameSprite) {
+        applySpriteBordersToAll();
+      }
+      startSelectedSpriteDetailsInterval();
     };
 
     /**
@@ -2797,6 +3050,11 @@ const main = async () => {
             ? SECONDARY_SHIFT_ANGLE_DEG
             : 0;
 
+      const orbitRadiusMeters =
+        currentSecondaryImageType === 'text'
+          ? SECONDARY_ORBIT_TEXT_RADIUS_METERS
+          : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
+
       spriteLayer.updateForEach((sprite, update) => {
         sprite.images.forEach((orderMap) => {
           orderMap.forEach((image) => {
@@ -2826,7 +3084,7 @@ const main = async () => {
                 opacity: 1.0,
                 autoRotation: false,
                 offset: {
-                  offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+                  offsetMeters: orbitRadiusMeters,
                   offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
                 },
               };
@@ -2836,7 +3094,7 @@ const main = async () => {
                 opacity: 1.0,
                 autoRotation: false,
                 offset: {
-                  offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+                  offsetMeters: orbitRadiusMeters,
                   offsetDeg: secondaryImageOrbitDegrees,
                 },
               };
@@ -4080,6 +4338,11 @@ const main = async () => {
           }
         | undefined;
 
+      const orbitRadiusMeters =
+        currentSecondaryImageType === 'text'
+          ? SECONDARY_ORBIT_TEXT_RADIUS_METERS
+          : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
+
       switch (currentSecondaryImageOrbitMode) {
         case 'hidden':
           secondaryOpacity = 0.0;
@@ -4092,13 +4355,13 @@ const main = async () => {
           break;
         case 'shift':
           secondaryOffset = {
-            offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+            offsetMeters: orbitRadiusMeters,
             offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
           };
           break;
         case 'orbit':
           secondaryOffset = {
-            offsetMeters: SECONDARY_ORBIT_RADIUS_METERS,
+            offsetMeters: orbitRadiusMeters,
             offsetDeg: secondaryImageOrbitDegrees,
           };
           break;
@@ -4122,6 +4385,8 @@ const main = async () => {
         ? generatePseudoLodDistanceMeters()
         : undefined;
       const spriteBorder = resolveSpriteBorderDefinition(id);
+      const rotateInterpolation = createRotateInterpolationOptions();
+      const orbitInterpolation = createOrbitInterpolationOptions();
       return {
         spriteId: id,
         location: {
@@ -4142,14 +4407,7 @@ const main = async () => {
             rotateDeg: primaryPlacement.rotateDeg,
             anchor: primaryPlacement.anchor,
             ...(spriteBorder ?? {}),
-            interpolation: isRotateInterpolationEnabled
-              ? {
-                  rotateDeg: {
-                    mode: rotateInterpolationMode,
-                    durationMs: MOVEMENT_INTERVAL_MS,
-                  },
-                }
-              : undefined,
+            interpolation: rotateInterpolation,
           },
           // Orbiting satellite indicator.
           {
@@ -4170,28 +4428,7 @@ const main = async () => {
                   offset: secondaryOffset,
                 }
               : {}),
-            interpolation:
-              isOrbitDegInterpolationEnabled ||
-              isOrbitMetersInterpolationEnabled
-                ? {
-                    ...(isOrbitDegInterpolationEnabled
-                      ? {
-                          offsetDeg: {
-                            mode: orbitOffsetDegInterpolationMode,
-                            durationMs: MOVEMENT_INTERVAL_MS,
-                          },
-                        }
-                      : {}),
-                    ...(isOrbitMetersInterpolationEnabled
-                      ? {
-                          offsetMeters: {
-                            mode: orbitOffsetMetersInterpolationMode,
-                            durationMs: MOVEMENT_INTERVAL_MS,
-                          },
-                        }
-                      : {}),
-                  }
-                : undefined,
+            interpolation: orbitInterpolation,
           },
         ],
       };
@@ -4236,7 +4473,7 @@ const main = async () => {
       spriteLayerRebuildPromise = (async () => {
         stopMovementInterval();
         detachSpriteMouseEvents();
-        selectedSpriteId = null;
+        clearSpriteSelection();
         if (map.getLayer(SPRITE_LAYER_ID)) {
           map.removeLayer(SPRITE_LAYER_ID);
         }

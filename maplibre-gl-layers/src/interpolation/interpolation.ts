@@ -10,9 +10,9 @@ import type {
   SpriteLocation,
 } from '../types';
 import type {
-  SpriteInterpolationState,
   SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
+  SpriteInterpolationState,
 } from '../internalTypes';
 
 import { resolveEasing } from './easing';
@@ -56,14 +56,13 @@ const computeFeedforwardTarget = (
 
 /**
  * Normalized representation of interpolation options with defaults applied.
- *
- * @property durationMs - Clamped non-negative duration in milliseconds.
- * @property mode - Strategy that guides how the destination is computed.
- * @property easing - Optional easing preset carried through for later resolution.
  */
 interface NormalizedInterpolationOptions {
+  /** Clamped non-negative duration in milliseconds. */
   durationMs: number;
+  /** Strategy that guides how the destination is computed. */
   mode: SpriteInterpolationMode;
+  /** Optional easing preset carried through for later resolution. */
   easing?: SpriteInterpolationOptions['easing'];
 }
 
@@ -87,27 +86,25 @@ const normalizeOptions = (
 
 /**
  * Parameters required to create a fresh interpolation state for the next animation segment.
- *
- * @property currentLocation - Sprite location currently rendered on screen.
- * @property lastCommandLocation - Previously commanded target, used for feedforward extrapolation.
- * @property nextCommandLocation - Upcoming commanded target that the sprite should reach.
- * @property options - Raw interpolation options supplied by the caller.
  */
 export interface CreateInterpolationStateParams {
+  /** Sprite location currently rendered on screen. */
   currentLocation: SpriteLocation;
+  /** Previously commanded target, used for feedforward extrapolation. */
   lastCommandLocation?: SpriteLocation;
+  /** Upcoming commanded target that the sprite should reach. */
   nextCommandLocation: SpriteLocation;
+  /** Raw interpolation options supplied by the caller. */
   options: SpriteInterpolationOptions;
 }
 
 /**
  * Result of preparing interpolation state, including a flag denoting whether any lerp is needed.
- *
- * @property state - Prepared interpolation state ready for evaluation.
- * @property requiresInterpolation - Indicates whether lerping is needed or an immediate snap is sufficient.
  */
 export interface CreateInterpolationStateResult {
-  readonly state: SpriteInterpolationState;
+  /** Prepared interpolation state ready for evaluation. */
+  readonly state: SpriteInterpolationState<SpriteLocation>;
+  /** Indicates whether lerping is needed or an immediate snap is sufficient. */
   readonly requiresInterpolation: boolean;
 }
 
@@ -125,26 +122,32 @@ export const createInterpolationState = (
   const from = cloneSpriteLocation(currentLocation);
   const resolvedEasing = resolveEasing(options.easing);
 
-  let to: SpriteLocation;
+  const commandTarget = cloneSpriteLocation(nextCommandLocation);
+  let pathTarget: SpriteLocation | undefined;
   // When feedforward is requested we extrapolate beyond the next command to smooth remote updates.
   if (options.mode === 'feedforward') {
-    to = computeFeedforwardTarget(lastCommandLocation, nextCommandLocation);
-  } else {
-    // Otherwise we perform feedback interpolation by targeting the commanded location exactly.
-    to = cloneSpriteLocation(nextCommandLocation);
+    pathTarget = computeFeedforwardTarget(
+      lastCommandLocation,
+      nextCommandLocation
+    );
   }
 
   const requiresInterpolation =
-    options.durationMs > 0 && !spriteLocationsEqual(from, to);
+    options.durationMs > 0 &&
+    !spriteLocationsEqual(from, pathTarget ?? commandTarget);
 
-  const state: SpriteInterpolationState = {
+  const state: SpriteInterpolationState<SpriteLocation> = {
     mode: options.mode,
     durationMs: options.durationMs,
-    easing: resolvedEasing.easing,
-    easingPreset: resolvedEasing.preset,
+    easingFunc: resolvedEasing.func,
+    easingParam: resolvedEasing.param,
     startTimestamp: -1,
     from,
-    to,
+    to: commandTarget,
+    pathTarget:
+      pathTarget && !spriteLocationsEqual(pathTarget, commandTarget)
+        ? pathTarget
+        : undefined,
   };
 
   return { state, requiresInterpolation };
@@ -162,7 +165,7 @@ export const evaluateInterpolation = (
   params: SpriteInterpolationEvaluationParams
 ): SpriteInterpolationEvaluationResult => {
   const { state } = params;
-  const easingFn = state.easing;
+  const easingFn = state.easingFunc;
   // Use the provided timestamp when valid; otherwise fall back to real time to keep animation advancing.
   const timestamp = Number.isFinite(params.timestamp)
     ? params.timestamp
@@ -174,7 +177,9 @@ export const evaluateInterpolation = (
     state.startTimestamp >= 0 ? state.startTimestamp : timestamp;
 
   // Zero-duration animations snap to the target immediately, avoiding unnecessary easing work.
-  if (duration === 0) {
+  const target = state.pathTarget ?? state.to;
+
+  if (duration === 0 || spriteLocationsEqual(state.from, target)) {
     return {
       location: cloneSpriteLocation(state.to),
       completed: true,
@@ -186,7 +191,7 @@ export const evaluateInterpolation = (
   // Guard against non-positive durations to prevent division by zero, treating them as instantly complete.
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
   const eased = easingFn(rawProgress);
-  const location = lerpSpriteLocation(state.from, state.to, eased);
+  const location = lerpSpriteLocation(state.from, target, eased);
   const completed = rawProgress >= 1;
 
   return {

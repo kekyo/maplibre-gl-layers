@@ -8,7 +8,10 @@
  * Minimal CSS color parser used for resolving sprite border colors.
  */
 
-export type RgbaColor = readonly [number, number, number, number];
+import { CSS_KEYWORD_COLORS } from '../const';
+import type { RgbaColor } from '../internalTypes';
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
@@ -25,26 +28,6 @@ const normalizeRgba = (
   clamp255(b) / 255,
   clamp01(a),
 ];
-
-const CSS_KEYWORD_COLORS: Record<string, RgbaColor> = {
-  black: normalizeRgba(0, 0, 0, 1),
-  silver: normalizeRgba(192, 192, 192, 1),
-  gray: normalizeRgba(128, 128, 128, 1),
-  white: normalizeRgba(255, 255, 255, 1),
-  maroon: normalizeRgba(128, 0, 0, 1),
-  red: normalizeRgba(255, 0, 0, 1),
-  purple: normalizeRgba(128, 0, 128, 1),
-  fuchsia: normalizeRgba(255, 0, 255, 1),
-  green: normalizeRgba(0, 128, 0, 1),
-  lime: normalizeRgba(0, 255, 0, 1),
-  olive: normalizeRgba(128, 128, 0, 1),
-  yellow: normalizeRgba(255, 255, 0, 1),
-  navy: normalizeRgba(0, 0, 128, 1),
-  blue: normalizeRgba(0, 0, 255, 1),
-  teal: normalizeRgba(0, 128, 128, 1),
-  aqua: normalizeRgba(0, 255, 255, 1),
-  transparent: normalizeRgba(0, 0, 0, 0),
-};
 
 const tryParseHexColor = (value: string): RgbaColor | null => {
   const match = /^#([0-9a-f]{3,8})$/i.exec(value.trim());
@@ -148,6 +131,8 @@ const parseColorUsingDom = (value: string): RgbaColor | null => {
   );
 };
 
+//////////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Parses a CSS color string into normalized RGBA values.
  * Falls back to the supplied default when parsing fails.
@@ -180,7 +165,3 @@ export const parseCssColorToRgba = (
     fallback
   );
 };
-
-export const DEFAULT_BORDER_COLOR = 'red';
-export const DEFAULT_BORDER_COLOR_RGBA: RgbaColor =
-  CSS_KEYWORD_COLORS.red ?? normalizeRgba(255, 0, 0, 1);

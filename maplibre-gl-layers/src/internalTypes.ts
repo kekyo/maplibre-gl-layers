@@ -20,17 +20,33 @@ import type {
   SpriteInterpolationMode,
   SpriteScreenPoint,
   SpritePoint,
-  SpriteEasing,
+  SpriteEasingParam,
   SpriteImageLineAttributeState,
   SpriteImageState,
   SpriteInterpolatedValues,
   SpriteImageInterpolatedOffset,
 } from './types';
-import type { EasingFunction } from './interpolation/easing';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
-import type { RgbaColor } from './utils/color';
 
 //////////////////////////////////////////////////////////////////////////////////////////
+
+export interface Releasable {
+  readonly release: () => void;
+}
+
+export type RgbaColor = readonly [number, number, number, number];
+
+/**
+ * Represents a projected three dimensional position.
+ * `MercatorCoordinate` uses the web mercator projection ([EPSG:3857](https://epsg.io/3857)) with slightly different units:
+ * - the size of 1 unit is the width of the projected world instead of the "mercator meter"
+ * - the origin of the coordinate space is at the north-west corner instead of the middle
+ */
+export interface SpriteMercatorCoordinate {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
 
 /**
  * The handle value that using the instance.
@@ -203,27 +219,27 @@ export interface RenderTargetBucketBuffers {
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Represents a projected three dimensional position.
- * `MercatorCoordinate` uses the web mercator projection ([EPSG:3857](https://epsg.io/3857)) with slightly different units:
- * - the size of 1 unit is the width of the projected world instead of the "mercator meter"
- * - the origin of the coordinate space is at the north-west corner instead of the middle
+ * Mutable interpolation states.
  */
-export interface SpriteMercatorCoordinate {
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
+export interface MutableSpriteInterpolation<TValue> {
+  state: SpriteInterpolationState<TValue> | null;
+  options: Readonly<SpriteInterpolationOptions> | null;
+  lastCommandValue: TValue;
+  baseValue: TValue | undefined;
+  targetValue: TValue | undefined;
 }
 
 /**
  * Mutable counterpart to {@link SpriteInterpolatedValues}, used internally so SpriteLayer
  * can reuse object references while still exposing readonly snapshots publicly.
  */
-export interface MutableSpriteInterpolatedValues<T>
-  extends SpriteInterpolatedValues<T> {
-  current: T;
-  from: T | undefined;
-  to: T | undefined;
+export interface MutableSpriteInterpolatedValues<TValue>
+  extends SpriteInterpolatedValues<TValue> {
+  current: TValue;
+  from: TValue | undefined;
+  to: TValue | undefined;
   invalidated: boolean | undefined;
+  interpolation: MutableSpriteInterpolation<TValue>;
 }
 
 export interface MutableSpriteImageInterpolatedOffset
@@ -232,9 +248,7 @@ export interface MutableSpriteImageInterpolatedOffset
   offsetDeg: MutableSpriteInterpolatedValues<number>;
 }
 
-export interface Releasable {
-  readonly release: () => void;
-}
+//////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Mimimum abstraction that exposes projection-related helpers.
@@ -479,57 +493,35 @@ export interface SurfaceShaderInputs {
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Runtime state describing the active interpolation between two sprite locations.
- * Consumers reuse the same state across ticks to avoid re-allocations while animation is running.
- *
- * @property mode - Strategy used to resolve the target location (feedback or feedforward).
- * @property durationMs - Total time allocated for the interpolation in milliseconds.
- * @property easing - Resolved easing function applied to raw progress values.
- * @property startTimestamp - Epoch millisecond when the interpolation started, or -1 when uninitialized.
- * @property from - Origin sprite location cloned from the current render state.
- * @property to - Destination sprite location being interpolated towards.
+ * Easing function type.
  */
-export interface SpriteInterpolationState {
-  readonly mode: SpriteInterpolationMode;
-  readonly durationMs: number;
-  readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasing;
-  startTimestamp: number;
-  readonly from: SpriteLocation;
-  readonly to: SpriteLocation;
-}
+export type EasingFunction = (progress: number) => number;
 
 /**
- * Runtime state tracked for numeric interpolations.
- * @property {number} durationMs - Total duration of the interpolation in milliseconds.
- * @property {EasingFunction} easing - Easing function applied to progress samples.
- * @property {number} from - Start value used for interpolation.
- * @property {number} to - Adjusted target along the shortest rotation path.
- * @property {number} finalValue - Caller-requested final value (used once interpolation completes).
- * @property {number} startTimestamp - Timestamp when interpolation began, `-1` until evaluation starts.
+ * Runtime state describing the active interpolation between two sprite locations.
+ * Consumers reuse the same state across ticks to avoid re-allocations while animation is running.
  */
-export interface DegreeInterpolationState {
+export interface SpriteInterpolationState<TValue> {
+  /** Strategy used to resolve the target location (feedback or feedforward). */
+  readonly mode: SpriteInterpolationMode;
+  /** Total time allocated for the interpolation in milliseconds. */
   readonly durationMs: number;
-  readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasing;
-  readonly from: number;
-  readonly to: number;
-  readonly finalValue: number;
-  startTimestamp: number;
-}
-
-export interface DistanceInterpolationState {
-  readonly durationMs: number;
-  readonly easing: EasingFunction;
-  readonly easingPreset: SpriteEasing;
-  readonly from: number;
-  readonly to: number;
-  readonly finalValue: number;
+  /** Easing attributes */
+  readonly easingParam: SpriteEasingParam;
+  /** Resolved easing function applied to raw progress values. */
+  readonly easingFunc: EasingFunction;
+  /** Origin sprite location cloned from the current render state. */
+  readonly from: TValue;
+  /** Destination sprite location being interpolated towards.  */
+  readonly to: TValue;
+  /** */
+  readonly pathTarget?: TValue;
+  /** Epoch millisecond when the interpolation started, or -1 when uninitialized. */
   startTimestamp: number;
 }
 
 export interface DistanceInterpolationEvaluationParams {
-  readonly state: DistanceInterpolationState;
+  readonly state: SpriteInterpolationState<number>;
   readonly timestamp: number;
 }
 
@@ -540,7 +532,7 @@ export interface DistanceInterpolationEvaluationResult {
 }
 
 export interface DegreeInterpolationEvaluationParams {
-  readonly state: DegreeInterpolationState;
+  readonly state: SpriteInterpolationState<number>;
   readonly timestamp: number;
 }
 
@@ -551,7 +543,7 @@ export interface DegreeInterpolationEvaluationResult {
 }
 
 export interface SpriteInterpolationEvaluationParams {
-  readonly state: SpriteInterpolationState;
+  readonly state: SpriteInterpolationState<SpriteLocation>;
   readonly timestamp: number;
 }
 
@@ -560,11 +552,6 @@ export interface SpriteInterpolationEvaluationResult {
   readonly completed: boolean;
   readonly effectiveStartTimestamp: number;
 }
-
-/**
- * Alias for the interpolation state used internally by sprites.
- */
-export type InternalSpriteInterpolationState = SpriteInterpolationState;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -690,6 +677,7 @@ export interface InternalSpriteImageState extends SpriteImageState {
   imageHandle: number;
   mode: SpriteMode;
   opacity: MutableSpriteInterpolatedValues<number>;
+  lodOpacity: number;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
   border: ResolvedSpriteImageLineAttribute | undefined;
@@ -706,18 +694,6 @@ export interface InternalSpriteImageState extends SpriteImageState {
   originLocation: Readonly<SpriteImageOriginLocation> | undefined;
   originReferenceKey: SpriteOriginReferenceKey;
   originRenderTargetIndex: SpriteOriginReferenceIndex;
-  rotationInterpolationState: Readonly<DegreeInterpolationState> | null;
-  rotationInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
-  offsetDegInterpolationState: Readonly<DegreeInterpolationState> | null;
-  offsetMetersInterpolationState: Readonly<DistanceInterpolationState> | null;
-  opacityInterpolationState: Readonly<DistanceInterpolationState> | null;
-  opacityInterpolationOptions: Readonly<SpriteInterpolationOptions> | null;
-  opacityTargetValue: number;
-  lodLastCommandOpacity: number;
-  lastCommandRotateDeg: number;
-  lastCommandOffsetDeg: number;
-  lastCommandOffsetMeters: number;
-  lastCommandOpacity: number;
   interpolationDirty: boolean;
   surfaceShaderInputs?: Readonly<SurfaceShaderInputs>;
   hitTestCorners?: [
@@ -736,14 +712,14 @@ export interface InternalSpriteCurrentState<TTag> {
   handle: IdHandle;
   isEnabled: boolean;
   visibilityDistanceMeters?: number;
-  location: MutableSpriteInterpolatedValues<Readonly<SpriteLocation>>;
+  opacityMultiplier: number;
+  //location: MutableSpriteInterpolatedLocationValues;
+  location: MutableSpriteInterpolatedValues<SpriteLocation>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
-  interpolationState: InternalSpriteInterpolationState | null;
-  pendingInterpolationOptions: SpriteInterpolationOptions | null;
-  lastCommandLocation: Readonly<SpriteLocation>;
   lastAutoRotationLocation: Readonly<SpriteLocation>;
   lastAutoRotationAngleDeg: number;
+  autoRotationInvalidated: boolean;
   interpolationDirty: boolean;
   cachedMercator: Readonly<SpriteMercatorCoordinate>;
   cachedMercatorLng: number;

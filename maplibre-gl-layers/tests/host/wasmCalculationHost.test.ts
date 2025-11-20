@@ -24,12 +24,10 @@ import type {
   PrepareDrawSpriteImageParams,
   RegisteredImage,
   RenderTargetEntryLike,
-  DistanceInterpolationState,
-  DegreeInterpolationState,
-  SpriteInterpolationState,
   DistanceInterpolationEvaluationResult,
   DegreeInterpolationEvaluationResult,
   SpriteInterpolationEvaluationResult,
+  SpriteInterpolationState,
 } from '../../src/internalTypes';
 import { ORDER_BUCKET } from '../../src/const';
 import {
@@ -240,12 +238,18 @@ const createSprite = (
       current: location,
       from: undefined,
       to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: location,
+        baseValue: undefined,
+        targetValue: undefined,
+      },
     },
     images: new Map(),
+    opacityMultiplier: 1,
     tag: null,
-    interpolationState: null,
-    pendingInterpolationOptions: null,
-    lastCommandLocation: location,
     lastAutoRotationLocation: location,
     lastAutoRotationAngleDeg: 0,
     interpolationDirty: false,
@@ -270,7 +274,16 @@ const createImage = (): InternalSpriteImageState =>
       current: 1,
       from: undefined,
       to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        targetValue: 1,
+        baseValue: 1,
+        lastCommandValue: 1,
+      },
     },
+    lodOpacity: 1,
     scale: 1,
     anchor: DEFAULT_ANCHOR,
     offset: {
@@ -278,14 +291,36 @@ const createImage = (): InternalSpriteImageState =>
         current: DEFAULT_OFFSET.offsetMeters,
         from: undefined,
         to: undefined,
+        invalidated: false,
+        interpolation: {
+          state: null,
+          options: null,
+          lastCommandValue: DEFAULT_OFFSET.offsetMeters,
+        },
       },
       offsetDeg: {
         current: DEFAULT_OFFSET.offsetDeg,
         from: undefined,
         to: undefined,
+        invalidated: false,
+        interpolation: {
+          state: null,
+          options: null,
+          lastCommandValue: DEFAULT_OFFSET.offsetDeg,
+        },
       },
     },
-    rotateDeg: { current: 0, from: undefined, to: undefined },
+    rotateDeg: {
+      current: 0,
+      from: undefined,
+      to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: 0,
+      },
+    },
     rotationCommandDeg: 0,
     displayedRotateDeg: 0,
     autoRotation: false,
@@ -294,18 +329,6 @@ const createImage = (): InternalSpriteImageState =>
     originLocation: undefined,
     originReferenceKey: SPRITE_ORIGIN_REFERENCE_KEY_NONE,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
-    rotationInterpolationState: null,
-    rotationInterpolationOptions: null,
-    offsetDegInterpolationState: null,
-    offsetMetersInterpolationState: null,
-    opacityInterpolationState: null,
-    opacityInterpolationOptions: null,
-    opacityTargetValue: 1,
-    lodLastCommandOpacity: 1,
-    lastCommandRotateDeg: 0,
-    lastCommandOffsetDeg: 0,
-    lastCommandOffsetMeters: 0,
-    lastCommandOpacity: 1,
     interpolationDirty: false,
     surfaceShaderInputs: undefined,
     hitTestCorners: undefined,
@@ -615,32 +638,32 @@ describe('processInterpolationsViaWasm', () => {
   it('encodes requests and decodes wasm responses', () => {
     const wasm = new MockWasmHost();
     const linear = (value: number): number => value;
-    const distanceState: DistanceInterpolationState = {
-      durationMs: 1000,
-      easing: linear,
-      easingPreset: { type: 'linear' },
-      from: 0,
-      to: 10,
-      finalValue: 10,
-      startTimestamp: -1,
-    };
-    const degreeState: DegreeInterpolationState = {
-      durationMs: 1000,
-      easing: linear,
-      easingPreset: { type: 'linear' },
-      from: 0,
-      to: 90,
-      finalValue: 90,
-      startTimestamp: -1,
-    };
-    const spriteState: SpriteInterpolationState = {
+    const distanceState: SpriteInterpolationState<number> = {
       mode: 'feedback',
       durationMs: 1000,
-      easing: linear,
-      easingPreset: { type: 'linear' },
+      easingFunc: linear,
+      easingParam: { type: 'linear' },
+      from: 0,
+      to: 10,
       startTimestamp: -1,
+    };
+    const degreeState: SpriteInterpolationState<number> = {
+      mode: 'feedback',
+      durationMs: 1000,
+      easingFunc: linear,
+      easingParam: { type: 'linear' },
+      from: 0,
+      to: 90,
+      startTimestamp: -1,
+    };
+    const spriteState: SpriteInterpolationState<SpriteLocation> = {
+      mode: 'feedback',
+      durationMs: 1000,
+      easingFunc: linear,
+      easingParam: { type: 'linear' },
       from: { lng: 0, lat: 0 },
       to: { lng: 5, lat: 0 },
+      startTimestamp: -1,
     };
 
     const requests = {

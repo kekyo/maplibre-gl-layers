@@ -12,8 +12,7 @@
 import type { SpriteInterpolationOptions, SpriteImageOffset } from '../types';
 import type {
   InternalSpriteImageState,
-  DegreeInterpolationState,
-  DistanceInterpolationState,
+  SpriteInterpolationState,
 } from '../internalTypes';
 
 import {
@@ -38,7 +37,7 @@ interface DegreeInterpolationStepOptions {
 }
 
 interface DegreeInterpolationStepResult {
-  readonly state: DegreeInterpolationState | null;
+  readonly state: SpriteInterpolationState<number> | null;
   readonly active: boolean;
 }
 
@@ -48,7 +47,7 @@ interface DistanceInterpolationStepOptions {
 }
 
 const stepDegreeInterpolationState = (
-  interpolationState: DegreeInterpolationState | null,
+  interpolationState: SpriteInterpolationState<number> | null,
   timestamp: number,
   applyValue: (value: number) => void,
   options?: DegreeInterpolationStepOptions
@@ -73,7 +72,7 @@ const stepDegreeInterpolationState = (
   applyValue(interpolatedValue);
 
   if (evaluation.completed) {
-    const finalValue = normalizeValue(interpolationState.finalValue);
+    const finalValue = normalizeValue(interpolationState.to);
     applyFinalValue(finalValue);
     return { state: null, active: false };
   }
@@ -98,7 +97,7 @@ const refreshRotateDegInterpolatedValues = (
   image: InternalSpriteImageState
 ): void => {
   image.rotateDeg.current = resolveManualRotationFromDisplayed(image);
-  if (!image.rotationInterpolationState) {
+  if (!image.rotateDeg.interpolation.state) {
     image.rotateDeg.from = undefined;
     image.rotateDeg.to = undefined;
   }
@@ -114,11 +113,11 @@ const updateImageDisplayedRotation = (
   const currentAngle = Number.isFinite(image.displayedRotateDeg)
     ? image.displayedRotateDeg
     : targetAngle;
-  const previousCommandAngle = image.lastCommandRotateDeg;
+  const previousCommandAngle = image.rotateDeg.interpolation.lastCommandValue;
 
   const options =
     optionsOverride === undefined
-      ? image.rotationInterpolationOptions
+      ? image.rotateDeg.interpolation.options
       : optionsOverride;
 
   const { nextAngleDeg, interpolationState } = resolveRotationTarget({
@@ -129,12 +128,12 @@ const updateImageDisplayedRotation = (
   });
 
   image.displayedRotateDeg = nextAngleDeg;
-  image.rotationInterpolationState = interpolationState;
+  image.rotateDeg.interpolation.state = interpolationState;
 
   if (!interpolationState) {
     image.displayedRotateDeg = targetAngle;
   }
-  image.lastCommandRotateDeg = targetAngle;
+  image.rotateDeg.interpolation.lastCommandValue = targetAngle;
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -155,7 +154,7 @@ const stepRotationInterpolation = (
   timestamp: number
 ): boolean => {
   const { state, active } = stepDegreeInterpolationState(
-    image.rotationInterpolationState,
+    image.rotateDeg.interpolation.state,
     timestamp,
     (value) => {
       image.displayedRotateDeg = value;
@@ -165,7 +164,7 @@ const stepRotationInterpolation = (
     }
   );
 
-  image.rotationInterpolationState = state;
+  image.rotateDeg.interpolation.state = state;
   refreshRotateDegInterpolatedValues(image);
   return active;
 };
@@ -175,14 +174,14 @@ const stepOffsetDegInterpolation = (
   timestamp: number
 ): boolean => {
   const { state, active } = stepDegreeInterpolationState(
-    image.offsetDegInterpolationState,
+    image.offset.offsetDeg.interpolation.state,
     timestamp,
     (value) => {
       image.offset.offsetDeg.current = value;
     }
   );
 
-  image.offsetDegInterpolationState = state;
+  image.offset.offsetDeg.interpolation.state = state;
   if (!state) {
     image.offset.offsetDeg.from = undefined;
     image.offset.offsetDeg.to = undefined;
@@ -196,7 +195,7 @@ const stepOffsetDegInterpolation = (
 export const clearOffsetDegInterpolation = (
   image: InternalSpriteImageState
 ): void => {
-  image.offsetDegInterpolationState = null;
+  image.offset.offsetDeg.interpolation.state = null;
   image.offset.offsetDeg.from = undefined;
   image.offset.offsetDeg.to = undefined;
 };
@@ -205,12 +204,12 @@ export const clearOffsetDegInterpolation = (
  * Container used by the distance interpolation helper.
  */
 interface DistanceInterpolationStepResult {
-  readonly state: DistanceInterpolationState | null;
+  readonly state: SpriteInterpolationState<number> | null;
   readonly active: boolean;
 }
 
 const stepDistanceInterpolationState = (
-  interpolationState: DistanceInterpolationState | null,
+  interpolationState: SpriteInterpolationState<number> | null,
   timestamp: number,
   applyValue: (value: number) => void,
   options?: DistanceInterpolationStepOptions
@@ -235,7 +234,7 @@ const stepDistanceInterpolationState = (
   applyValue(interpolatedValue);
 
   if (evaluation.completed) {
-    const finalValue = normalizeValue(interpolationState.finalValue);
+    const finalValue = normalizeValue(interpolationState.to);
     applyFinalValue(finalValue);
     return { state: null, active: false };
   }
@@ -249,7 +248,7 @@ const stepDistanceInterpolationState = (
 export const clearOffsetMetersInterpolation = (
   image: InternalSpriteImageState
 ): void => {
-  image.offsetMetersInterpolationState = null;
+  image.offset.offsetMeters.interpolation.state = null;
   image.offset.offsetMeters.from = undefined;
   image.offset.offsetMeters.to = undefined;
 };
@@ -260,7 +259,7 @@ export const clearOffsetMetersInterpolation = (
 export const clearOpacityInterpolation = (
   image: InternalSpriteImageState
 ): void => {
-  image.opacityInterpolationState = null;
+  image.opacity.interpolation.state = null;
 };
 
 const applyOffsetDegUpdate = (
@@ -274,29 +273,30 @@ const applyOffsetDegUpdate = (
     image.offset.offsetDeg.current = nextOffset.offsetDeg;
     image.offset.offsetDeg.from = undefined;
     image.offset.offsetDeg.to = undefined;
-    image.offsetDegInterpolationState = null;
-    image.lastCommandOffsetDeg = nextOffset.offsetDeg;
+    image.offset.offsetDeg.interpolation.state = null;
+    image.offset.offsetDeg.interpolation.lastCommandValue =
+      nextOffset.offsetDeg;
     return;
   }
 
   const { state, requiresInterpolation } = createDegreeInterpolationState({
     currentValue: image.offset.offsetDeg.current,
     targetValue: nextOffset.offsetDeg,
-    previousCommandValue: image.lastCommandOffsetDeg,
+    previousCommandValue: image.offset.offsetDeg.interpolation.lastCommandValue,
     options,
   });
 
-  image.lastCommandOffsetDeg = nextOffset.offsetDeg;
+  image.offset.offsetDeg.interpolation.lastCommandValue = nextOffset.offsetDeg;
 
   if (requiresInterpolation) {
-    image.offsetDegInterpolationState = state;
+    image.offset.offsetDeg.interpolation.state = state;
     image.offset.offsetDeg.from = image.offset.offsetDeg.current;
     image.offset.offsetDeg.to = nextOffset.offsetDeg;
   } else {
     image.offset.offsetDeg.current = nextOffset.offsetDeg;
     image.offset.offsetDeg.from = undefined;
     image.offset.offsetDeg.to = undefined;
-    image.offsetDegInterpolationState = null;
+    image.offset.offsetDeg.interpolation.state = null;
   }
 };
 
@@ -311,29 +311,32 @@ const applyOffsetMetersUpdate = (
     image.offset.offsetMeters.current = nextOffset.offsetMeters;
     image.offset.offsetMeters.from = undefined;
     image.offset.offsetMeters.to = undefined;
-    image.offsetMetersInterpolationState = null;
-    image.lastCommandOffsetMeters = nextOffset.offsetMeters;
+    image.offset.offsetMeters.interpolation.state = null;
+    image.offset.offsetMeters.interpolation.lastCommandValue =
+      nextOffset.offsetMeters;
     return;
   }
 
   const { state, requiresInterpolation } = createDistanceInterpolationState({
     currentValue: image.offset.offsetMeters.current,
     targetValue: nextOffset.offsetMeters,
-    previousCommandValue: image.lastCommandOffsetMeters,
+    previousCommandValue:
+      image.offset.offsetMeters.interpolation.lastCommandValue,
     options,
   });
 
-  image.lastCommandOffsetMeters = nextOffset.offsetMeters;
+  image.offset.offsetMeters.interpolation.lastCommandValue =
+    nextOffset.offsetMeters;
 
   if (requiresInterpolation) {
-    image.offsetMetersInterpolationState = state;
+    image.offset.offsetMeters.interpolation.state = state;
     image.offset.offsetMeters.from = image.offset.offsetMeters.current;
     image.offset.offsetMeters.to = nextOffset.offsetMeters;
   } else {
     image.offset.offsetMeters.current = nextOffset.offsetMeters;
     image.offset.offsetMeters.from = undefined;
     image.offset.offsetMeters.to = undefined;
-    image.offsetMetersInterpolationState = null;
+    image.offset.offsetMeters.interpolation.state = null;
   }
 };
 
@@ -342,14 +345,14 @@ const stepOffsetMetersInterpolation = (
   timestamp: number
 ): boolean => {
   const { state, active } = stepDistanceInterpolationState(
-    image.offsetMetersInterpolationState,
+    image.offset.offsetMeters.interpolation.state,
     timestamp,
     (value) => {
       image.offset.offsetMeters.current = value;
     }
   );
 
-  image.offsetMetersInterpolationState = state;
+  image.offset.offsetMeters.interpolation.state = state;
   if (!state) {
     image.offset.offsetMeters.from = undefined;
     image.offset.offsetMeters.to = undefined;
@@ -357,46 +360,70 @@ const stepOffsetMetersInterpolation = (
   return active;
 };
 
-export const applyOpacityUpdate = (
+const runOpacityTargetTransition = (
   image: InternalSpriteImageState,
-  nextOpacity: number,
-  interpolationOptions?: SpriteInterpolationOptions | null
+  targetOpacity: number,
+  interpolationOptions: SpriteInterpolationOptions | null
 ): void => {
-  const clampedTarget = clampOpacity(nextOpacity);
+  const clampedTarget = clampOpacity(targetOpacity);
   const options = interpolationOptions;
 
   if (!options || options.durationMs <= 0) {
     image.opacity.current = clampedTarget;
     image.opacity.from = undefined;
     image.opacity.to = undefined;
-    image.opacityInterpolationState = null;
-    image.lastCommandOpacity = clampedTarget;
-    image.opacityTargetValue = clampedTarget;
-    image.lodLastCommandOpacity = clampedTarget;
-    return;
-  }
-
-  const { state, requiresInterpolation } = createDistanceInterpolationState({
-    currentValue: clampOpacity(image.opacity.current),
-    targetValue: clampedTarget,
-    previousCommandValue: image.lastCommandOpacity,
-    options,
-  });
-
-  image.lastCommandOpacity = clampedTarget;
-  image.opacityTargetValue = clampedTarget;
-  image.lodLastCommandOpacity = clampedTarget;
-
-  if (requiresInterpolation) {
-    image.opacityInterpolationState = state;
-    image.opacity.from = image.opacity.current;
-    image.opacity.to = clampedTarget;
+    image.opacity.interpolation.state = null;
   } else {
-    image.opacity.current = clampedTarget;
-    image.opacity.from = undefined;
-    image.opacity.to = undefined;
-    image.opacityInterpolationState = null;
+    const { state, requiresInterpolation } = createDistanceInterpolationState({
+      currentValue: clampOpacity(image.opacity.current),
+      targetValue: clampedTarget,
+      previousCommandValue: image.opacity.interpolation.lastCommandValue,
+      options,
+    });
+
+    if (requiresInterpolation) {
+      image.opacity.interpolation.state = state;
+      image.opacity.from = image.opacity.current;
+      image.opacity.to = clampedTarget;
+    } else {
+      image.opacity.current = clampedTarget;
+      image.opacity.from = undefined;
+      image.opacity.to = undefined;
+      image.opacity.interpolation.state = null;
+    }
   }
+
+  image.opacity.interpolation.lastCommandValue = clampedTarget;
+  image.opacity.interpolation.targetValue = clampedTarget;
+};
+
+export const applyOpacityUpdate = (
+  image: InternalSpriteImageState,
+  nextOpacity: number,
+  interpolationOptions?: SpriteInterpolationOptions | null,
+  spriteOpacityMultiplier = 1
+): void => {
+  const clampedBase = clampOpacity(nextOpacity);
+  const lodMultiplier =
+    typeof image.lodOpacity === 'number' ? image.lodOpacity : 1;
+  image.opacity.interpolation.baseValue = clampedBase;
+  runOpacityTargetTransition(
+    image,
+    clampedBase * spriteOpacityMultiplier * lodMultiplier,
+    interpolationOptions ?? null
+  );
+};
+
+export const applyResolvedOpacityTarget = (
+  image: InternalSpriteImageState,
+  resolvedTarget: number,
+  interpolationOptions?: SpriteInterpolationOptions | null
+): void => {
+  runOpacityTargetTransition(
+    image,
+    resolvedTarget,
+    interpolationOptions ?? null
+  );
 };
 
 const stepOpacityInterpolation = (
@@ -404,7 +431,7 @@ const stepOpacityInterpolation = (
   timestamp: number
 ): boolean => {
   const { state, active } = stepDistanceInterpolationState(
-    image.opacityInterpolationState,
+    image.opacity.interpolation.state,
     timestamp,
     (value) => {
       image.opacity.current = value;
@@ -414,7 +441,7 @@ const stepOpacityInterpolation = (
     }
   );
 
-  image.opacityInterpolationState = state;
+  image.opacity.interpolation.state = state;
   if (!state) {
     image.opacity.from = undefined;
     image.opacity.to = undefined;
@@ -475,10 +502,10 @@ export const hasActiveImageInterpolations = (
   image: InternalSpriteImageState
 ): boolean => {
   return (
-    image.rotationInterpolationState !== null ||
-    image.offsetDegInterpolationState !== null ||
-    image.offsetMetersInterpolationState !== null ||
-    image.opacityInterpolationState !== null
+    image.rotateDeg.interpolation.state !== null ||
+    image.offset.offsetDeg.interpolation.state !== null ||
+    image.offset.offsetMeters.interpolation.state !== null ||
+    image.opacity.interpolation.state !== null
   );
 };
 

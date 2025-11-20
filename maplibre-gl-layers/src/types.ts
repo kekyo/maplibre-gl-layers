@@ -13,13 +13,6 @@ import type { CustomLayerInterface } from 'maplibre-gl';
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Sprite rendering modes.
- * Billboard: Image always faces the viewport, suited for HUD-style elements.
- * Surface: Image lies parallel to the map surface, suited for dynamic markers on the map.
- */
-export type SpriteMode = 'billboard' | 'surface';
-
-/**
  * Base coordinate for the sprite. All images within the sprite are positioned relative to this location.
  */
 export interface SpriteLocation {
@@ -89,65 +82,90 @@ export interface SpriteImageOriginLocation {
   useResolvedAnchor?: boolean;
 }
 
-/** Defines movement interpolation modes. */
-export type SpriteInterpolationMode = 'feedback' | 'feedforward';
+//////////////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * Linear easing definition.
+ */
 export interface SpriteEasingLinear {
-  type: 'linear';
+  readonly type: 'linear';
 }
 
+/**
+ * Ease easing definition.
+ */
 export interface SpriteEasingEase {
-  type: 'ease';
+  readonly type: 'ease';
   /** Power applied to the easing curve. Defaults to 3. */
   power?: number;
   /** Direction of the easing curve. Defaults to in-out. */
   mode?: 'in' | 'out' | 'in-out';
 }
 
+/**
+ * Exponential easing definition.
+ */
 export interface SpriteEasingExponential {
-  type: 'exponential';
+  readonly type: 'exponential';
   /** Growth rate used by the exponential curve. Defaults to 5. */
   exponent?: number;
   /** Direction of the exponential curve. Defaults to in-out. */
   mode?: 'in' | 'out' | 'in-out';
 }
 
+/**
+ * Quadratic easing definition.
+ */
 export interface SpriteEasingQuadratic {
-  type: 'quadratic';
+  readonly type: 'quadratic';
   /** Direction of the quadratic curve. Defaults to in-out. */
   mode?: 'in' | 'out' | 'in-out';
 }
 
+/**
+ * Cubic easing definition.
+ */
 export interface SpriteEasingCubic {
-  type: 'cubic';
+  readonly type: 'cubic';
   /** Direction of the cubic curve. Defaults to in-out. */
   mode?: 'in' | 'out' | 'in-out';
 }
 
+/**
+ * Sine easing definition.
+ */
 export interface SpriteEasingSine {
-  type: 'sine';
+  readonly type: 'sine';
   /** Direction of the sine ease. Defaults to in-out. */
   mode?: 'in' | 'out' | 'in-out';
   /** Multiplier applied to the sine amplitude. Defaults to 1. */
   amplitude?: number;
 }
 
+/**
+ * Bounce easing definition.
+ */
 export interface SpriteEasingBounce {
-  type: 'bounce';
+  readonly type: 'bounce';
   /** Number of visible bounces before settling. Defaults to 3. */
   bounces?: number;
   /** Decay factor applied per bounce; range (0, 1]. Defaults to 0.5. */
   decay?: number;
 }
 
+/**
+ * Back easing definition.
+ */
 export interface SpriteEasingBack {
-  type: 'back';
+  readonly type: 'back';
   /** Overshoot factor controlling how far past the target the curve goes. Defaults to 1.70158. */
   overshoot?: number;
 }
 
-/** Union of supported easing definitions. */
-export type SpriteEasing =
+/**
+ * Union of supported easing parameters.
+ */
+export type SpriteEasingParam =
   | SpriteEasingLinear
   | SpriteEasingEase
   | SpriteEasingExponential
@@ -157,29 +175,50 @@ export type SpriteEasing =
   | SpriteEasingBounce
   | SpriteEasingBack;
 
-export type SpriteEasingType = SpriteEasing['type'];
+/**
+ * Easing types.
+ */
+export type SpriteEasingType = SpriteEasingParam['type'];
 
-/** Options for interpolating values. */
+/**
+ * Defines interpolation modes.
+ */
+export type SpriteInterpolationMode = 'feedback' | 'feedforward';
+
+/**
+ * Options for interpolating values.
+ */
 export interface SpriteInterpolationOptions {
-  /** Interpolation mode; defaults to feedback. */
+  /** Interpolation mode; defaults to `feedback`. */
   mode?: SpriteInterpolationMode;
   /** Duration in milliseconds. */
   durationMs: number;
-  /** Easing definition. Defaults to linear. */
-  easing?: SpriteEasing;
+  /** Easing definition. Defaults to `linear`. */
+  easing?: SpriteEasingParam;
 }
 
-/** Interpolation configuration for rotateDeg and offsetDeg. */
+/**
+ * Interpolation configuration.
+ */
 export interface SpriteImageInterpolationOptions {
-  /** Interpolation settings for rotateDeg; null disables interpolation. */
+  /** Interpolation settings for rotateDeg; `null` will disable interpolation. */
   rotateDeg?: SpriteInterpolationOptions | null;
-  /** Interpolation settings for offset.offsetDeg; null disables interpolation. */
+  /** Interpolation settings for offset.offsetDeg; `null` will disable interpolation. */
   offsetDeg?: SpriteInterpolationOptions | null;
-  /** Interpolation settings for offset.offsetMeters; null disables interpolation. */
+  /** Interpolation settings for offset.offsetMeters; `null` will disable interpolation. */
   offsetMeters?: SpriteInterpolationOptions | null;
-  /** Interpolation settings for opacity; null disables interpolation. */
+  /** Interpolation settings for opacity; `null` will disable interpolation. */
   opacity?: SpriteInterpolationOptions | null;
 }
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Sprite rendering modes.
+ * Billboard: Image always faces the viewport, suited for HUD-style elements.
+ * Surface: Image lies parallel to the map surface, suited for dynamic markers on the map.
+ */
+export type SpriteMode = 'billboard' | 'surface';
 
 /**
  * Initial attributes that define a sprite image.
@@ -203,7 +242,7 @@ export interface SpriteImageDefinitionInit {
   leaderLine?: SpriteImageLineAttribute;
   /**
    * Determines which coordinate to anchor against.
-   * - Omitted: use the sprite base coordinate.
+   * - Omitted: use "the sprite" base coordinate.
    * - Provided: use the referenced image's anchor and offset (resolving references recursively).
    */
   originLocation?: SpriteImageOriginLocation;
@@ -270,6 +309,8 @@ export interface SpriteImageDefinitionInitEntry
   order: number;
 }
 
+//////////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Parameters required to construct a new sprite.
  *
@@ -294,6 +335,10 @@ export interface SpriteInit<TTag> {
    * Default interpolation settings applied to initial location updates until overridden.
    */
   interpolation?: SpriteInterpolationOptions;
+  /**
+   * Multiplier applied to every image opacity belonging to the sprite. Defaults to 1.0.
+   */
+  opacityMultiplier?: number;
   /** Array of zero or more images. */
   images: SpriteImageDefinitionInitEntry[];
   /** Optional tag value; null or omission means no tag. */
@@ -319,17 +364,19 @@ export type SpriteInitCollection<TTag> =
   | Record<string, SpriteInit<TTag>>
   | readonly SpriteInitEntry<TTag>[];
 
+//////////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Interpolated values.
- * @param T - Value type.
+ * @param TValue - Value type.
  */
-export interface SpriteInterpolatedValues<T> {
+export interface SpriteInterpolatedValues<TValue> {
   /** Current time value. */
-  readonly current: T;
+  readonly current: TValue;
   /** Requested value. */
-  readonly from: T | undefined;
+  readonly from: TValue | undefined;
   /** Will be reached value. */
-  readonly to: T | undefined;
+  readonly to: TValue | undefined;
   /** Marks whether the value was invalidated due to visibility changes. */
   readonly invalidated: boolean | undefined;
 }
@@ -356,23 +403,6 @@ export interface SpriteImageLineAttributeState {
 
 /**
  * Sprite image state evaluated at runtime.
- *
- * @property {number} subLayer - Sub-layer index the image belongs to.
- * @property {number} order - Ordering slot within the sub-layer.
- * @property {string} imageId - Identifier of the registered image or glyph.
- * @property {SpriteMode} mode - Rendering mode applied to the image.
- * @property {SpriteInterpolatedValues<number>} opacity - Opacity multiplier applied when rendering, with interpolation metadata.
- * @property {number} scale - Scale factor converting pixels to meters.
- * @property {Readonly<SpriteAnchor>} anchor - Anchor coordinates resolved for the image.
- * @property {SpriteImageInterpolatedOffset} offset - Offset applied relative to the anchor point, with interpolation metadata.
- * @property {SpriteImageLineAttributeState | undefined} border - Border line attribute.
- * @property {SpriteImageLineAttributeState | undefined} leaderLine - Leader line attribute.
- * @property {SpriteInterpolatedValues<number>} rotateDeg - Additional rotation in degrees plus interpolation metadata.
- * @property {boolean} autoRotation - Indicates whether auto-rotation is active.
- * @property {number} autoRotationMinDistanceMeters - Minimum travel distance before auto-rotation updates.
- * @property {number} resolvedBaseRotateDeg - Internal base rotation resolved for the current frame.
- * @property {number} displayedRotateDeg - Rotation value actually used for rendering.
- * @property {Readonly<SpriteImageOriginLocation> | undefined} originLocation - Optional reference to another image used for anchoring.
  */
 export interface SpriteImageState {
   /** Sub-layer index the image belongs to. */
@@ -422,6 +452,8 @@ export interface SpriteCurrentState<TTag> {
   readonly spriteId: string;
   /** Indicates whether the sprite is enabled. */
   readonly isEnabled: boolean;
+  /** Multiplier applied to every image opacity. */
+  readonly opacityMultiplier: number;
   /**
    * Pseudo LOD threshold for the sprite. When the camera distance exceeds this value,
    * the sprite's images become invisible.
@@ -442,10 +474,6 @@ export interface SpriteCurrentState<TTag> {
  * Base structure for sprite updates.
  *
  * @template TTag Tag type stored on the sprite.
- * @property {boolean | undefined} isEnabled - Optional toggle to enable or disable the sprite.
- * @property {SpriteLocation | undefined} location - Optional target location for the sprite.
- * @property {SpriteLocationInterpolationOptions | null | undefined} interpolation - Optional location interpolation settings; `null` disables interpolation.
- * @property {TTag | null | undefined} tag - Optional tag value to replace the current one; `null` clears the tag.
  */
 export interface SpriteUpdateEntryBase<TTag> {
   /** Optional toggle to enable or disable the sprite. */
@@ -461,14 +489,14 @@ export interface SpriteUpdateEntryBase<TTag> {
    * `null` to clear the current threshold, or leave `undefined` to keep the existing value.
    */
   visibilityDistanceMeters?: number | null;
+  /**
+   * Optional multiplier applied to every image opacity. When omitted the previous multiplier is preserved.
+   */
+  opacityMultiplier?: number;
 }
 
 /**
  * Update entry describing a sprite image modification.
- *
- * @property {number} subLayer - Target sub-layer that contains the image.
- * @property {number} order - Order slot within the sub-layer.
- * @property {SpriteImageDefinitionUpdate | null} image - Update payload, or `null` to remove the image.
  */
 export interface SpriteImageDefinitionUpdateEntry {
   /** Target sub-layer that contains the image. */
@@ -483,7 +511,6 @@ export interface SpriteImageDefinitionUpdateEntry {
  * Sprite update entry with optional image list.
  *
  * @template TTag Tag type stored on the sprite.
- * @property {SpriteImageDefinitionUpdateEntry[] | undefined} images - Optional set of image updates.
  */
 export interface SpriteUpdateEntry<TTag> extends SpriteUpdateEntryBase<TTag> {
   /** Optional set of image updates. */
@@ -494,27 +521,43 @@ export interface SpriteUpdateEntry<TTag> extends SpriteUpdateEntryBase<TTag> {
  * Callback-based helper for mutating sprite state.
  *
  * @template TTag Tag type stored on the sprite.
- * @property {() => ReadonlyMap<number, ReadonlySet<number>>} getImageIndexMap - Retrieves the current image layout.
- * @property {(subLayer: number, order: number, imageInit: SpriteImageDefinitionInit) => boolean} addImage - Adds an image definition.
- * @property {(subLayer: number, order: number, imageUpdate: SpriteImageDefinitionUpdate) => boolean} updateImage - Applies image updates.
- * @property {(subLayer: number, order: number) => boolean} removeImage - Removes an image slot.
  */
 export interface SpriteUpdaterEntry<TTag> extends SpriteUpdateEntryBase<TTag> {
-  /** Retrieves the current image layout. */
+  /**
+   * Retrieves the current image layout.
+   * @returns Structured image index (order sets each sub layers).
+   */
   readonly getImageIndexMap: () => ReadonlyMap<number, ReadonlySet<number>>;
-  /** Adds an image definition. */
+  /**
+   * Adds an image definition.
+   * @param subLayer - Sub layer index.
+   * @param order - Order index.
+   * @param imageInit - Image initializer.
+   * @returns True if added.
+   */
   readonly addImage: (
     subLayer: number,
     order: number,
     imageInit: SpriteImageDefinitionInit
   ) => boolean;
-  /** Applies image updates. */
+  /**
+   * Applies image updates.
+   * @param subLayer - Sub layer index.
+   * @param order - Order index.
+   * @param imageUpdate - Image updater.
+   * @returns True if updated.
+   */
   readonly updateImage: (
     subLayer: number,
     order: number,
     imageUpdate: SpriteImageDefinitionUpdate
   ) => boolean;
-  /** Removes an image slot. */
+  /**
+   * Removes an image slot.
+   * @param subLayer - Sub layer index.
+   * @param order - Order index.
+   * @returns True if removed.
+   */
   readonly removeImage: (subLayer: number, order: number) => boolean;
 }
 
@@ -570,9 +613,6 @@ export interface SpriteMutateCallbacks<
 
 /**
  * Represents a point on anonymous-unit space.
- *
- * @property {number} x - Horizontal (X axis) coordinate.
- * @property {number} y - Vertical (Y axis) coordinate.
  */
 export interface SpritePoint {
   /** Horizontal (X axis) coordinate. */
@@ -589,18 +629,13 @@ export type SpriteScreenPoint = SpritePoint;
 /**
  * Event dispatched when a sprite is clicked or tapped.
  *
- * @template T Tag type stored on sprites.
- * @property {'spriteclick'} type - Discriminated event type.
- * @property {SpriteCurrentState<T>} sprite - Snapshot of the sprite that was hit.
- * @property {SpriteImageState} image - Sprite image that received the interaction.
- * @property {SpriteScreenPoint} screenPoint - Screen position of the interaction.
- * @property {MouseEvent | PointerEvent | TouchEvent} originalEvent - Original DOM event.
+ * @template TTag Tag type stored on sprites.
  */
-export interface SpriteLayerClickEvent<T> {
+export interface SpriteLayerClickEvent<TTag> {
   /** Discriminated event type. */
   readonly type: 'spriteclick';
   /** Snapshot of the sprite that was hit, or `undefined` when it no longer exists. */
-  readonly sprite: SpriteCurrentState<T> | undefined;
+  readonly sprite: SpriteCurrentState<TTag> | undefined;
   /** Sprite image that received the interaction, or `undefined` when missing. */
   readonly image: SpriteImageState | undefined;
   /** Screen position of the interaction. */
@@ -612,18 +647,13 @@ export interface SpriteLayerClickEvent<T> {
 /**
  * Event dispatched when a sprite is hovered by a pointing device.
  *
- * @template T Tag type stored on sprites.
- * @property {'spritehover'} type - Discriminated event type.
- * @property {SpriteCurrentState<T>} sprite - Snapshot of the sprite that was hit.
- * @property {SpriteImageState} image - Sprite image that received the interaction.
- * @property {SpriteScreenPoint} screenPoint - Screen position of the interaction.
- * @property {MouseEvent | PointerEvent} originalEvent - Original hover-capable DOM event.
+ * @template TTag Tag type stored on sprites.
  */
-export interface SpriteLayerHoverEvent<T> {
+export interface SpriteLayerHoverEvent<TTag> {
   /** Discriminated event type. */
   readonly type: 'spritehover';
   /** Snapshot of the sprite that was hit, or `undefined` when it no longer exists. */
-  readonly sprite: SpriteCurrentState<T> | undefined;
+  readonly sprite: SpriteCurrentState<TTag> | undefined;
   /** Sprite image that received the interaction, or `undefined` when missing. */
   readonly image: SpriteImageState | undefined;
   /** Screen position of the interaction. */
@@ -635,42 +665,32 @@ export interface SpriteLayerHoverEvent<T> {
 /**
  * Map of events emitted by SpriteLayer.
  *
- * @template T Tag type stored on sprites.
- * @property {SpriteLayerClickEvent<T>} spriteclick - Event fired when a sprite image is clicked.
- * @property {SpriteLayerHoverEvent<T>} spritehover - Event fired when a sprite image is hovered.
+ * @template TTag Tag type stored on sprites.
  */
-export interface SpriteLayerEventMap<T> {
+export interface SpriteLayerEventMap<TTag> {
   /** Event fired when a sprite image is clicked. */
-  readonly spriteclick: SpriteLayerClickEvent<T>;
+  readonly spriteclick: SpriteLayerClickEvent<TTag>;
   /** Event fired when a sprite image is hovered. */
-  readonly spritehover: SpriteLayerHoverEvent<T>;
+  readonly spritehover: SpriteLayerHoverEvent<TTag>;
 }
 
 /**
  * Event listener callback.
  *
- * @template T Tag type stored on sprites.
+ * @template TTag Tag type stored on sprites.
  * @template K Event key from {@link SpriteLayerEventMap}.
- * @param {SpriteLayerEventMap<T>[K]} event - Event payload dispatched by SpriteLayer.
+ * @param {SpriteLayerEventMap<TTag>[K]} event - Event payload dispatched by SpriteLayer.
  * @returns {void}
  */
 export type SpriteLayerEventListener<
-  T,
-  K extends keyof SpriteLayerEventMap<T>,
-> = (event: SpriteLayerEventMap<T>[K]) => void;
+  TTag,
+  K extends keyof SpriteLayerEventMap<TTag>,
+> = (event: SpriteLayerEventMap<TTag>[K]) => void;
 
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Options controlling zoom-to-pixel scaling.
- *
- * @property {number | undefined} metersPerPixel - Overrides the baseline meters-per-pixel ratio.
- * @property {number | undefined} zoomMin - Minimum zoom level before scaling adjustments apply.
- * @property {number | undefined} zoomMax - Maximum zoom level before scaling adjustments apply.
- * @property {number | undefined} scaleMin - Lower limit for scale clamping.
- * @property {number | undefined} scaleMax - Upper limit for scale clamping.
- * @property {number | undefined} spriteMinPixel - Minimum on-screen pixel size for sprites (0 disables the lower clamp).
- * @property {number | undefined} spriteMaxPixel - Maximum on-screen pixel size for sprites (0 disables the upper clamp).
  */
 export interface SpriteScalingOptions {
   /**
@@ -710,30 +730,25 @@ export type SpriteTextureMagFilter = 'nearest' | 'linear';
 
 /**
  * Texture filtering configuration.
- *
- * @property {SpriteTextureMinFilter | undefined} minFilter - Minification filter to apply (defaults to `linear`).
- * @property {SpriteTextureMagFilter | undefined} magFilter - Magnification filter to apply (defaults to `linear`).
- * @property {boolean | undefined} generateMipmaps - Generates mipmaps during upload when true (defaults to `false`).
- * @property {number | undefined} maxAnisotropy - Desired anisotropy factor (>= 1) when EXT_texture_filter_anisotropic is available.
  */
 export interface SpriteTextureFilteringOptions {
+  /** Minification filter to apply (defaults to `linear`). */
   minFilter?: SpriteTextureMinFilter;
+  /** Magnification filter to apply (defaults to `linear`). */
   magFilter?: SpriteTextureMagFilter;
+  /** Generates mipmaps during upload when true (defaults to `false`). */
   generateMipmaps?: boolean;
+  /** Desired anisotropy factor (>= 1) when EXT_texture_filter_anisotropic is available. */
   maxAnisotropy?: number;
 }
 
 /**
  * Options accepted when creating a SpriteLayer.
- *
- * @property {string | undefined} id - Optional layer identifier supplied to MapLibre.
- * @property {SpriteScalingOptions | undefined} spriteScaling - Optional scaling controls. Default is UNLIMITED_SPRITE_SCALING_OPTIONS.
- * @property {SpriteTextureFilteringOptions | undefined} textureFiltering - Optional texture filtering overrides.
  */
 export interface SpriteLayerOptions {
   /** Optional layer identifier supplied to MapLibre. */
   id?: string;
-  /** Optional scaling controls. */
+  /** Optional scaling controls. Default is UNLIMITED_SPRITE_SCALING_OPTIONS. */
   spriteScaling?: SpriteScalingOptions;
   /** Optional texture filtering configuration. */
   textureFiltering?: SpriteTextureFilteringOptions;
@@ -772,10 +787,14 @@ export interface SpriteImageRegisterOptions {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-/** Horizontal alignment options for text glyphs. */
+/**
+ * Horizontal alignment options for text glyphs.
+ */
 export type SpriteTextGlyphHorizontalAlign = 'left' | 'center' | 'right';
 
-/** Padding in pixels applied when rendering text glyphs. */
+/**
+ * Padding in pixels applied when rendering text glyphs.
+ */
 export type SpriteTextGlyphPaddingPixel =
   | number
   | {
@@ -785,31 +804,20 @@ export type SpriteTextGlyphPaddingPixel =
       left?: number;
     };
 
-/** Border sides that can be rendered for a text glyph outline. */
+/**
+ * Border sides that can be rendered for a text glyph outline.
+ */
 export type SpriteTextGlyphBorderSide = 'top' | 'right' | 'bottom' | 'left';
 
-/** Additional size options accepted by registerTextGlyph. */
+/**
+ * Additional size options accepted by registerTextGlyph.
+ */
 export type SpriteTextGlyphDimensions =
   | { readonly lineHeightPixel: number; readonly maxWidthPixel?: never }
   | { readonly maxWidthPixel: number; readonly lineHeightPixel?: never };
 
 /**
  * Text glyph appearance options.
- *
- * @property {string | undefined} fontFamily - Font family name.
- * @property {string | undefined} fontWeight - CSS font-weight value.
- * @property {'normal' | 'italic' | undefined} fontStyle - CSS font-style value.
- * @property {string | undefined} color - Text fill color.
- * @property {number | undefined} letterSpacingPixel - Letter spacing in pixels.
- * @property {string | undefined} backgroundColor - Background color applied behind the text.
- * @property {SpriteTextGlyphPaddingPixel | undefined} paddingPixel - Padding around the glyph.
- * @property {string | undefined} borderColor - Outline color.
- * @property {number | undefined} borderWidthPixel - Outline width in pixels.
- * @property {SpriteTextGlyphBorderSide[] | undefined} borderSides - Border sides to draw (defaults to all four).
- * @property {number | undefined} borderRadiusPixel - Border radius in pixels.
- * @property {SpriteTextGlyphHorizontalAlign | undefined} textAlign - Horizontal alignment of multiline text.
- * @property {number | undefined} fontSizePixelHint - It is not specified normally. Preferred font size in pixels before dimension constraints are enforced.
- * @property {number | undefined} renderPixelRatio - Canvas pixel ratio multiplier (defaults to 1) applied before the glyph is resampled to its logical size.
  */
 export interface SpriteTextGlyphOptions {
   /** Font family name. */

@@ -4,12 +4,18 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
-import type { SpriteInterpolationOptions } from '../types';
-import { resolveEasing, type EasingFunction } from './easing';
 import type {
-  DegreeInterpolationState,
+  SpriteEasingParam,
+  SpriteInterpolationMode,
+  SpriteInterpolationOptions,
+} from '../types';
+import { resolveEasing } from './easing';
+import type {
   DegreeInterpolationEvaluationResult,
+  EasingFunction,
   InternalSpriteImageState,
+  MutableSpriteInterpolation,
+  SpriteInterpolationState,
 } from '../internalTypes';
 import { normalizeAngleDeg } from '../utils/math';
 
@@ -53,21 +59,21 @@ const normalizeDelta = (delta: number): number => {
 /**
  * Resolves interpolation options by applying defaults to duration and easing configuration.
  * @param {SpriteInterpolationOptions} options - Caller-supplied interpolation configuration.
- * @returns {{ durationMs: number; easing: EasingFunction }} Sanitized options ready for state creation.
+ * @returns Sanitized options ready for state creation.
  */
 const normalizeOptions = (
   options: SpriteInterpolationOptions
 ): {
-  durationMs: number;
-  easing: EasingFunction;
-  easingPreset: ReturnType<typeof resolveEasing>['preset'];
-  mode: 'feedback' | 'feedforward';
+  readonly durationMs: number;
+  readonly easingFunc: EasingFunction;
+  readonly easingParam: SpriteEasingParam;
+  readonly mode: SpriteInterpolationMode;
 } => {
   const resolved = resolveEasing(options.easing);
   return {
     durationMs: normalizeDuration(options.durationMs),
-    easing: resolved.easing,
-    easingPreset: resolved.preset,
+    easingFunc: resolved.func,
+    easingParam: resolved.param,
     mode: options.mode ?? 'feedback',
   };
 };
@@ -76,25 +82,25 @@ const normalizeOptions = (
 
 /**
  * Parameters required to construct a {@link DegreeInterpolationState}.
- * @property {number} currentValue - Current numeric value rendered on screen.
- * @property {number} targetValue - Desired value after interpolation completes.
- * @property {number | undefined} previousCommandValue - Prior commanded value used for feed-forward prediction.
- * @property {SpriteInterpolationOptions} options - Timing and easing configuration.
  */
 export interface CreateDegreeInterpolationStateParams {
+  /** Current numeric value rendered on screen. */
   currentValue: number;
+  /** Desired value after interpolation completes. */
   targetValue: number;
+  /** Prior commanded value used for feed-forward prediction. */
   previousCommandValue?: number;
+  /** Timing and easing configuration. */
   options: SpriteInterpolationOptions;
 }
 
 /**
  * Result returned by {@link createDegreeInterpolationState} containing state and a flag for activation.
- * @property {DegreeInterpolationState} state - Resolved state object.
- * @property {boolean} requiresInterpolation - Indicates whether the caller should animate or snap.
  */
 export interface CreateDegreeInterpolationStateResult {
-  readonly state: DegreeInterpolationState;
+  /** Resolved state object. */
+  readonly state: SpriteInterpolationState<number>;
+  /** Indicates whether the caller should animate or snap. */
   readonly requiresInterpolation: boolean;
 }
 
@@ -122,18 +128,23 @@ export const createDegreeInterpolationState = (
 
   const delta = normalizeDelta(effectiveTarget - currentValue);
   const pathTarget = currentValue + delta;
+  const normalizedPathTarget =
+    Math.abs(pathTarget - targetValue) <= NUMERIC_EPSILON
+      ? undefined
+      : pathTarget;
 
   // Duration must be positive and delta must exceed epsilon before we animate.
   const requiresInterpolation =
     options.durationMs > 0 && Math.abs(delta) > NUMERIC_EPSILON;
 
-  const state: DegreeInterpolationState = {
+  const state: SpriteInterpolationState<number> = {
+    mode: options.mode,
     durationMs: options.durationMs,
-    easing: options.easing,
-    easingPreset: options.easingPreset,
+    easingFunc: options.easingFunc,
+    easingParam: options.easingParam,
     from: currentValue,
-    to: pathTarget,
-    finalValue: effectiveTarget,
+    to: targetValue,
+    pathTarget: normalizedPathTarget,
     startTimestamp: -1,
   };
 
@@ -147,23 +158,23 @@ export const createDegreeInterpolationState = (
 
 /**
  * Parameters describing interpolation evaluation state.
- * @property {DegreeInterpolationState} state - State generated via {@link createDegreeInterpolationState}.
- * @property {number} timestamp - Timestamp in milliseconds used to sample the interpolation curve.
  */
 export interface EvaluateDegreeInterpolationParams {
-  state: DegreeInterpolationState;
+  /** State generated via {@link createDegreeInterpolationState}. */
+  state: SpriteInterpolationState<number>;
+  /** Timestamp in milliseconds used to sample the interpolation curve. */
   timestamp: number;
 }
 
 /**
  * Result of evaluating a numeric interpolation at a specific timestamp.
- * @property {number} value - Current interpolated value (or final value after completion).
- * @property {boolean} completed - Indicates whether interpolation reached the end.
- * @property {number} effectiveStartTimestamp - Start timestamp applied during evaluation.
  */
 export interface EvaluateDegreeInterpolationResult {
+  /** Current interpolated value (or final value after completion). */
   readonly value: number;
+  /** Indicates whether interpolation reached the end. */
   readonly completed: boolean;
+  /** Start timestamp applied during evaluation. */
   readonly effectiveStartTimestamp: number;
 }
 
@@ -197,6 +208,7 @@ export const evaluateDegreeInterpolation = (
   params: EvaluateDegreeInterpolationParams
 ): EvaluateDegreeInterpolationResult => {
   const { state } = params;
+  const targetValue = state.pathTarget ?? state.to;
   const timestamp = Number.isFinite(params.timestamp)
     ? params.timestamp
     : Date.now();
@@ -206,9 +218,9 @@ export const evaluateDegreeInterpolation = (
     state.startTimestamp >= 0 ? state.startTimestamp : timestamp;
 
   // When duration collapses or no meaningful delta exists, snap to the final value immediately.
-  if (duration === 0 || Math.abs(state.to - state.from) <= NUMERIC_EPSILON) {
+  if (duration === 0 || Math.abs(targetValue - state.from) <= NUMERIC_EPSILON) {
     return {
-      value: state.finalValue,
+      value: state.to,
       completed: true,
       effectiveStartTimestamp: effectiveStart,
     };
@@ -216,13 +228,13 @@ export const evaluateDegreeInterpolation = (
 
   const elapsed = timestamp - effectiveStart;
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
-  const eased = clamp01(state.easing(rawProgress));
-  const interpolated = state.from + (state.to - state.from) * eased;
+  const eased = clamp01(state.easingFunc(rawProgress));
+  const interpolated = state.from + (targetValue - state.from) * eased;
   // rawProgress >= 1 indicates we've reached or passed the end of the animation window.
   const completed = rawProgress >= 1;
 
   return {
-    value: completed ? state.finalValue : interpolated,
+    value: completed ? state.to : interpolated,
     completed,
     effectiveStartTimestamp: effectiveStart,
   };
@@ -230,12 +242,10 @@ export const evaluateDegreeInterpolation = (
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-type DegreeInterpolationStateKey =
-  | 'rotationInterpolationState'
-  | 'offsetDegInterpolationState';
-
 interface DegreeInterpolationChannelDescriptor {
-  readonly stateKey: DegreeInterpolationStateKey;
+  readonly resolveInterpolation: (
+    image: InternalSpriteImageState
+  ) => MutableSpriteInterpolation<number>;
   readonly normalize?: (value: number) => number;
   readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
   readonly applyFinalValue?: (
@@ -249,14 +259,14 @@ const DEGREE_INTERPOLATION_CHANNELS: Record<
   DegreeInterpolationChannelDescriptor
 > = {
   rotation: {
-    stateKey: 'rotationInterpolationState',
+    resolveInterpolation: (image) => image.rotateDeg.interpolation,
     normalize: normalizeAngleDeg,
     applyValue: (image, value) => {
       image.displayedRotateDeg = value;
     },
   },
   offsetDeg: {
-    stateKey: 'offsetDegInterpolationState',
+    resolveInterpolation: (image) => image.offset.offsetDeg.interpolation,
     applyValue: (image, value) => {
       image.offset.offsetDeg.current = value;
     },
@@ -271,26 +281,23 @@ const DEGREE_INTERPOLATION_CHANNELS: Record<
 const updateDegreeInterpolationState = (
   image: InternalSpriteImageState,
   descriptor: DegreeInterpolationChannelDescriptor,
-  nextState: DegreeInterpolationState | null
+  nextState: SpriteInterpolationState<number> | null
 ): void => {
-  if (descriptor.stateKey === 'rotationInterpolationState') {
-    image.rotationInterpolationState = nextState;
-  } else {
-    image.offsetDegInterpolationState = nextState;
-  }
+  descriptor.resolveInterpolation(image).state = nextState;
 };
 
 export interface DegreeInterpolationWorkItem {
   readonly descriptor: DegreeInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
-  readonly state: DegreeInterpolationState;
+  readonly state: SpriteInterpolationState<number>;
 }
 
 export const collectDegreeInterpolationWorkItems = (
   image: InternalSpriteImageState,
   workItems: DegreeInterpolationWorkItem[]
 ): void => {
-  const rotationState = image.rotationInterpolationState;
+  const rotationState =
+    DEGREE_INTERPOLATION_CHANNELS.rotation.resolveInterpolation(image).state;
   if (rotationState) {
     workItems.push({
       descriptor: DEGREE_INTERPOLATION_CHANNELS.rotation,
@@ -299,7 +306,8 @@ export const collectDegreeInterpolationWorkItems = (
     });
   }
 
-  const offsetState = image.offsetDegInterpolationState;
+  const offsetState =
+    DEGREE_INTERPOLATION_CHANNELS.offsetDeg.resolveInterpolation(image).state;
   if (offsetState) {
     workItems.push({
       descriptor: DEGREE_INTERPOLATION_CHANNELS.offsetDeg,
@@ -336,7 +344,7 @@ export const applyDegreeInterpolationEvaluations = (
     item.descriptor.applyValue(item.image, interpolatedValue);
 
     if (evaluation.completed) {
-      const finalValue = normalize(item.state.finalValue);
+      const finalValue = normalize(item.state.to);
       applyFinalValue(item.image, finalValue);
       updateDegreeInterpolationState(item.image, item.descriptor, null);
     } else {

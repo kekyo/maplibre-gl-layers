@@ -17,6 +17,7 @@ import type { ProjectionHostParams } from '../../src/host/projectionHost';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
+  MutableSpriteInterpolatedValues,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
@@ -101,7 +102,7 @@ vi.mock('../../src/gl/shader', async (importOriginal) => {
 });
 
 import { createSpriteLayer } from '../../src/SpriteLayer';
-import type { SpriteLayerClickEvent } from '../../src/types';
+import type { SpriteLayerClickEvent, SpriteLocation } from '../../src/types';
 
 class FakeCanvas {
   readonly width: number;
@@ -160,6 +161,39 @@ class FakeCanvas {
 
   getListeners(type: string): Array<(event: unknown) => void> {
     return this.listeners.get(type) ?? [];
+  }
+}
+
+class FakeDocument {
+  visibilityState: DocumentVisibilityState = 'visible';
+  private readonly listeners = new Map<string, Set<(event?: Event) => void>>();
+
+  addEventListener(type: string, listener: (event?: Event) => void): void {
+    const bucket =
+      this.listeners.get(type) ?? new Set<(event?: Event) => void>();
+    bucket.add(listener);
+    this.listeners.set(type, bucket);
+  }
+
+  removeEventListener(type: string, listener: (event?: Event) => void): void {
+    const bucket = this.listeners.get(type);
+    if (!bucket) {
+      return;
+    }
+    bucket.delete(listener);
+    if (bucket.size === 0) {
+      this.listeners.delete(type);
+    }
+  }
+
+  dispatch(type: string): void {
+    const bucket = this.listeners.get(type);
+    if (!bucket) {
+      return;
+    }
+    for (const listener of bucket) {
+      listener({ type } as Event);
+    }
   }
 }
 
@@ -778,6 +812,76 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
   });
 });
 
+describe('document visibility handling', () => {
+  const setupVisibilityLayer = async () => {
+    const canvas = new FakeCanvas() as FakeCanvas & {
+      ownerDocument?: Document;
+    };
+    const fakeDocument = new FakeDocument();
+    canvas.ownerDocument = fakeDocument as unknown as Document;
+    const map = new FakeMap(canvas);
+    const gl = new MockGLContext(canvas) as unknown as WebGLRenderingContext;
+    const layer = createSpriteLayer({ id: 'visibility-layer' });
+    await layer.onAdd?.(map as unknown as any, gl);
+    return { canvas, fakeDocument, map, gl, layer };
+  };
+
+  it('defers auto rotation updates while hidden and resumes when visible', async () => {
+    const { fakeDocument, layer, map, gl } = await setupVisibilityLayer();
+    const bitmap = { width: 32, height: 32 } as unknown as ImageBitmap;
+
+    try {
+      await layer.registerImage('marker', bitmap);
+      layer.addSprite('auto-rot', {
+        location: { lng: 0, lat: 0 },
+        images: [
+          {
+            imageId: 'marker',
+            subLayer: 0,
+            order: 0,
+            mode: 'surface',
+            autoRotation: true,
+            autoRotationMinDistanceMeters: 0,
+          },
+        ],
+      });
+
+      const getPrimaryImage = (): InternalSpriteImageState | undefined => {
+        const spriteState = layer.getSpriteState('auto-rot');
+        return spriteState?.images.get(0)?.get(0) as
+          | InternalSpriteImageState
+          | undefined;
+      };
+
+      layer.updateSprite('auto-rot', { location: { lng: 10, lat: 0 } });
+      layer.render?.(gl, {} as any);
+      const initialAngle = getPrimaryImage()?.resolvedBaseRotateDeg ?? 0;
+
+      fakeDocument.visibilityState = 'hidden';
+      fakeDocument.dispatch('visibilitychange');
+
+      layer.updateSprite('auto-rot', { location: { lng: 0, lat: 10 } });
+      layer.render?.(gl, {} as any);
+      expect(getPrimaryImage()?.resolvedBaseRotateDeg ?? 0).toBeCloseTo(
+        initialAngle,
+        5
+      );
+
+      fakeDocument.visibilityState = 'visible';
+      fakeDocument.dispatch('visibilitychange');
+
+      layer.updateSprite('auto-rot', { location: { lng: 0, lat: 20 } });
+      layer.render?.(gl, {} as any);
+      expect(getPrimaryImage()?.resolvedBaseRotateDeg ?? 0).not.toBeCloseTo(
+        initialAngle,
+        5
+      );
+    } finally {
+      layer.onRemove?.(map as unknown as any, gl);
+    }
+  });
+});
+
 describe('setInterpolationCalculation', () => {
   it('resumes interpolation smoothly after pausing', async () => {
     let currentTimestamp = 0;
@@ -806,10 +910,9 @@ describe('setInterpolationCalculation', () => {
       layer.render?.(gl, {} as any);
 
       const state = layer.getSpriteState('moving') as unknown as {
-        interpolationState?: unknown;
-        location: { to?: { lng: number } };
+        location: MutableSpriteInterpolatedValues<SpriteLocation>;
       };
-      expect(state?.interpolationState).toBeTruthy();
+      expect(state?.location.interpolation.state).toBeTruthy();
 
       const currentLng = () =>
         layer.getSpriteState('moving')?.location.current.lng ?? 0;

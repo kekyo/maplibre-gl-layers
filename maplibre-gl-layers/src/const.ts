@@ -10,6 +10,7 @@ import type {
   SpriteImageOffset,
   SpriteTextGlyphHorizontalAlign,
 } from './types';
+import type { RgbaColor } from './internalTypes';
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -118,3 +119,31 @@ export const UV_CORNERS: ReadonlyArray<readonly [number, number]> = [
   [0.0, 1.0],
   [1.0, 1.0],
 ] as const;
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+const __CSS_KEYWORD_COLORS = {
+  black: [0, 0, 0, 1] as RgbaColor,
+  silver: [192, 192, 192, 1] as RgbaColor,
+  gray: [128, 128, 128, 1] as RgbaColor,
+  white: [255, 255, 255, 1] as RgbaColor,
+  maroon: [128, 0, 0, 1] as RgbaColor,
+  red: [255, 0, 0, 1] as RgbaColor,
+  purple: [128, 0, 128, 1] as RgbaColor,
+  fuchsia: [255, 0, 255, 1] as RgbaColor,
+  green: [0, 128, 0, 1] as RgbaColor,
+  lime: [0, 255, 0, 1] as RgbaColor,
+  olive: [128, 128, 0, 1] as RgbaColor,
+  yellow: [255, 255, 0, 1] as RgbaColor,
+  navy: [0, 0, 128, 1] as RgbaColor,
+  blue: [0, 0, 255, 1] as RgbaColor,
+  teal: [0, 128, 128, 1] as RgbaColor,
+  aqua: [0, 255, 255, 1] as RgbaColor,
+  transparent: [0, 0, 0, 0] as RgbaColor,
+};
+
+export const CSS_KEYWORD_COLORS: typeof __CSS_KEYWORD_COLORS &
+  Record<string, RgbaColor> = __CSS_KEYWORD_COLORS;
+
+export const DEFAULT_BORDER_COLOR = 'red';
+export const DEFAULT_BORDER_COLOR_RGBA = CSS_KEYWORD_COLORS.red;

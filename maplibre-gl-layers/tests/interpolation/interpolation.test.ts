@@ -34,8 +34,8 @@ describe('createInterpolationState', () => {
     expect(spriteLocationsEqual(state.to, next)).toBe(true);
     expect(state.from).not.toBe(current);
     expect(state.to).not.toBe(next);
-    expect(state.easing).toBe(linearEasing);
-    expect(state.easingPreset.type).toBe('linear');
+    expect(state.easingFunc).toBe(linearEasing);
+    expect(state.easingParam.type).toBe('linear');
   });
 
   it('predicts feedforward target based on velocity', () => {
@@ -51,9 +51,12 @@ describe('createInterpolationState', () => {
     expect(state.mode).toBe('feedforward');
     expect(requiresInterpolation).toBe(true);
     expect(spriteLocationsEqual(state.from, { lng: 1.5, lat: 2 })).toBe(true);
-    expect(state.to.lng).toBeCloseTo(3);
-    expect(state.to.lat).toBeCloseTo(5);
-    expect(state.to.z).toBeCloseTo(9);
+    expect(state.pathTarget?.lng).toBeCloseTo(3);
+    expect(state.pathTarget?.lat).toBeCloseTo(5);
+    expect(state.pathTarget?.z).toBeCloseTo(9);
+    expect(state.to.lng).toBeCloseTo(next.lng);
+    expect(state.to.lat).toBeCloseTo(next.lat);
+    expect(state.to.z).toBeCloseTo(next.z);
   });
 
   it('falls back to next location if feedforward lacks history', () => {
@@ -76,8 +79,8 @@ describe('createInterpolationState', () => {
       options: { durationMs: 1000, easing: { type: 'linear' } },
     });
 
-    expect(state.easing).toBe(linearEasing);
-    expect(state.easingPreset.type).toBe('linear');
+    expect(state.easingFunc).toBe(linearEasing);
+    expect(state.easingParam.type).toBe('linear');
   });
 
   it('marks interpolation as unnecessary when duration is zero', () => {
@@ -140,10 +143,11 @@ describe('evaluateInterpolation', () => {
     });
 
     expect(midResult.completed).toBe(false);
+    const target = state.pathTarget ?? state.to;
     expect(
       spriteLocationsEqual(
         midResult.location,
-        lerpSpriteLocation(state.from, state.to, 0.5)
+        lerpSpriteLocation(state.from, target, 0.5)
       )
     ).toBe(true);
 

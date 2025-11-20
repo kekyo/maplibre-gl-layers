@@ -94,12 +94,16 @@ const createSpriteState = (
       current: location,
       from: undefined,
       to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: location,
+      },
     },
+    opacityMultiplier: 1,
     images: spriteImages,
     tag: null,
-    interpolationState: null,
-    pendingInterpolationOptions: null,
-    lastCommandLocation: location,
     lastAutoRotationLocation: location,
     lastAutoRotationAngleDeg: 0,
     interpolationDirty: false,
@@ -126,7 +130,16 @@ const createImageState = (
       current: 1,
       from: undefined,
       to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        targetValue: 1,
+        baseValue: 1,
+        lastCommandValue: 1,
+      },
     },
+    lodOpacity: 1,
     scale: 1,
     anchor,
     border: undefined,
@@ -136,14 +149,36 @@ const createImageState = (
         current: offset.offsetMeters,
         from: undefined,
         to: undefined,
+        invalidated: false,
+        interpolation: {
+          state: null,
+          options: null,
+          lastCommandValue: offset.offsetMeters,
+        },
       },
       offsetDeg: {
         current: offset.offsetDeg,
         from: undefined,
         to: undefined,
+        invalidated: false,
+        interpolation: {
+          state: null,
+          options: null,
+          lastCommandValue: offset.offsetDeg,
+        },
       },
     },
-    rotateDeg: { current: 0, from: undefined, to: undefined },
+    rotateDeg: {
+      current: 0,
+      from: undefined,
+      to: undefined,
+      invalidated: false,
+      interpolation: {
+        state: null,
+        options: null,
+        lastCommandValue: 0,
+      },
+    },
     rotationCommandDeg: 0,
     displayedRotateDeg: 0,
     autoRotation: false,
@@ -152,18 +187,6 @@ const createImageState = (
     originLocation: undefined,
     originReferenceKey: SPRITE_ORIGIN_REFERENCE_KEY_NONE,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
-    rotationInterpolationState: null,
-    rotationInterpolationOptions: null,
-    offsetDegInterpolationState: null,
-    offsetMetersInterpolationState: null,
-    opacityInterpolationState: null,
-    opacityInterpolationOptions: null,
-    opacityTargetValue: 1,
-    lodLastCommandOpacity: 1,
-    lastCommandRotateDeg: 0,
-    lastCommandOffsetDeg: 0,
-    lastCommandOffsetMeters: 0,
-    lastCommandOpacity: 1,
     interpolationDirty: false,
     surfaceShaderInputs: undefined,
     hitTestCorners: undefined,
@@ -368,7 +391,7 @@ const assertPreparedUvs = (
 
 describe.each(HOST_FACTORIES)('calculation hosts atlas UVs (%s)', (factory) => {
   beforeAll(async () => {
-    await initializeWasmHost();
+    await initializeWasmHost('simd', { force: false, wasmBaseUrl: undefined });
   });
   afterAll(() => {
     releaseWasmHost();

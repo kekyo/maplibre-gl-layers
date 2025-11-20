@@ -43,7 +43,7 @@ import type {
   SpriteLocation,
   SpritePoint,
   SpriteMode,
-  SpriteEasing,
+  SpriteEasingParam,
   SpriteEasingType,
   SpriteImageOffset,
 } from '../types';
@@ -131,7 +131,7 @@ type EncodedEasingPreset = {
   readonly param2: number;
 };
 
-const encodeEasingPreset = (preset: SpriteEasing): EncodedEasingPreset => {
+const encodeEasingPreset = (preset: SpriteEasingParam): EncodedEasingPreset => {
   const id = EASING_PRESET_IDS[preset.type] ?? -1;
   switch (preset.type) {
     case 'ease': {
@@ -205,7 +205,7 @@ const encodeDistanceInterpolationRequest = (
   request: DistanceInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const preset = encodeEasingPreset(state.easingPreset);
+  const preset = encodeEasingPreset(state.easingParam);
   if (preset.id < 0) {
     throw new Error(
       'Distance interpolation request missing preset easing function.'
@@ -213,8 +213,8 @@ const encodeDistanceInterpolationRequest = (
   }
   buffer[cursor++] = state.durationMs;
   buffer[cursor++] = state.from;
+  buffer[cursor++] = state.pathTarget ?? state.to;
   buffer[cursor++] = state.to;
-  buffer[cursor++] = state.finalValue;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
   buffer[cursor++] = preset.id;
@@ -230,7 +230,7 @@ const encodeDegreeInterpolationRequest = (
   request: DegreeInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const preset = encodeEasingPreset(state.easingPreset);
+  const preset = encodeEasingPreset(state.easingParam);
   if (preset.id < 0) {
     throw new Error(
       'Degree interpolation request missing preset easing function.'
@@ -238,8 +238,8 @@ const encodeDegreeInterpolationRequest = (
   }
   buffer[cursor++] = state.durationMs;
   buffer[cursor++] = state.from;
+  buffer[cursor++] = state.pathTarget ?? state.to;
   buffer[cursor++] = state.to;
-  buffer[cursor++] = state.finalValue;
   buffer[cursor++] = state.startTimestamp;
   buffer[cursor++] = timestamp;
   buffer[cursor++] = preset.id;
@@ -255,7 +255,7 @@ const encodeSpriteInterpolationRequest = (
   request: SpriteInterpolationEvaluationParams
 ): number => {
   const { state, timestamp } = request;
-  const preset = encodeEasingPreset(state.easingPreset);
+  const preset = encodeEasingPreset(state.easingParam);
   if (preset.id < 0) {
     throw new Error(
       'Sprite interpolation request missing preset easing function.'
@@ -425,7 +425,7 @@ const processInterpolationsViaWasm = (
 
 interface SpriteInterpolationWorkItem<TTag> {
   readonly sprite: InternalSpriteCurrentState<TTag>;
-  readonly state: SpriteInterpolationState;
+  readonly state: SpriteInterpolationState<SpriteLocation>;
 }
 
 const applySpriteInterpolationEvaluations = <TTag>(
@@ -454,7 +454,7 @@ const applySpriteInterpolationEvaluations = <TTag>(
       sprite.location.current = cloneSpriteLocation(state.to);
       sprite.location.from = undefined;
       sprite.location.to = undefined;
-      sprite.interpolationState = null;
+      sprite.location.interpolation.state = null;
     } else {
       active = true;
     }
@@ -484,7 +484,8 @@ const processInterpolationsWithWasm = <TTag>(
   let hasActiveInterpolation = false;
 
   for (const sprite of sprites) {
-    const state = sprite.interpolationState;
+    const locationInterpolation = sprite.location.interpolation;
+    const state = locationInterpolation.state;
     const hasSpriteInterpolation = state !== null;
     if (!hasSpriteInterpolation && !sprite.interpolationDirty) {
       continue;
@@ -510,7 +511,7 @@ const processInterpolationsWithWasm = <TTag>(
         }
 
         const hasOffsetMetersInterpolation =
-          image.offsetMetersInterpolationState !== null;
+          image.offset.offsetMeters.interpolation.state !== null;
         if (hasOffsetMetersInterpolation) {
           collectDistanceInterpolationWorkItems(
             image,
@@ -522,11 +523,11 @@ const processInterpolationsWithWasm = <TTag>(
         }
 
         const hasOpacityInterpolation =
-          image.opacityInterpolationState !== null;
+          image.opacity.interpolation.state !== null;
 
         const hasDegreeInterpolation =
-          image.rotationInterpolationState !== null ||
-          image.offsetDegInterpolationState !== null;
+          image.rotateDeg.interpolation.state !== null ||
+          image.offset.offsetDeg.interpolation.state !== null;
         if (hasDegreeInterpolation) {
           collectDegreeInterpolationWorkItems(
             image,
