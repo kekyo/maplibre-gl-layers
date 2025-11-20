@@ -163,9 +163,9 @@ export interface SpriteEasingBack {
 }
 
 /**
- * Union of supported easing definitions.
+ * Union of supported easing parameters.
  */
-export type SpriteEasingAttributes =
+export type SpriteEasingParam =
   | SpriteEasingLinear
   | SpriteEasingEase
   | SpriteEasingExponential
@@ -178,7 +178,7 @@ export type SpriteEasingAttributes =
 /**
  * Easing types.
  */
-export type SpriteEasingType = SpriteEasingAttributes['type'];
+export type SpriteEasingType = SpriteEasingParam['type'];
 
 /**
  * Defines interpolation modes.
@@ -194,7 +194,7 @@ export interface SpriteInterpolationOptions {
   /** Duration in milliseconds. */
   durationMs: number;
   /** Easing definition. Defaults to `linear`. */
-  easing?: SpriteEasingAttributes;
+  easing?: SpriteEasingParam;
 }
 
 /**
@@ -403,23 +403,6 @@ export interface SpriteImageLineAttributeState {
 
 /**
  * Sprite image state evaluated at runtime.
- *
- * @property {number} subLayer - Sub-layer index the image belongs to.
- * @property {number} order - Ordering slot within the sub-layer.
- * @property {string} imageId - Identifier of the registered image or glyph.
- * @property {SpriteMode} mode - Rendering mode applied to the image.
- * @property {SpriteInterpolatedValues<number>} opacity - Opacity multiplier applied when rendering, with interpolation metadata.
- * @property {number} scale - Scale factor converting pixels to meters.
- * @property {Readonly<SpriteAnchor>} anchor - Anchor coordinates resolved for the image.
- * @property {SpriteImageInterpolatedOffset} offset - Offset applied relative to the anchor point, with interpolation metadata.
- * @property {SpriteImageLineAttributeState | undefined} border - Border line attribute.
- * @property {SpriteImageLineAttributeState | undefined} leaderLine - Leader line attribute.
- * @property {SpriteInterpolatedValues<number>} rotateDeg - Additional rotation in degrees plus interpolation metadata.
- * @property {boolean} autoRotation - Indicates whether auto-rotation is active.
- * @property {number} autoRotationMinDistanceMeters - Minimum travel distance before auto-rotation updates.
- * @property {number} resolvedBaseRotateDeg - Internal base rotation resolved for the current frame.
- * @property {number} displayedRotateDeg - Rotation value actually used for rendering.
- * @property {Readonly<SpriteImageOriginLocation> | undefined} originLocation - Optional reference to another image used for anchoring.
  */
 export interface SpriteImageState {
   /** Sub-layer index the image belongs to. */
@@ -491,10 +474,6 @@ export interface SpriteCurrentState<TTag> {
  * Base structure for sprite updates.
  *
  * @template TTag Tag type stored on the sprite.
- * @property {boolean | undefined} isEnabled - Optional toggle to enable or disable the sprite.
- * @property {SpriteLocation | undefined} location - Optional target location for the sprite.
- * @property {SpriteLocationInterpolationOptions | null | undefined} interpolation - Optional location interpolation settings; `null` disables interpolation.
- * @property {TTag | null | undefined} tag - Optional tag value to replace the current one; `null` clears the tag.
  */
 export interface SpriteUpdateEntryBase<TTag> {
   /** Optional toggle to enable or disable the sprite. */

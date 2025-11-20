@@ -5,13 +5,15 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type {
-  SpriteEasingAttributes,
+  SpriteEasingParam,
+  SpriteInterpolationMode,
   SpriteInterpolationOptions,
 } from '../types';
-import { resolveEasing, type EasingFunction } from './easing';
+import { resolveEasing } from './easing';
 import type {
   DistanceInterpolationEvaluationParams,
   DistanceInterpolationEvaluationResult,
+  EasingFunction,
   InternalSpriteImageState,
   MutableSpriteInterpolation,
   SpriteInterpolationState,
@@ -28,16 +30,16 @@ const normalizeDuration = (durationMs: number): number =>
 const normalizeOptions = (
   options: SpriteInterpolationOptions
 ): {
-  durationMs: number;
-  easingFunction: EasingFunction;
-  easingAttributes: SpriteEasingAttributes;
-  mode: 'feedback' | 'feedforward';
+  readonly durationMs: number;
+  readonly easingFunc: EasingFunction;
+  readonly easingParam: SpriteEasingParam;
+  readonly mode: SpriteInterpolationMode;
 } => {
   const resolved = resolveEasing(options.easing);
   return {
     durationMs: normalizeDuration(options.durationMs),
-    easingFunction: resolved.func,
-    easingAttributes: resolved.param,
+    easingFunc: resolved.func,
+    easingParam: resolved.param,
     mode: options.mode ?? 'feedback',
   };
 };
@@ -85,8 +87,8 @@ export const createDistanceInterpolationState = (
   const state: SpriteInterpolationState<number> = {
     mode: options.mode,
     durationMs: options.durationMs,
-    easingFunction: options.easingFunction,
-    easingAttributes: options.easingAttributes,
+    easingFunc: options.easingFunc,
+    easingParam: options.easingParam,
     from: currentValue,
     to: targetValue,
     pathTarget: normalizedPathTarget,
@@ -138,7 +140,7 @@ export const evaluateDistanceInterpolation = (
 
   const elapsed = timestamp - effectiveStart;
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
-  const eased = clamp01(state.easingFunction(rawProgress));
+  const eased = clamp01(state.easingFunc(rawProgress));
   const interpolated = state.from + (targetValue - state.from) * eased;
   const completed = rawProgress >= 1;
 

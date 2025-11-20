@@ -56,6 +56,7 @@ import type {
   SpriteOriginReference,
   SpriteOriginReferenceKey,
   ResolvedSpriteImageLineAttribute,
+  RgbaColor,
 } from './internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -73,12 +74,7 @@ import {
   spriteLocationsEqual,
   clampOpacity,
 } from './utils/math';
-import {
-  DEFAULT_BORDER_COLOR,
-  DEFAULT_BORDER_COLOR_RGBA,
-  parseCssColorToRgba,
-  type RgbaColor,
-} from './utils/color';
+import { parseCssColorToRgba } from './utils/color';
 import {
   applyOffsetUpdate,
   applyOpacityUpdate,
@@ -109,6 +105,8 @@ import { createWasmCalculationHost } from './host/wasmCalculationHost';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
+  DEFAULT_BORDER_COLOR,
+  DEFAULT_BORDER_COLOR_RGBA,
   DEFAULT_BORDER_WIDTH_METERS,
   DEFAULT_IMAGE_OFFSET,
 } from './const';

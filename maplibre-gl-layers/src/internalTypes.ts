@@ -20,21 +20,21 @@ import type {
   SpriteInterpolationMode,
   SpriteScreenPoint,
   SpritePoint,
-  SpriteEasingAttributes,
+  SpriteEasingParam,
   SpriteImageLineAttributeState,
   SpriteImageState,
   SpriteInterpolatedValues,
   SpriteImageInterpolatedOffset,
 } from './types';
-import type { EasingFunction } from './interpolation/easing';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
-import type { RgbaColor } from './utils/color';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
 export interface Releasable {
   readonly release: () => void;
 }
+
+export type RgbaColor = readonly [number, number, number, number];
 
 /**
  * Represents a projected three dimensional position.
@@ -493,6 +493,11 @@ export interface SurfaceShaderInputs {
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * Easing function type.
+ */
+export type EasingFunction = (progress: number) => number;
+
+/**
  * Runtime state describing the active interpolation between two sprite locations.
  * Consumers reuse the same state across ticks to avoid re-allocations while animation is running.
  */
@@ -502,9 +507,9 @@ export interface SpriteInterpolationState<TValue> {
   /** Total time allocated for the interpolation in milliseconds. */
   readonly durationMs: number;
   /** Easing attributes */
-  readonly easingAttributes: SpriteEasingAttributes;
+  readonly easingParam: SpriteEasingParam;
   /** Resolved easing function applied to raw progress values. */
-  readonly easingFunction: EasingFunction;
+  readonly easingFunc: EasingFunction;
   /** Origin sprite location cloned from the current render state. */
   readonly from: TValue;
   /** Destination sprite location being interpolated towards.  */

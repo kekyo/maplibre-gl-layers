@@ -641,8 +641,8 @@ describe('processInterpolationsViaWasm', () => {
     const distanceState: SpriteInterpolationState<number> = {
       mode: 'feedback',
       durationMs: 1000,
-      easingFunction: linear,
-      easingAttributes: { type: 'linear' },
+      easingFunc: linear,
+      easingParam: { type: 'linear' },
       from: 0,
       to: 10,
       startTimestamp: -1,
@@ -650,8 +650,8 @@ describe('processInterpolationsViaWasm', () => {
     const degreeState: SpriteInterpolationState<number> = {
       mode: 'feedback',
       durationMs: 1000,
-      easingFunction: linear,
-      easingAttributes: { type: 'linear' },
+      easingFunc: linear,
+      easingParam: { type: 'linear' },
       from: 0,
       to: 90,
       startTimestamp: -1,
@@ -659,8 +659,8 @@ describe('processInterpolationsViaWasm', () => {
     const spriteState: SpriteInterpolationState<SpriteLocation> = {
       mode: 'feedback',
       durationMs: 1000,
-      easingFunction: linear,
-      easingAttributes: { type: 'linear' },
+      easingFunc: linear,
+      easingParam: { type: 'linear' },
       from: { lng: 0, lat: 0 },
       to: { lng: 5, lat: 0 },
       startTimestamp: -1,

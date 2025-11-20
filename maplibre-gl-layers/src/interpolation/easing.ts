@@ -4,8 +4,9 @@
 // Under MIT
 // https://github.com/kekyo/maplibre-gl-layers
 
+import type { EasingFunction } from '../internalTypes';
 import type {
-  SpriteEasingAttributes,
+  SpriteEasingParam,
   SpriteEasingBack,
   SpriteEasingBounce,
   SpriteEasingCubic,
@@ -16,8 +17,11 @@ import type {
   SpriteEasingSine,
 } from '../types';
 
-export type EasingFunction = (progress: number) => number;
+//////////////////////////////////////////////////////////////////////////////////////////
+
 type EasingMode = 'in' | 'out' | 'in-out';
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 const clampProgress = (progress: number): number => {
   if (!Number.isFinite(progress)) {
@@ -170,21 +174,24 @@ const createBackEasing = (overshoot: number): EasingFunction => {
   };
 };
 
+//////////////////////////////////////////////////////////////////////////////////////////
+
 export interface ResolvedEasing {
+  readonly param: SpriteEasingParam;
   readonly func: EasingFunction;
-  readonly param: SpriteEasingAttributes;
 }
+
+const fallback: ResolvedEasing = {
+  func: linearEasing,
+  param: { type: 'linear' },
+} as const;
 
 /**
  * Resolves an easing definition into its implementation, defaulting to linear when unspecified or unknown.
+ * @param easing - Easing parameter.
+ * @return Resolved easing parameters.
  */
-export const resolveEasing = (
-  easing?: SpriteEasingAttributes
-): ResolvedEasing => {
-  const fallback: ResolvedEasing = {
-    func: linearEasing,
-    param: { type: 'linear' },
-  };
+export const resolveEasing = (easing?: SpriteEasingParam): ResolvedEasing => {
   if (!easing) {
     return fallback;
   }

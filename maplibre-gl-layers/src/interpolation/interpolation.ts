@@ -142,8 +142,8 @@ export const createInterpolationState = (
   const state: SpriteInterpolationState<SpriteLocation> = {
     mode: options.mode,
     durationMs: options.durationMs,
-    easingFunction: resolvedEasing.func,
-    easingAttributes: resolvedEasing.param,
+    easingFunc: resolvedEasing.func,
+    easingParam: resolvedEasing.param,
     startTimestamp: -1,
     from,
     to: commandTarget,
@@ -168,7 +168,7 @@ export const evaluateInterpolation = (
   params: SpriteInterpolationEvaluationParams
 ): SpriteInterpolationEvaluationResult => {
   const { state } = params;
-  const easingFn = state.easingFunction;
+  const easingFn = state.easingFunc;
   // Use the provided timestamp when valid; otherwise fall back to real time to keep animation advancing.
   const timestamp = Number.isFinite(params.timestamp)
     ? params.timestamp

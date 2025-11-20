@@ -5,12 +5,14 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type {
-  SpriteEasingAttributes,
+  SpriteEasingParam,
+  SpriteInterpolationMode,
   SpriteInterpolationOptions,
 } from '../types';
-import { resolveEasing, type EasingFunction } from './easing';
+import { resolveEasing } from './easing';
 import type {
   DegreeInterpolationEvaluationResult,
+  EasingFunction,
   InternalSpriteImageState,
   MutableSpriteInterpolation,
   SpriteInterpolationState,
@@ -57,21 +59,21 @@ const normalizeDelta = (delta: number): number => {
 /**
  * Resolves interpolation options by applying defaults to duration and easing configuration.
  * @param {SpriteInterpolationOptions} options - Caller-supplied interpolation configuration.
- * @returns {{ durationMs: number; easing: EasingFunction }} Sanitized options ready for state creation.
+ * @returns Sanitized options ready for state creation.
  */
 const normalizeOptions = (
   options: SpriteInterpolationOptions
 ): {
-  durationMs: number;
-  easingFunction: EasingFunction;
-  easingAttributes: SpriteEasingAttributes;
-  mode: 'feedback' | 'feedforward';
+  readonly durationMs: number;
+  readonly easingFunc: EasingFunction;
+  readonly easingParam: SpriteEasingParam;
+  readonly mode: SpriteInterpolationMode;
 } => {
   const resolved = resolveEasing(options.easing);
   return {
     durationMs: normalizeDuration(options.durationMs),
-    easingFunction: resolved.func,
-    easingAttributes: resolved.param,
+    easingFunc: resolved.func,
+    easingParam: resolved.param,
     mode: options.mode ?? 'feedback',
   };
 };
@@ -138,8 +140,8 @@ export const createDegreeInterpolationState = (
   const state: SpriteInterpolationState<number> = {
     mode: options.mode,
     durationMs: options.durationMs,
-    easingFunction: options.easingFunction,
-    easingAttributes: options.easingAttributes,
+    easingFunc: options.easingFunc,
+    easingParam: options.easingParam,
     from: currentValue,
     to: targetValue,
     pathTarget: normalizedPathTarget,
@@ -226,7 +228,7 @@ export const evaluateDegreeInterpolation = (
 
   const elapsed = timestamp - effectiveStart;
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
-  const eased = clamp01(state.easingFunction(rawProgress));
+  const eased = clamp01(state.easingFunc(rawProgress));
   const interpolated = state.from + (targetValue - state.from) * eased;
   // rawProgress >= 1 indicates we've reached or passed the end of the animation window.
   const completed = rawProgress >= 1;

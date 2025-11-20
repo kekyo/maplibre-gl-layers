@@ -34,7 +34,7 @@ import type {
   SpriteTextGlyphOptions,
   SpriteImageRegisterOptions,
   SpriteLayerInterface,
-  SpriteEasingAttributes,
+  SpriteEasingParam,
 } from 'maplibre-gl-layers';
 import { version, repository_url } from './generated/packageMetadata';
 
@@ -159,13 +159,12 @@ const mapSourceSpecification: SourceSpecifications = {
 const SPRITE_LAYER_ID = 'demo-sprite';
 
 /**
- * @typedef {Object} IconSpec
- * @property {string} id - Identifier used when registering the image in the MapLibre overlay.
- * @property {string} color - Fill color applied when drawing the arrow icon.
  * Referenced while `createArrowBitmap` builds the ImageBitmap.
  */
 type IconSpec = {
+  /** Identifier used when registering the image in the MapLibre overlay. */
   id: string;
+  /** Fill color applied when drawing the arrow icon. */
   color: string;
 };
 
@@ -526,37 +525,31 @@ const generatePseudoLodDistanceMeters = (): number => {
  * Internal types used to manage sprite state in the demo, including velocity vectors
  * and rendering modes required for animation.
  */
-/**
- * @typedef {Object} LinearPath
- * @property {number} startLng - Starting longitude.
- * @property {number} startLat - Starting latitude.
- * @property {number} endLng - Ending longitude reached in linear animation mode.
- * @property {number} endLat - Ending latitude reached in linear animation mode.
- * @property {number} progress - Progress along the segment (0.0–1.0). Looping is achieved by incrementing and wrapping this value.
- * @property {number} speed - Fractional step size. Multiplied by MOVEMENT_STEP_FACTOR to obtain actual movement.
- */
 interface LinearPath {
+  /** Starting longitude. */
   startLng: number;
+  /** Starting latitude. */
   startLat: number;
+  /** Ending longitude reached in linear animation mode. */
   endLng: number;
+  /** Ending latitude reached in linear animation mode. */
   endLat: number;
+  /** Progress along the segment (0.0–1.0). Looping is achieved by incrementing and wrapping this value. */
   progress: number;
+  /** Fractional step size. Multiplied by MOVEMENT_STEP_FACTOR to obtain actual movement. */
   speed: number;
 }
 
-/**
- * @typedef {Object} DemoSpriteTag
- * @property {number} dx - Longitude velocity used in the previous step. Updated when reflecting at bounds.
- * @property {number} dy - Latitude velocity used in the previous step.
- * @property {LinearPath} [path] - Travel path when linear mode is active. Undefined during random walk mode.
- * @property {number} lastStepLng - Previous longitude delta applied. Used to compute orientation.
- * @property {number} lastStepLat - Previous latitude delta applied.
- */
 interface DemoSpriteTag {
+  /** Longitude velocity used in the previous step. Updated when reflecting at bounds. */
   dx: number;
+  /** Latitude velocity used in the previous step. */
   dy: number;
+  /** Travel path when linear mode is active. Undefined during random walk mode. */
   path?: LinearPath;
+  /** Previous longitude delta applied. Used to compute orientation. */
   lastStepLng: number;
+  /** Previous latitude delta applied. */
   lastStepLat: number;
   orderIndex: number;
   iconSpecId: string;
@@ -565,7 +558,6 @@ interface DemoSpriteTag {
 }
 
 /**
- * @typedef {'random'|'linear'} AnimationMode
  * `random` performs a boundary-reflecting random walk, while `linear` loops over predefined paths.
  */
 type AnimationMode = 'random' | 'linear';
@@ -580,22 +572,26 @@ const EASING_OPTION_PRESETS = [
   {
     key: 'linear',
     label: 'Linear',
-    easing: { type: 'linear' } as SpriteEasingAttributes,
+    easing: { type: 'linear' } as SpriteEasingParam,
   },
   {
     key: 'ease-in',
     label: 'Ease In (pow 3)',
-    easing: { type: 'ease', mode: 'in', power: 3 } as SpriteEasingAttributes,
+    easing: { type: 'ease', mode: 'in', power: 3 } as SpriteEasingParam,
   },
   {
     key: 'ease-out',
     label: 'Ease Out (pow 3)',
-    easing: { type: 'ease', mode: 'out', power: 3 } as SpriteEasingAttributes,
+    easing: { type: 'ease', mode: 'out', power: 3 } as SpriteEasingParam,
   },
   {
     key: 'ease-in-out',
     label: 'Ease In-Out (pow 4)',
-    easing: { type: 'ease', mode: 'in-out', power: 4 } as SpriteEasingAttributes,
+    easing: {
+      type: 'ease',
+      mode: 'in-out',
+      power: 4,
+    } as SpriteEasingParam,
   },
   {
     key: 'exponential',
@@ -604,32 +600,40 @@ const EASING_OPTION_PRESETS = [
       type: 'exponential',
       exponent: 6,
       mode: 'in-out',
-    } as SpriteEasingAttributes,
+    } as SpriteEasingParam,
   },
   {
     key: 'quadratic',
     label: 'Quadratic (in)',
-    easing: { type: 'quadratic', mode: 'in' } as SpriteEasingAttributes,
+    easing: { type: 'quadratic', mode: 'in' } as SpriteEasingParam,
   },
   {
     key: 'cubic',
     label: 'Cubic (out)',
-    easing: { type: 'cubic', mode: 'out' } as SpriteEasingAttributes,
+    easing: { type: 'cubic', mode: 'out' } as SpriteEasingParam,
   },
   {
     key: 'sine',
     label: 'Sine (in-out, amp 1.2)',
-    easing: { type: 'sine', mode: 'in-out', amplitude: 1.2 } as SpriteEasingAttributes,
+    easing: {
+      type: 'sine',
+      mode: 'in-out',
+      amplitude: 1.2,
+    } as SpriteEasingParam,
   },
   {
     key: 'bounce',
     label: 'Bounce (4x, 0.7)',
-    easing: { type: 'bounce', bounces: 4, decay: 0.7 } as SpriteEasingAttributes,
+    easing: {
+      type: 'bounce',
+      bounces: 4,
+      decay: 0.7,
+    } as SpriteEasingParam,
   },
   {
     key: 'back',
     label: 'Back (overshoot 2.2)',
-    easing: { type: 'back', overshoot: 2.2 } as SpriteEasingAttributes,
+    easing: { type: 'back', overshoot: 2.2 } as SpriteEasingParam,
   },
 ] as const;
 
@@ -637,7 +641,9 @@ type EasingOptionKey = (typeof EASING_OPTION_PRESETS)[number]['key'];
 
 const isEasingEnabled = (key: EasingOptionKey): boolean => key !== 'off';
 
-const resolveEasingOption = (key: EasingOptionKey): SpriteEasingAttributes | undefined =>
+const resolveEasingOption = (
+  key: EasingOptionKey
+): SpriteEasingParam | undefined =>
   EASING_OPTION_PRESETS.find((entry) => entry.key === key)?.easing;
 
 const renderEasingOptions = (current: EasingOptionKey): string =>
