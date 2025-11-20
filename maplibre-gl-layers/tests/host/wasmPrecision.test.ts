@@ -57,7 +57,10 @@ describe('wasm fromLngLat precision', () => {
   it('compares 1M samples between JS and WASM implementations', async () => {
     expect.hasAssertions();
 
-    const initialized = await initializeWasmHost();
+    const initialized = await initializeWasmHost('simd', {
+      force: false,
+      wasmBaseUrl: undefined,
+    });
     expect(initialized).not.toBe('disabled');
 
     const referenceHost = createProjectionHost(BASE_PARAMS);

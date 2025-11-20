@@ -24,12 +24,10 @@ import type {
   PrepareDrawSpriteImageParams,
   RegisteredImage,
   RenderTargetEntryLike,
-  DistanceInterpolationState,
-  DegreeInterpolationState,
-  SpriteLocationInterpolationState,
   DistanceInterpolationEvaluationResult,
   DegreeInterpolationEvaluationResult,
   SpriteInterpolationEvaluationResult,
+  SpriteInterpolationState,
 } from '../../src/internalTypes';
 import { ORDER_BUCKET } from '../../src/const';
 import {
@@ -639,7 +637,7 @@ describe('processInterpolationsViaWasm', () => {
   it('encodes requests and decodes wasm responses', () => {
     const wasm = new MockWasmHost();
     const linear = (value: number): number => value;
-    const distanceState: DistanceInterpolationState = {
+    const distanceState: SpriteInterpolationState<number> = {
       mode: 'feedback',
       durationMs: 1000,
       easing: linear,
@@ -648,7 +646,7 @@ describe('processInterpolationsViaWasm', () => {
       to: 10,
       startTimestamp: -1,
     };
-    const degreeState: DegreeInterpolationState = {
+    const degreeState: SpriteInterpolationState<number> = {
       mode: 'feedback',
       durationMs: 1000,
       easing: linear,
@@ -657,14 +655,14 @@ describe('processInterpolationsViaWasm', () => {
       to: 90,
       startTimestamp: -1,
     };
-    const spriteState: SpriteLocationInterpolationState = {
+    const spriteState: SpriteInterpolationState<SpriteLocation> = {
       mode: 'feedback',
       durationMs: 1000,
       easing: linear,
       easingPreset: { type: 'linear' },
-      startTimestamp: -1,
       from: { lng: 0, lat: 0 },
       to: { lng: 5, lat: 0 },
+      startTimestamp: -1,
     };
 
     const requests = {

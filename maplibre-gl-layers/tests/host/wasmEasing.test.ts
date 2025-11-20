@@ -12,11 +12,14 @@ import {
   releaseWasmHost,
 } from '../../src/host/wasmHost';
 import { __wasmCalculationTestInternals } from '../../src/host/wasmCalculationHost';
-import type { DistanceInterpolationState } from '../../src/internalTypes';
+import type { SpriteInterpolationState } from '../../src/internalTypes';
 
 describe('wasm easing presets', () => {
   beforeAll(async () => {
-    const initialized = await initializeWasmHost('nosimd', { force: true });
+    const initialized = await initializeWasmHost('nosimd', {
+      force: true,
+      wasmBaseUrl: undefined,
+    });
     if (initialized === 'disabled') {
       throw new Error('WASM host failed to initialize.');
     }
@@ -29,10 +32,10 @@ describe('wasm easing presets', () => {
   it('applies ease-out easing with custom power on wasm', () => {
     const wasm = prepareWasmHost();
     const preset = { type: 'ease', mode: 'out', power: 2 } as const;
-    const state: DistanceInterpolationState = {
+    const state: SpriteInterpolationState<number> = {
       mode: 'feedback',
       durationMs: 1000,
-      easing: (t) => t,
+      easing: (t: number) => t,
       easingPreset: preset,
       from: 0,
       to: 10,
@@ -56,10 +59,10 @@ describe('wasm easing presets', () => {
   it('applies bounce easing with parameters on wasm', () => {
     const wasm = prepareWasmHost();
     const preset = { type: 'bounce', bounces: 4, decay: 0.8 } as const;
-    const state: DistanceInterpolationState = {
+    const state: SpriteInterpolationState<number> = {
       mode: 'feedback',
       durationMs: 1000,
-      easing: (t) => t,
+      easing: (t: number) => t,
       easingPreset: preset,
       from: 0,
       to: 1,

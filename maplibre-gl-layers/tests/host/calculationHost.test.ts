@@ -46,9 +46,7 @@ import type {
   MutableSpriteInterpolatedValues,
   MutableSpriteInterpolatedLocationValues,
   ResolvedSpriteImageLineAttribute,
-  DegreeInterpolationState,
-  DistanceInterpolationState,
-  SpriteLocationInterpolationState,
+  SpriteInterpolationState,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
@@ -88,7 +86,7 @@ type SpriteStateOverrides = Partial<
   Omit<InternalSpriteCurrentState<null>, 'location'>
 > & {
   location?: Partial<MutableSpriteInterpolatedLocationValues>;
-  interpolationState?: SpriteLocationInterpolationState | null;
+  interpolationState?: SpriteInterpolationState<SpriteLocation> | null;
   pendingInterpolationOptions?: SpriteInterpolationOptions | null;
   lastCommandLocation?: SpriteLocation;
 };
@@ -223,16 +221,10 @@ const resolveMutableOffset = (
   if (isMutableOffset(offset)) {
     return {
       offsetMeters: cloneDistanceInterpolatedValues(
-        offset.offsetMeters as MutableSpriteInterpolatedValues<
-          number,
-          DistanceInterpolationState
-        >
+        offset.offsetMeters as MutableSpriteInterpolatedValues<number>
       ),
       offsetDeg: cloneDegreeInterpolatedValues(
-        offset.offsetDeg as MutableSpriteInterpolatedValues<
-          number,
-          DegreeInterpolationState
-        >
+        offset.offsetDeg as MutableSpriteInterpolatedValues<number>
       ),
     };
   }
@@ -244,11 +236,9 @@ const resolveMutableOffset = (
 };
 
 const cloneDistanceInterpolatedValues = (
-  value?:
-    | MutableSpriteInterpolatedValues<number, DistanceInterpolationState>
-    | undefined,
+  value?: MutableSpriteInterpolatedValues<number> | undefined,
   fallback = 0
-): MutableSpriteInterpolatedValues<number, DistanceInterpolationState> => {
+): MutableSpriteInterpolatedValues<number> => {
   const current = value?.current ?? fallback;
   return {
     current,
@@ -264,11 +254,9 @@ const cloneDistanceInterpolatedValues = (
 };
 
 const cloneDegreeInterpolatedValues = (
-  value?:
-    | MutableSpriteInterpolatedValues<number, DegreeInterpolationState>
-    | undefined,
+  value?: MutableSpriteInterpolatedValues<number> | undefined,
   fallback = 0
-): MutableSpriteInterpolatedValues<number, DegreeInterpolationState> => {
+): MutableSpriteInterpolatedValues<number> => {
   const current = value?.current ?? fallback;
   return {
     current,
@@ -284,11 +272,9 @@ const cloneDegreeInterpolatedValues = (
 };
 
 const cloneOpacityInterpolatedValues = (
-  value?:
-    | MutableSpriteInterpolatedValues<number, DistanceInterpolationState>
-    | undefined,
+  value?: MutableSpriteInterpolatedValues<number> | undefined,
   fallback = 1
-): MutableSpriteInterpolatedValues<number, DistanceInterpolationState> => {
+): MutableSpriteInterpolatedValues<number> => {
   const current = value?.current ?? fallback;
   return {
     current,
@@ -306,16 +292,11 @@ const cloneOpacityInterpolatedValues = (
 };
 
 const resolveOpacityState = (
-  value?:
-    | MutableSpriteInterpolatedValues<number, DistanceInterpolationState>
-    | number
-): MutableSpriteInterpolatedValues<number, DistanceInterpolationState> => {
+  value?: MutableSpriteInterpolatedValues<number> | number
+): MutableSpriteInterpolatedValues<number> => {
   if (isMutableInterpolatedValues<number>(value)) {
     return cloneOpacityInterpolatedValues(
-      value as MutableSpriteInterpolatedValues<
-        number,
-        DistanceInterpolationState
-      >,
+      value as MutableSpriteInterpolatedValues<number>,
       (value as MutableSpriteInterpolatedValues<number>).current
     );
   }
@@ -326,7 +307,13 @@ const resolveOpacityState = (
 type ImageStateOverrides = Partial<
   Omit<
     InternalSpriteImageState,
-    'opacity' | 'offset' | 'rotateDeg' | 'border' | 'borderPixelWidth'
+    | 'opacity'
+    | 'offset'
+    | 'rotateDeg'
+    | 'border'
+    | 'borderPixelWidth'
+    | 'leaderLine'
+    | 'leaderLinePixelWidth'
   >
 > & {
   opacity?: MutableSpriteInterpolatedValues<number> | number;
@@ -338,12 +325,18 @@ type ImageStateOverrides = Partial<
     | null
     | undefined;
   borderPixelWidth?: number;
+  leaderLine?:
+    | ResolvedSpriteImageLineAttribute
+    | SpriteImageLineAttribute
+    | null
+    | undefined;
+  leaderLinePixelWidth?: number;
   lodOpacity?: number;
-  rotationInterpolationState?: DegreeInterpolationState | null;
+  rotationInterpolationState?: SpriteInterpolationState<number> | null;
   rotationInterpolationOptions?: SpriteInterpolationOptions | null;
-  offsetDegInterpolationState?: DegreeInterpolationState | null;
-  offsetMetersInterpolationState?: DistanceInterpolationState | null;
-  opacityInterpolationState?: DistanceInterpolationState | null;
+  offsetDegInterpolationState?: SpriteInterpolationState<number> | null;
+  offsetMetersInterpolationState?: SpriteInterpolationState<number> | null;
+  opacityInterpolationState?: SpriteInterpolationState<number> | null;
   opacityInterpolationOptions?: SpriteInterpolationOptions | null;
   opacityTargetValue?: number;
   lastCommandOpacityBase?: number;
@@ -353,18 +346,22 @@ type ImageStateOverrides = Partial<
   lastCommandOpacity?: number;
 };
 
-const resolveBorder = (
-  border: ImageStateOverrides['border']
+const resolveLineAttribute = (
+  line:
+    | ResolvedSpriteImageLineAttribute
+    | SpriteImageLineAttribute
+    | null
+    | undefined
 ): ResolvedSpriteImageLineAttribute | undefined => {
-  if (!border) {
+  if (!line) {
     return undefined;
   }
-  if ('rgba' in border) {
-    return border;
+  if ('rgba' in line) {
+    return line;
   }
   return {
-    color: border.color ?? 'red',
-    widthMeters: border.widthMeters ?? 1,
+    color: line.color ?? 'red',
+    widthMeters: line.widthMeters ?? 1,
     rgba: [0, 0, 0, 1] as const,
   };
 };
@@ -378,12 +375,8 @@ const createImageState = (
       ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
       : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
   const resolvedOpacity = resolveOpacityState(
-    overrides.opacity as MutableSpriteInterpolatedValues<
-      number,
-      DistanceInterpolationState
-    >
+    overrides.opacity as MutableSpriteInterpolatedValues<number>
   );
-  const initialOpacity = resolvedOpacity.current;
   const resolvedOffset = resolveMutableOffset(overrides.offset);
   const rotateDegOverride = overrides.rotateDeg;
   const rotationCommandDeg =
@@ -395,16 +388,14 @@ const createImageState = (
         : (overrides.displayedRotateDeg ?? 0));
   const rotateDeg = cloneDegreeInterpolatedValues(
     isMutableInterpolatedValues<number>(rotateDegOverride)
-      ? (rotateDegOverride as MutableSpriteInterpolatedValues<
-          number,
-          DegreeInterpolationState
-        >)
+      ? (rotateDegOverride as MutableSpriteInterpolatedValues<number>)
       : undefined,
     typeof rotateDegOverride === 'number'
       ? rotateDegOverride
       : rotationCommandDeg
   );
-  const border = resolveBorder(overrides.border);
+  const border = resolveLineAttribute(overrides.border);
+  const leaderLine = resolveLineAttribute(overrides.leaderLine);
 
   if (overrides.rotationInterpolationState !== undefined) {
     rotateDeg.interpolation.state = overrides.rotationInterpolationState;
@@ -462,6 +453,8 @@ const createImageState = (
     anchor: overrides.anchor ?? DEFAULT_ANCHOR,
     border,
     borderPixelWidth: overrides.borderPixelWidth ?? 0,
+    leaderLine,
+    leaderLinePixelWidth: overrides.leaderLinePixelWidth ?? 0,
     offset: resolvedOffset,
     rotateDeg,
     rotationCommandDeg,
@@ -530,6 +523,7 @@ const createSpriteState = (
     lastAutoRotationLocation:
       overrides.lastAutoRotationLocation ?? baseLocation,
     lastAutoRotationAngleDeg: overrides.lastAutoRotationAngleDeg ?? 0,
+    autoRotationInvalidated: overrides.autoRotationInvalidated ?? false,
     interpolationDirty: overrides.interpolationDirty ?? false,
     cachedMercator,
     cachedMercatorLng: overrides.cachedMercatorLng ?? cachedMercator.x,
@@ -1066,7 +1060,10 @@ describe('prepareDrawSpriteImages', () => {
   it('propagates interpolated opacity into prepared draw params', () => {
     const resource = createImageResource('icon-fade');
     const image = createImageState({ imageId: 'icon-fade', order: 0 });
-    applyOpacityUpdate(image, 0, { durationMs: 1000, easing: (t) => t });
+    applyOpacityUpdate(image, 0, {
+      durationMs: 1000,
+      easing: { type: 'linear' },
+    });
     stepSpriteImageInterpolations(image, 0);
     stepSpriteImageInterpolations(image, 500);
 
@@ -1137,7 +1134,7 @@ describe('prepareDrawSpriteImages', () => {
     const resource = createImageResource('icon-lod-fade');
     const fadeOptions: SpriteInterpolationOptions = {
       durationMs: 1000,
-      easing: (t) => t,
+      easing: { type: 'linear' },
       mode: 'feedback',
     };
     const image = createImageState({
@@ -1183,7 +1180,7 @@ describe('prepareDrawSpriteImages', () => {
   it('advances opacity interpolation when processed after preparation', () => {
     const fadeOptions: SpriteInterpolationOptions = {
       durationMs: 500,
-      easing: (t) => t,
+      easing: { type: 'linear' },
       mode: 'feedback',
     };
     const image = createImageState({

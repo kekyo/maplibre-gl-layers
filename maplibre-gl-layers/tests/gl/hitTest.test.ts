@@ -17,6 +17,7 @@ import type { ProjectionHostParams } from '../../src/host/projectionHost';
 import type {
   InternalSpriteCurrentState,
   InternalSpriteImageState,
+  MutableSpriteInterpolatedLocationValues,
 } from '../../src/internalTypes';
 import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
@@ -908,7 +909,9 @@ describe('setInterpolationCalculation', () => {
       });
       layer.render?.(gl, {} as any);
 
-      const state = layer.getSpriteState('moving');
+      const state = layer.getSpriteState('moving') as unknown as {
+        location: MutableSpriteInterpolatedLocationValues;
+      };
       expect(state?.location.interpolation.state).toBeTruthy();
 
       const currentLng = () =>

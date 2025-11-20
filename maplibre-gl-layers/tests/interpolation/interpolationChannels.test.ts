@@ -41,6 +41,8 @@ const createImageState = (): InternalSpriteImageState => ({
   anchor: { x: 0, y: 0 },
   border: undefined,
   borderPixelWidth: 0,
+  leaderLine: undefined,
+  leaderLinePixelWidth: 0,
   offset: {
     offsetMeters: {
       current: 0,

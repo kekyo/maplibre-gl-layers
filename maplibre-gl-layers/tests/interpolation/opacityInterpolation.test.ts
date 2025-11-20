@@ -36,6 +36,8 @@ const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   anchor: { x: 0, y: 0 },
   border: undefined,
   borderPixelWidth: 0,
+  leaderLine: undefined,
+  leaderLinePixelWidth: 0,
   offset: {
     offsetMeters: {
       current: 0,
@@ -96,7 +98,10 @@ describe('applyOpacityUpdate', () => {
   it('interpolates opacity over time and clamps the final value', () => {
     const image = createMockImageState(0.8);
 
-    applyOpacityUpdate(image, -4, { durationMs: 100, easing: (t) => t });
+    applyOpacityUpdate(image, -4, {
+      durationMs: 100,
+      easing: { type: 'linear' },
+    });
 
     expect(image.opacity.interpolation.state).not.toBeNull();
 
@@ -114,7 +119,7 @@ describe('applyOpacityUpdate', () => {
     const image = createMockImageState(0.2);
     const options: SpriteInterpolationOptions = {
       durationMs: 100,
-      easing: (t) => t,
+      easing: { type: 'linear' },
       mode: 'feedforward',
     };
 

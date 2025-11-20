@@ -392,7 +392,7 @@ const assertPreparedUvs = (
 
 describe.each(HOST_FACTORIES)('calculation hosts atlas UVs (%s)', (factory) => {
   beforeAll(async () => {
-    await initializeWasmHost();
+    await initializeWasmHost('simd', { force: false, wasmBaseUrl: undefined });
   });
   afterAll(() => {
     releaseWasmHost();

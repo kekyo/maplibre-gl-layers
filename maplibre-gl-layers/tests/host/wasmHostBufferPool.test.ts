@@ -16,7 +16,10 @@ describe('WasmHost.allocateTypedBuffer', () => {
   it('reuses buffers of the same size without clearing previous contents', async () => {
     expect.hasAssertions();
 
-    const variant = await initializeWasmHost('simd');
+    const variant = await initializeWasmHost('simd', {
+      force: false,
+      wasmBaseUrl: undefined,
+    });
     expect(variant).not.toBe('disabled');
 
     const wasm = prepareWasmHost();
@@ -44,7 +47,10 @@ describe('WasmHost.allocateTypedBuffer', () => {
   it('returns a different buffer when allocating a different size', async () => {
     expect.hasAssertions();
 
-    const variant = await initializeWasmHost('simd');
+    const variant = await initializeWasmHost('simd', {
+      force: false,
+      wasmBaseUrl: undefined,
+    });
     expect(variant).not.toBe('disabled');
 
     const wasm = prepareWasmHost();
@@ -74,7 +80,10 @@ describe('WasmHost.allocateTypedBuffer', () => {
         ? vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
         : undefined;
     try {
-      const variant = await initializeWasmHost('simd');
+      const variant = await initializeWasmHost('simd', {
+        force: false,
+        wasmBaseUrl: undefined,
+      });
       expect(variant).not.toBe('disabled');
 
       const wasm = prepareWasmHost();
