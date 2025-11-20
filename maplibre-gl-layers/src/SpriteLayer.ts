@@ -194,7 +194,7 @@ const updateImageInterpolationDirtyState = <T>(
 const reapplySpriteOpacityMultiplier = <T>(
   sprite: InternalSpriteCurrentState<T>
 ): void => {
-  const multiplier = sprite.opacityMultiplier || 1;
+  const multiplier = sprite.opacityMultiplier ?? 1;
   sprite.images.forEach((orderMap) => {
     orderMap.forEach((image) => {
       const baseOpacity =
@@ -993,7 +993,7 @@ export const createSpriteLayer = <T = any>(
     image.opacity.invalidated = true;
     image.opacity.interpolation.targetValue = image.opacity.current;
     image.opacity.interpolation.lastCommandValue = image.opacity.current;
-    const spriteOpacityMultiplier = sprite.opacityMultiplier || 1;
+    const spriteOpacityMultiplier = sprite.opacityMultiplier ?? 1;
     const lodMultiplier = image.lodOpacity || 1;
     if (spriteOpacityMultiplier > 0 && lodMultiplier > 0) {
       image.opacity.interpolation.baseValue = clampOpacity(
