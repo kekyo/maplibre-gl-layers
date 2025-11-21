@@ -29,7 +29,6 @@ import {
   calculateZoomScaleFactor,
   resolveScalingOptions,
   resolveSpriteMercator,
-  cloneSpriteLocation,
   calculateCartesianDistanceMeters,
   clampOpacity,
 } from '../utils/math';
@@ -107,9 +106,11 @@ import {
   type DegreeInterpolationWorkItem,
 } from '../interpolation/degreeInterpolation';
 import {
-  evaluateInterpolation,
-  type SpriteInterpolationWorkItem,
-} from '../interpolation/interpolation';
+  applyLocationInterpolationEvaluations,
+  collectLocationInterpolationWorkItems,
+  evaluateLocationInterpolationsBatch,
+  type LocationInterpolationWorkItem,
+} from '../interpolation/locationInterpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
@@ -1622,16 +1623,6 @@ const evaluateDegreeInterpolationsBatch = (
   return states.map((state) => evaluateDegreeInterpolation(state, timestamp));
 };
 
-const evaluateSpriteInterpolationsBatch = (
-  states: readonly SpriteInterpolationState<SpriteLocation>[],
-  timestamp: number
-): SpriteInterpolationEvaluationResult<SpriteLocation>[] => {
-  if (!states.length) {
-    return [];
-  }
-  return states.map((state) => evaluateInterpolation(state, timestamp));
-};
-
 export interface ProcessInterpolationPresetRequests {
   readonly distance: readonly SpriteInterpolationState<number>[];
   readonly degree: readonly SpriteInterpolationState<number>[];
@@ -1657,52 +1648,7 @@ export interface ProcessInterpolationsEvaluationHandlers {
   ) => readonly SpriteInterpolationEvaluationResult<SpriteLocation>[];
 }
 
-const defaultInterpolationEvaluationHandlers: ProcessInterpolationsEvaluationHandlers =
-  {
-    evaluateDistance: (states, timestamp) =>
-      evaluateDistanceInterpolationsBatch(states, timestamp),
-    evaluateDegree: (states, timestamp) =>
-      evaluateDegreeInterpolationsBatch(states, timestamp),
-    evaluateSprite: (states, timestamp) =>
-      evaluateSpriteInterpolationsBatch(states, timestamp),
-  } as const;
-
 //////////////////////////////////////////////////////////////////////////////////////
-
-const applySpriteInterpolationEvaluations = <TTag>(
-  workItems: readonly SpriteInterpolationWorkItem<TTag>[],
-  evaluations: readonly SpriteInterpolationEvaluationResult<SpriteLocation>[],
-  timestamp: number
-): boolean => {
-  let active = false;
-  for (let index = 0; index < workItems.length; index += 1) {
-    const item = workItems[index]!;
-    const { sprite } = item;
-    const evaluation =
-      evaluations[index] ?? evaluateInterpolation(item, timestamp);
-
-    if (item.startTimestamp < 0) {
-      const effectiveStart = evaluation.effectiveStartTimestamp;
-      item.startTimestamp = effectiveStart;
-      const interpolationState = sprite.location.interpolation.state;
-      if (interpolationState && interpolationState.startTimestamp < 0) {
-        interpolationState.startTimestamp = effectiveStart;
-      }
-    }
-
-    sprite.location.current = evaluation.value;
-
-    if (evaluation.completed) {
-      sprite.location.current = cloneSpriteLocation(item.to);
-      sprite.location.from = undefined;
-      sprite.location.to = undefined;
-      sprite.location.interpolation.state = null;
-    } else {
-      active = true;
-    }
-  }
-  return active;
-};
 
 const ensureOpacityInterpolationTarget = (
   sprite: InternalSpriteCurrentState<any>,
@@ -1751,11 +1697,17 @@ const ensureOpacityInterpolationTarget = (
   image.opacity.interpolation.targetValue = target;
 };
 
+const DEFAULT_INTERPOLATION_EVALUATION_HANDLERS: ProcessInterpolationsEvaluationHandlers =
+  {
+    evaluateDistance: evaluateDistanceInterpolationsBatch,
+    evaluateDegree: evaluateDegreeInterpolationsBatch,
+    evaluateSprite: evaluateLocationInterpolationsBatch,
+  } as const;
+
 export const processInterpolationsInternal = <TTag>(
   params: RenderInterpolationParams<TTag>,
-  handlers: ProcessInterpolationsEvaluationHandlers = defaultInterpolationEvaluationHandlers
+  handlers: ProcessInterpolationsEvaluationHandlers = DEFAULT_INTERPOLATION_EVALUATION_HANDLERS
 ): RenderInterpolationResult => {
-  const evaluationHandlers = handlers ?? defaultInterpolationEvaluationHandlers;
   const { sprites, timestamp } = params;
   if (!sprites.length) {
     return {
@@ -1766,16 +1718,16 @@ export const processInterpolationsInternal = <TTag>(
 
   const distanceInterpolationWorkItems: DistanceInterpolationWorkItem[] = [];
   const degreeInterpolationWorkItems: DegreeInterpolationWorkItem[] = [];
-  const spriteInterpolationWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+  const locationInterpolationWorkItems: LocationInterpolationWorkItem<TTag>[] =
+    [];
 
   let hasActiveInterpolation = false;
 
   for (const sprite of sprites) {
-    const locationInterpolation = sprite.location.interpolation;
-    const state = locationInterpolation.state;
-    if (state) {
-      spriteInterpolationWorkItems.push({ ...state, sprite });
-    }
+    collectLocationInterpolationWorkItems(
+      sprite,
+      locationInterpolationWorkItems
+    );
 
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
@@ -1839,21 +1791,21 @@ export const processInterpolationsInternal = <TTag>(
   const hasRequests =
     distanceInterpolationWorkItems.length > 0 ||
     degreeInterpolationWorkItems.length > 0 ||
-    spriteInterpolationWorkItems.length > 0;
+    locationInterpolationWorkItems.length > 0;
 
   if (hasRequests) {
-    evaluationHandlers.prepare?.(
+    handlers.prepare?.(
       {
         distance: distanceInterpolationWorkItems,
         degree: degreeInterpolationWorkItems,
-        sprite: spriteInterpolationWorkItems,
+        sprite: locationInterpolationWorkItems,
       },
       timestamp
     );
   }
 
   if (distanceInterpolationWorkItems.length > 0) {
-    const evaluations = evaluationHandlers.evaluateDistance(
+    const evaluations = handlers.evaluateDistance(
       distanceInterpolationWorkItems,
       timestamp
     );
@@ -1869,7 +1821,7 @@ export const processInterpolationsInternal = <TTag>(
   }
 
   if (degreeInterpolationWorkItems.length > 0) {
-    const evaluations = evaluationHandlers.evaluateDegree(
+    const evaluations = handlers.evaluateDegree(
       degreeInterpolationWorkItems,
       timestamp
     );
@@ -1884,14 +1836,14 @@ export const processInterpolationsInternal = <TTag>(
     }
   }
 
-  if (spriteInterpolationWorkItems.length > 0) {
-    const evaluations = evaluationHandlers.evaluateSprite(
-      spriteInterpolationWorkItems,
+  if (locationInterpolationWorkItems.length > 0) {
+    const evaluations = handlers.evaluateSprite(
+      locationInterpolationWorkItems,
       timestamp
     );
     if (
-      applySpriteInterpolationEvaluations(
-        spriteInterpolationWorkItems,
+      applyLocationInterpolationEvaluations(
+        locationInterpolationWorkItems,
         evaluations,
         timestamp
       )
@@ -1909,10 +1861,9 @@ export const processInterpolationsInternal = <TTag>(
 export const processOpacityInterpolationsAfterPreparation = <TTag>(
   params: RenderInterpolationParams<TTag>,
   preparedItems: readonly PreparedDrawSpriteImageParams<TTag>[],
-  handlers: ProcessInterpolationsEvaluationHandlers = defaultInterpolationEvaluationHandlers
+  handlers: ProcessInterpolationsEvaluationHandlers = DEFAULT_INTERPOLATION_EVALUATION_HANDLERS
 ): RenderInterpolationResult => {
   void preparedItems;
-  const evaluationHandlers = handlers ?? defaultInterpolationEvaluationHandlers;
   const { sprites, timestamp } = params;
   if (!sprites.length) {
     return {
@@ -1947,7 +1898,7 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
   }
 
   if (opacityWorkItems.length > 0) {
-    evaluationHandlers.prepare?.(
+    handlers.prepare?.(
       {
         distance: opacityWorkItems,
         degree: [],
@@ -1960,10 +1911,7 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
   let hasActiveInterpolation = false;
 
   if (opacityWorkItems.length > 0) {
-    const evaluations = evaluationHandlers.evaluateDistance(
-      opacityWorkItems,
-      timestamp
-    );
+    const evaluations = handlers.evaluateDistance(opacityWorkItems, timestamp);
     if (
       applyDistanceInterpolationEvaluations(
         opacityWorkItems,
@@ -2050,6 +1998,8 @@ export const createCalculationHost = <TTag>(
   const projectionHost = createProjectionHost(params);
   return createProjectionBoundCalculationHost<TTag>(projectionHost);
 };
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 const __createWasmProjectionCalculationTestHost = <TTag>(
   params: ProjectionHostParams

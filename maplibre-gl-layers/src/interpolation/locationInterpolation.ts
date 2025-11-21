@@ -5,16 +5,17 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type {
+  SpriteEasingParam,
   SpriteInterpolationMode,
   SpriteInterpolationOptions,
   SpriteLocation,
 } from '../types';
 import type {
+  EasingFunction,
   InternalSpriteCurrentState,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
 } from '../internalTypes';
-
 import { resolveEasing } from './easing';
 import {
   cloneSpriteLocation,
@@ -24,20 +25,30 @@ import {
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * Computes a feed-forward target by extrapolating the delta between the two most recent locations.
- * When the previous location is missing the function falls back to cloning the current command,
- * ensuring the caller never receives an undefined reference.
- *
- * @param previous - The last command location that precedes `next`, or undefined when unavailable.
- * @param next - The upcoming command location to extrapolate from.
- * @returns A new sprite location positioned ahead of `next` using doubled deltas.
- */
+const normalizeDuration = (durationMs: number): number =>
+  Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0;
+
+const normalizeOptions = (
+  options: SpriteInterpolationOptions
+): {
+  readonly durationMs: number;
+  readonly easingFunc: EasingFunction;
+  readonly easingParam: SpriteEasingParam;
+  readonly mode: SpriteInterpolationMode;
+} => {
+  const resolved = resolveEasing(options.easing);
+  return {
+    durationMs: normalizeDuration(options.durationMs),
+    easingFunc: resolved.func,
+    easingParam: resolved.param,
+    mode: options.mode ?? 'feedback',
+  };
+};
+
 const computeFeedforwardTarget = (
   previous: SpriteLocation | undefined,
   next: SpriteLocation
 ): SpriteLocation => {
-  // If there is no previous command, trust the next command verbatim to avoid speculative extrapolation.
   if (!previous) {
     return cloneSpriteLocation(next);
   }
@@ -45,86 +56,36 @@ const computeFeedforwardTarget = (
   const nextZ = next.z ?? 0;
   const hasZ = previous.z !== undefined || next.z !== undefined;
 
-  const target: SpriteLocation = {
+  return {
     lng: next.lng + (next.lng - previous.lng),
     lat: next.lat + (next.lat - previous.lat),
-    // Only extrapolate altitude when either point includes z; otherwise we maintain the 2D assumption.
     z: hasZ ? nextZ + (nextZ - prevZ) : undefined,
-  };
-  return target;
-};
-
-/**
- * Normalized representation of interpolation options with defaults applied.
- */
-interface NormalizedInterpolationOptions {
-  /** Clamped non-negative duration in milliseconds. */
-  durationMs: number;
-  /** Strategy that guides how the destination is computed. */
-  mode: SpriteInterpolationMode;
-  /** Optional easing preset carried through for later resolution. */
-  easing?: SpriteInterpolationOptions['easing'];
-}
-
-/**
- * Normalizes raw interpolation options by clamping duration and applying defaults.
- *
- * @param options - Caller-provided interpolation options.
- * @returns Options safe for downstream consumption.
- */
-const normalizeOptions = (
-  options: SpriteInterpolationOptions
-): NormalizedInterpolationOptions => {
-  return {
-    durationMs: Math.max(0, options.durationMs),
-    mode: options.mode ?? 'feedback',
-    easing: options.easing,
   };
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * Parameters required to create a fresh interpolation state for the next animation segment.
- */
-export interface CreateInterpolationStateParams {
-  /** Sprite location currently rendered on screen. */
+export interface CreateLocationInterpolationStateParams {
   currentLocation: SpriteLocation;
-  /** Previously commanded target, used for feedforward extrapolation. */
   lastCommandLocation?: SpriteLocation;
-  /** Upcoming commanded target that the sprite should reach. */
   nextCommandLocation: SpriteLocation;
-  /** Raw interpolation options supplied by the caller. */
   options: SpriteInterpolationOptions;
 }
 
-/**
- * Result of preparing interpolation state, including a flag denoting whether any lerp is needed.
- */
-export interface CreateInterpolationStateResult {
-  /** Prepared interpolation state ready for evaluation. */
+export interface CreateLocationInterpolationStateResult {
   readonly state: SpriteInterpolationState<SpriteLocation>;
-  /** Indicates whether lerping is needed or an immediate snap is sufficient. */
   readonly requiresInterpolation: boolean;
 }
 
-/**
- * Creates interpolation state for the next sprite movement and signals if interpolation is necessary.
- *
- * @param params - The context needed to build interpolation state, including locations and configuration.
- * @returns The prepared state alongside a boolean indicating whether animation should run.
- */
-export const createInterpolationState = (
-  params: CreateInterpolationStateParams
-): CreateInterpolationStateResult => {
+export const createLocationInterpolationState = (
+  params: CreateLocationInterpolationStateParams
+): CreateLocationInterpolationStateResult => {
   const { currentLocation, lastCommandLocation, nextCommandLocation } = params;
   const options = normalizeOptions(params.options);
   const from = cloneSpriteLocation(currentLocation);
-  const resolvedEasing = resolveEasing(options.easing);
-
   const commandTarget = cloneSpriteLocation(nextCommandLocation);
+
   let pathTarget: SpriteLocation | undefined;
-  // When feedforward is requested we extrapolate beyond the next command to smooth remote updates.
   if (options.mode === 'feedforward') {
     pathTarget = computeFeedforwardTarget(
       lastCommandLocation,
@@ -139,8 +100,8 @@ export const createInterpolationState = (
   const state: SpriteInterpolationState<SpriteLocation> = {
     mode: options.mode,
     durationMs: options.durationMs,
-    easingFunc: resolvedEasing.func,
-    easingParam: resolvedEasing.param,
+    easingFunc: options.easingFunc,
+    easingParam: options.easingParam,
     startTimestamp: -1,
     from,
     to: commandTarget,
@@ -155,18 +116,16 @@ export const createInterpolationState = (
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-export const evaluateInterpolation = (
+export const evaluateLocationInterpolation = (
   state: SpriteInterpolationState<SpriteLocation>,
   timestamp: number
 ): SpriteInterpolationEvaluationResult<SpriteLocation> => {
   const easingFn = state.easingFunc;
 
   const duration = Math.max(0, state.durationMs);
-  // Reuse an existing start timestamp when set; if unset we kick off the interpolation at the current tick.
   const effectiveStart =
     state.startTimestamp >= 0 ? state.startTimestamp : timestamp;
 
-  // Zero-duration animations snap to the target immediately, avoiding unnecessary easing work.
   const target = state.pathTarget ?? state.to;
 
   if (duration === 0 || spriteLocationsEqual(state.from, target)) {
@@ -178,7 +137,6 @@ export const evaluateInterpolation = (
   }
 
   const elapsed = timestamp - effectiveStart;
-  // Guard against non-positive durations to prevent division by zero, treating them as instantly complete.
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
   const eased = easingFn(rawProgress);
   const value = lerpSpriteLocation(state.from, target, eased);
@@ -191,9 +149,64 @@ export const evaluateInterpolation = (
   };
 };
 
+export const evaluateLocationInterpolationsBatch = (
+  states: readonly SpriteInterpolationState<SpriteLocation>[],
+  timestamp: number
+): SpriteInterpolationEvaluationResult<SpriteLocation>[] => {
+  if (!states.length) {
+    return [];
+  }
+  return states.map((state) => evaluateLocationInterpolation(state, timestamp));
+};
+
 //////////////////////////////////////////////////////////////////////////////////////////
 
-export interface SpriteInterpolationWorkItem<TTag>
+export interface LocationInterpolationWorkItem<TTag>
   extends SpriteInterpolationState<SpriteLocation> {
   readonly sprite: InternalSpriteCurrentState<TTag>;
 }
+
+export const collectLocationInterpolationWorkItems = <TTag>(
+  sprite: InternalSpriteCurrentState<TTag>,
+  workItems: LocationInterpolationWorkItem<TTag>[]
+): void => {
+  const state = sprite.location.interpolation.state;
+  if (state) {
+    workItems.push({ ...state, sprite });
+  }
+};
+
+export const applyLocationInterpolationEvaluations = <TTag>(
+  workItems: readonly LocationInterpolationWorkItem<TTag>[],
+  evaluations: readonly SpriteInterpolationEvaluationResult<SpriteLocation>[],
+  timestamp: number
+): boolean => {
+  let active = false;
+  for (let index = 0; index < workItems.length; index += 1) {
+    const item = workItems[index]!;
+    const { sprite } = item;
+    const evaluation =
+      evaluations[index] ?? evaluateLocationInterpolation(item, timestamp);
+
+    if (item.startTimestamp < 0) {
+      const effectiveStart = evaluation.effectiveStartTimestamp;
+      item.startTimestamp = effectiveStart;
+      const interpolationState = sprite.location.interpolation.state;
+      if (interpolationState && interpolationState.startTimestamp < 0) {
+        interpolationState.startTimestamp = effectiveStart;
+      }
+    }
+
+    sprite.location.current = evaluation.value;
+
+    if (evaluation.completed) {
+      sprite.location.current = cloneSpriteLocation(item.to);
+      sprite.location.from = undefined;
+      sprite.location.to = undefined;
+      sprite.location.interpolation.state = null;
+    } else {
+      active = true;
+    }
+  }
+  return active;
+};

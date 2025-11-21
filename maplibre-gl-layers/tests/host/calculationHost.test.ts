@@ -71,7 +71,7 @@ import {
   SURFACE_BASE_CORNERS,
 } from '../../src/gl/shader';
 import { createDistanceInterpolationState } from '../../src/interpolation/distanceInterpolation';
-import { createInterpolationState } from '../../src/interpolation/interpolation';
+import { createLocationInterpolationState } from '../../src/interpolation/locationInterpolation';
 
 const SCALE = 256;
 const IDENTITY_MATRIX = new Float64Array([
@@ -1722,7 +1722,7 @@ describe('processInterpolationsInternal', () => {
     });
 
     const currentLocation: SpriteLocation = { lng: 0, lat: 0 };
-    const { state: spriteState } = createInterpolationState({
+    const { state: spriteState } = createLocationInterpolationState({
       currentLocation,
       lastCommandLocation: currentLocation,
       nextCommandLocation: { lng: 10, lat: 0 },

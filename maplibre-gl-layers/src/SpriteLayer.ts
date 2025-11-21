@@ -63,7 +63,7 @@ import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './utils/image';
-import { createInterpolationState } from './interpolation/interpolation';
+import { createLocationInterpolationState } from './interpolation/locationInterpolation';
 import { normalizeAngleDeg } from './interpolation/rotationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
@@ -3323,12 +3323,13 @@ export const createSpriteLayer = <T = any>(
 
       if (effectiveOptions && effectiveOptions.durationMs > 0) {
         // Create a fresh interpolation whenever a timed move is requested.
-        const { state, requiresInterpolation } = createInterpolationState({
-          currentLocation: locationState.current,
-          lastCommandLocation: locationInterpolation.lastCommandValue,
-          nextCommandLocation: newCommandLocation,
-          options: effectiveOptions,
-        });
+        const { state, requiresInterpolation } =
+          createLocationInterpolationState({
+            currentLocation: locationState.current,
+            lastCommandLocation: locationInterpolation.lastCommandValue,
+            nextCommandLocation: newCommandLocation,
+            options: effectiveOptions,
+          });
 
         // Clear any stale state before deciding whether to reuse it.
         locationInterpolation.state = null;

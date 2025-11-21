@@ -27,7 +27,6 @@ import type {
 } from '../internalTypes';
 import {
   SURFACE_CORNER_DISPLACEMENT_COUNT,
-  cloneSpriteLocation,
   calculateMetersPerPixelAtLatitude,
   calculateEffectivePixelsPerMeter,
   multiplyMatrixAndVector,
@@ -54,9 +53,10 @@ import {
   type DegreeInterpolationWorkItem,
 } from '../interpolation/degreeInterpolation';
 import {
-  evaluateInterpolation,
-  type SpriteInterpolationWorkItem,
-} from '../interpolation/interpolation';
+  applyLocationInterpolationEvaluations,
+  collectLocationInterpolationWorkItems,
+  type LocationInterpolationWorkItem,
+} from '../interpolation/locationInterpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
@@ -97,6 +97,8 @@ import {
 import { QUAD_VERTEX_COUNT, VERTEX_COMPONENT_COUNT } from '../gl/shader';
 import { reportWasmRuntimeFailure } from './runtime';
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 const WASM_CalculateSurfaceDepthKey_MATRIX_ELEMENT_COUNT = 16;
 const WASM_CalculateSurfaceDepthKey_DISPLACEMENT_ELEMENT_COUNT =
   SURFACE_CORNER_DISPLACEMENT_COUNT * 2;
@@ -110,6 +112,8 @@ const WASM_DEGREE_INTERPOLATION_RESULT_LENGTH = 3;
 const WASM_SPRITE_INTERPOLATION_ITEM_LENGTH = 14;
 const WASM_SPRITE_INTERPOLATION_RESULT_LENGTH = 6;
 const WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 const EASING_PRESET_IDS: Record<SpriteEasingType, number> = {
   linear: 0,
@@ -181,6 +185,8 @@ const encodeEasingPreset = (preset: SpriteEasingParam): EncodedEasingPreset => {
       return { id, param0: 0, param1: 0, param2: 0 };
   }
 };
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 const MAX_MERCATOR_LATITUDE = 85.051129;
 
@@ -430,41 +436,6 @@ const processInterpolationsViaWasm = (
   }
 };
 
-const applySpriteInterpolationEvaluations = <TTag>(
-  workItems: readonly SpriteInterpolationWorkItem<TTag>[],
-  evaluations: readonly SpriteInterpolationEvaluationResult<SpriteLocation>[],
-  timestamp: number
-): boolean => {
-  let active = false;
-  for (let index = 0; index < workItems.length; index += 1) {
-    const item = workItems[index]!;
-    const { sprite } = item;
-    const evaluation =
-      evaluations[index] ?? evaluateInterpolation(item, timestamp);
-
-    if (item.startTimestamp < 0) {
-      const effectiveStart = evaluation.effectiveStartTimestamp;
-      item.startTimestamp = effectiveStart;
-      const interpolationState = sprite.location.interpolation.state;
-      if (interpolationState && interpolationState.startTimestamp < 0) {
-        interpolationState.startTimestamp = effectiveStart;
-      }
-    }
-
-    sprite.location.current = evaluation.value;
-
-    if (evaluation.completed) {
-      sprite.location.current = cloneSpriteLocation(item.to);
-      sprite.location.from = undefined;
-      sprite.location.to = undefined;
-      sprite.location.interpolation.state = null;
-    } else {
-      active = true;
-    }
-  }
-  return active;
-};
-
 const processInterpolationsWithWasm = <TTag>(
   wasm: WasmHost,
   params: RenderInterpolationParams<TTag>
@@ -479,7 +450,8 @@ const processInterpolationsWithWasm = <TTag>(
 
   const distanceInterpolationWorkItems: DistanceInterpolationWorkItem[] = [];
   const degreeInterpolationWorkItems: DegreeInterpolationWorkItem[] = [];
-  const spriteInterpolationWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+  const locationInterpolationWorkItems: LocationInterpolationWorkItem<TTag>[] =
+    [];
   const processedSprites: Array<{
     sprite: InternalSpriteCurrentState<TTag>;
     touchedImages: InternalSpriteImageState[];
@@ -494,9 +466,10 @@ const processInterpolationsWithWasm = <TTag>(
       continue;
     }
 
-    if (state) {
-      spriteInterpolationWorkItems.push({ ...state, sprite });
-    }
+    collectLocationInterpolationWorkItems(
+      sprite,
+      locationInterpolationWorkItems
+    );
 
     const touchedImages: InternalSpriteImageState[] = [];
 
@@ -578,7 +551,7 @@ const processInterpolationsWithWasm = <TTag>(
   const hasPresetRequests =
     distanceInterpolationWorkItems.length > 0 ||
     degreeInterpolationWorkItems.length > 0 ||
-    spriteInterpolationWorkItems.length > 0;
+    locationInterpolationWorkItems.length > 0;
 
   const wasmResults: WasmProcessInterpolationResults = hasPresetRequests
     ? processInterpolationsViaWasm(
@@ -586,7 +559,7 @@ const processInterpolationsWithWasm = <TTag>(
         {
           distance: distanceInterpolationWorkItems,
           degree: degreeInterpolationWorkItems,
-          sprite: spriteInterpolationWorkItems,
+          sprite: locationInterpolationWorkItems,
         },
         timestamp
       )
@@ -620,10 +593,10 @@ const processInterpolationsWithWasm = <TTag>(
     }
   }
 
-  if (spriteInterpolationWorkItems.length > 0) {
+  if (locationInterpolationWorkItems.length > 0) {
     if (
-      applySpriteInterpolationEvaluations(
-        spriteInterpolationWorkItems,
+      applyLocationInterpolationEvaluations(
+        locationInterpolationWorkItems,
         wasmResults.sprite,
         timestamp
       )
@@ -1805,6 +1778,8 @@ export const createWasmCalculationHost = <TTag>(
     },
   };
 };
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 // Only testing purpose, DO NOT USE in production code.
 export const __wasmCalculationTestInternals = {
