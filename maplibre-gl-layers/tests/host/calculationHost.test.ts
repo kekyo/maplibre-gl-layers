@@ -296,33 +296,27 @@ const cloneOpacityInterpolatedValues = (
 };
 
 const resolveOpacityState = (
-  value?: MutableSpriteInterpolatedValues<number> | number
+  value?: MutableSpriteInterpolatedValues<number>
 ): MutableSpriteInterpolatedValues<number> => {
-  if (isMutableInterpolatedValues<number>(value)) {
-    return cloneOpacityInterpolatedValues(
-      value as MutableSpriteInterpolatedValues<number>,
-      (value as MutableSpriteInterpolatedValues<number>).current
-    );
-  }
-  const base = typeof value === 'number' ? value : 1;
-  return cloneOpacityInterpolatedValues(undefined, base);
+  const base = value?.current ?? 1;
+  return cloneOpacityInterpolatedValues(value, base);
 };
 
 type ImageStateOverrides = Partial<
   Omit<
     InternalSpriteImageState,
-    | 'opacity'
+    | 'finalOpacity'
     | 'offset'
-    | 'rotateDeg'
+    | 'finalRotateDeg'
     | 'border'
     | 'borderPixelWidth'
     | 'leaderLine'
     | 'leaderLinePixelWidth'
   >
 > & {
-  opacity?: MutableSpriteInterpolatedValues<number> | number;
+  finalOpacity?: MutableSpriteInterpolatedValues<number>;
   offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset;
-  rotateDeg?: MutableSpriteInterpolatedValues<number> | number;
+  finalRotateDeg?: MutableSpriteInterpolatedValues<number>;
   border?:
     | ResolvedSpriteImageLineAttribute
     | SpriteImageLineAttribute
@@ -378,25 +372,13 @@ const createImageState = (
     originLocation !== undefined
       ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
       : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
-  const resolvedOpacity = resolveOpacityState(
-    overrides.opacity as MutableSpriteInterpolatedValues<number>
-  );
+  const resolvedOpacity = resolveOpacityState(overrides.finalOpacity);
   const resolvedOffset = resolveMutableOffset(overrides.offset);
-  const rotateDegOverride = overrides.rotateDeg;
-  const rotationCommandDeg =
-    overrides.rotationCommandDeg ??
-    (isMutableInterpolatedValues<number>(rotateDegOverride)
-      ? rotateDegOverride.current
-      : typeof rotateDegOverride === 'number'
-        ? rotateDegOverride
-        : (overrides.displayedRotateDeg ?? 0));
+  const rotateDegOverride = overrides.finalRotateDeg;
+  const rotateDegValue = overrides.rotateDeg ?? rotateDegOverride?.current ?? 0;
   const rotateDeg = cloneDegreeInterpolatedValues(
-    isMutableInterpolatedValues<number>(rotateDegOverride)
-      ? (rotateDegOverride as MutableSpriteInterpolatedValues<number>)
-      : undefined,
-    typeof rotateDegOverride === 'number'
-      ? rotateDegOverride
-      : rotationCommandDeg
+    rotateDegOverride,
+    rotateDegValue
   );
   const border = resolveLineAttribute(overrides.border);
   const leaderLine = resolveLineAttribute(overrides.leaderLine);
@@ -451,7 +433,10 @@ const createImageState = (
     imageId: overrides.imageId ?? 'image',
     imageHandle: overrides.imageHandle ?? 0,
     mode: overrides.mode ?? 'billboard',
-    opacity: resolvedOpacity,
+    rotateDeg: rotateDegValue,
+    opacity:
+      resolvedOpacity.interpolation.baseValue ?? resolvedOpacity.current ?? 1,
+    finalOpacity: resolvedOpacity,
     lodOpacity: overrides.lodOpacity ?? 1,
     scale: overrides.scale ?? 1,
     anchor: overrides.anchor ?? DEFAULT_ANCHOR,
@@ -460,12 +445,10 @@ const createImageState = (
     leaderLine,
     leaderLinePixelWidth: overrides.leaderLinePixelWidth ?? 0,
     offset: resolvedOffset,
-    rotateDeg,
-    rotationCommandDeg,
-    displayedRotateDeg: overrides.displayedRotateDeg ?? rotationCommandDeg,
+    finalRotateDeg: rotateDeg,
     autoRotation: overrides.autoRotation ?? false,
     autoRotationMinDistanceMeters: overrides.autoRotationMinDistanceMeters ?? 0,
-    resolvedBaseRotateDeg: overrides.resolvedBaseRotateDeg ?? 0,
+    currentAutoRotateDeg: overrides.currentAutoRotateDeg ?? 0,
     originLocation,
     originReferenceKey: overrides.originReferenceKey ?? originReferenceKey,
     originRenderTargetIndex:
@@ -1117,7 +1100,7 @@ describe('prepareDrawSpriteImages', () => {
     const prepared = prepareItems(context, items);
 
     __calculationHostTestInternals.applyVisibilityDistanceLod(prepared);
-    expect(image.opacity.interpolation.targetValue).toBe(0);
+    expect(image.finalOpacity.interpolation.targetValue).toBe(0);
     const params: RenderInterpolationParams<null> = {
       sprites: [sprite],
       timestamp: 0,
@@ -1175,7 +1158,7 @@ describe('prepareDrawSpriteImages', () => {
         prepared
       );
     expect(result.hasActiveInterpolation).toBe(true);
-    expect(image.opacity.interpolation.state).not.toBeNull();
+    expect(image.finalOpacity.interpolation.state).not.toBeNull();
   });
 
   it('advances opacity interpolation when processed after preparation', () => {
@@ -1200,8 +1183,8 @@ describe('prepareDrawSpriteImages', () => {
       initialParams,
       []
     );
-    expect(image.opacity.interpolation.state?.startTimestamp).toBe(0);
-    expect(image.opacity.current).toBeCloseTo(1, 6);
+    expect(image.finalOpacity.interpolation.state?.startTimestamp).toBe(0);
+    expect(image.finalOpacity.current).toBeCloseTo(1, 6);
 
     const nextParams: RenderInterpolationParams<null> = {
       sprites: [sprite],
@@ -1211,8 +1194,8 @@ describe('prepareDrawSpriteImages', () => {
       nextParams,
       []
     );
-    expect(image.opacity.current).toBeCloseTo(0.5, 6);
-    expect(image.opacity.interpolation.state?.startTimestamp).toBe(0);
+    expect(image.finalOpacity.current).toBeCloseTo(0.5, 6);
+    expect(image.finalOpacity.interpolation.state?.startTimestamp).toBe(0);
   });
 
   it('uses billboard shader geometry when enabled', () => {
@@ -1821,7 +1804,7 @@ describe('processInterpolationsInternal', () => {
     });
     const image = createImageState({
       imageHandle: 2,
-      rotateDeg: 0,
+      finalRotateDeg: cloneDegreeInterpolatedValues(undefined, 0),
       rotationInterpolationState: rotationState,
     });
     const sprite = createSpriteState('sprite-rotation', [image]);
@@ -1846,8 +1829,7 @@ describe('processInterpolationsInternal', () => {
       }
     );
 
-    expect(image.displayedRotateDeg).toBeCloseTo(45);
-    expect(image.rotateDeg.interpolation.state?.startTimestamp).toBe(
+    expect(image.finalRotateDeg.interpolation.state?.startTimestamp).toBe(
       effectiveStart
     );
   });

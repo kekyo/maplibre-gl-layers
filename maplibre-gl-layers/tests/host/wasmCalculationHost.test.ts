@@ -268,7 +268,9 @@ const createImage = (): InternalSpriteImageState =>
     imageId: 'image-1',
     imageHandle: 1,
     mode: 'surface',
-    opacity: {
+    rotateDeg: 0,
+    opacity: 1,
+    finalOpacity: {
       current: 1,
       from: undefined,
       to: undefined,
@@ -308,7 +310,7 @@ const createImage = (): InternalSpriteImageState =>
         },
       },
     },
-    rotateDeg: {
+    finalRotateDeg: {
       current: 0,
       from: undefined,
       to: undefined,
@@ -319,11 +321,9 @@ const createImage = (): InternalSpriteImageState =>
         lastCommandValue: 0,
       },
     },
-    rotationCommandDeg: 0,
-    displayedRotateDeg: 0,
     autoRotation: false,
     autoRotationMinDistanceMeters: 0,
-    resolvedBaseRotateDeg: 0,
+    currentAutoRotateDeg: 0,
     originLocation: undefined,
     originReferenceKey: SPRITE_ORIGIN_REFERENCE_KEY_NONE,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,

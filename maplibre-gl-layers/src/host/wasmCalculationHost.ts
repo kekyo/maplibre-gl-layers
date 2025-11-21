@@ -31,6 +31,7 @@ import {
   calculateEffectivePixelsPerMeter,
   multiplyMatrixAndVector,
   type SurfaceCorner,
+  normalizeAngleDeg,
 } from '../utils/math';
 import type {
   SpriteAnchor,
@@ -498,10 +499,10 @@ const processInterpolationsWithWasm = <TTag>(
         }
 
         const hasOpacityInterpolation =
-          image.opacity.interpolation.state !== null;
+          image.finalOpacity.interpolation.state !== null;
 
         const hasDegreeInterpolation =
-          image.rotateDeg.interpolation.state !== null ||
+          image.finalRotateDeg.interpolation.state !== null ||
           image.offset.offsetDeg.interpolation.state !== null;
         if (hasDegreeInterpolation) {
           collectDegreeInterpolationWorkItems(
@@ -1634,16 +1635,19 @@ const convertToWasmProjectionState = <TTag>(
       );
       parameterBuffer[cursor++] = modeToNumber(image.mode);
       parameterBuffer[cursor++] = image.scale ?? 1;
-      parameterBuffer[cursor++] = image.opacity.current;
+      parameterBuffer[cursor++] = image.finalOpacity.current;
       const anchor = image.anchor ?? { x: 0, y: 0 };
       parameterBuffer[cursor++] = anchor.x;
       parameterBuffer[cursor++] = anchor.y;
       const offset = resolveImageOffset(image);
       parameterBuffer[cursor++] = offset.offsetMeters;
       parameterBuffer[cursor++] = offset.offsetDeg;
-      parameterBuffer[cursor++] = toFiniteOr(image.displayedRotateDeg, 0);
-      parameterBuffer[cursor++] = toFiniteOr(image.resolvedBaseRotateDeg, 0);
-      parameterBuffer[cursor++] = toFiniteOr(image.rotationCommandDeg, 0);
+      const resolvedRotation = normalizeAngleDeg(
+        toFiniteOr(image.finalRotateDeg.current, 0)
+      );
+      parameterBuffer[cursor++] = resolvedRotation;
+      parameterBuffer[cursor++] = toFiniteOr(image.currentAutoRotateDeg, 0);
+      parameterBuffer[cursor++] = toFiniteOr(image.rotateDeg, 0);
       parameterBuffer[cursor++] = image.order;
       parameterBuffer[cursor++] = image.subLayer;
       parameterBuffer[cursor++] = originKey ?? SPRITE_ORIGIN_REFERENCE_KEY_NONE;

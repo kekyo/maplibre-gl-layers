@@ -201,14 +201,14 @@ export interface SpriteInterpolationOptions {
  * Interpolation configuration.
  */
 export interface SpriteImageInterpolationOptions {
-  /** Interpolation settings for rotateDeg; `null` will disable interpolation. */
-  rotateDeg?: SpriteInterpolationOptions | null;
+  /** Interpolation settings for finalRotateDeg; `null` will disable interpolation. */
+  finalRotateDeg?: SpriteInterpolationOptions | null;
   /** Interpolation settings for offset.offsetDeg; `null` will disable interpolation. */
   offsetDeg?: SpriteInterpolationOptions | null;
   /** Interpolation settings for offset.offsetMeters; `null` will disable interpolation. */
   offsetMeters?: SpriteInterpolationOptions | null;
-  /** Interpolation settings for opacity; `null` will disable interpolation. */
-  opacity?: SpriteInterpolationOptions | null;
+  /** Interpolation settings for finalOpacity; `null` will disable interpolation. */
+  finalOpacity?: SpriteInterpolationOptions | null;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -417,27 +417,24 @@ export interface SpriteImageState {
   readonly scale: number;
   /** Anchor coordinates resolved for the image. */
   readonly anchor: Readonly<SpriteAnchor>;
-  /** Opacity multiplier applied when rendering. */
-  readonly opacity: SpriteInterpolatedValues<number>;
+  /** User-specified rotation angle. */
+  readonly rotateDeg: number;
+  /** User-specified opacity. */
+  readonly opacity: number;
   /** Offset applied relative to the anchor point. */
   readonly offset: SpriteImageInterpolatedOffset;
   /** Optional border rendered around the image. */
   readonly border: SpriteImageLineAttributeState | undefined;
   /** Optional leader line rendered toward the origin image. */
   readonly leaderLine: SpriteImageLineAttributeState | undefined;
-  /**
-   * Additional rotation in degrees with interpolation metadata.
-   * `from`/`to` are `undefined` when no rotation animation is running.
-   */
-  readonly rotateDeg: SpriteInterpolatedValues<number>;
   /** Indicates whether auto-rotation is active. */
   readonly autoRotation: boolean;
   /** Minimum travel distance before auto-rotation updates. */
   readonly autoRotationMinDistanceMeters: number;
-  /** Internal base rotation resolved for the current frame. */
-  readonly resolvedBaseRotateDeg: number;
-  /** Rotation value actually used for rendering. */
-  readonly displayedRotateDeg: number;
+  /** Rotation angle applied when rendering (includes auto-rotation). */
+  readonly finalRotateDeg: SpriteInterpolatedValues<number>;
+  /** Opacity applied when rendering (includes multipliers). */
+  readonly finalOpacity: SpriteInterpolatedValues<number>;
   /** Optional reference to another image used for anchoring. */
   readonly originLocation: Readonly<SpriteImageOriginLocation> | undefined;
 }

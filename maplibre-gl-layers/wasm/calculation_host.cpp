@@ -419,7 +419,7 @@ static inline double resolveTotalRotateDeg(const InputItemEntry& entry) {
   if (std::isfinite(entry.displayedRotateDeg)) {
     return entry.displayedRotateDeg;
   }
-  return normalizeAngleDeg(entry.resolvedBaseRotateDeg + entry.rotateDeg);
+  return normalizeAngleDeg(entry.currentAutoRotateDeg + entry.rotateDeg);
 }
 
 /**

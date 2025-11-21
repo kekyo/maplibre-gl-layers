@@ -982,28 +982,20 @@ const createHud = () => {
               data-testid="selected-visible"
             >--</span>
           </div>
+          <div class="status-row" data-testid="selected-row-opacity">
+            <span class="status-label">Opacity</span>
+            <span
+              class="status-value"
+              data-selected-field="opacity"
+              data-testid="selected-opacity"
+            >--</span>
+          </div>
           <div class="status-row" data-testid="selected-row-rotate">
             <span class="status-label">Rotate Deg</span>
             <span
               class="status-value"
               data-selected-field="rotate"
               data-testid="selected-rotate"
-            >--</span>
-          </div>
-          <div class="status-row" data-testid="selected-row-rotate-resolved">
-            <span class="status-label">Resolved Base</span>
-            <span
-              class="status-value"
-              data-selected-field="rotateResolved"
-              data-testid="selected-rotate-resolved"
-            >--</span>
-          </div>
-          <div class="status-row" data-testid="selected-row-rotate-displayed">
-            <span class="status-label">Displayed</span>
-            <span
-              class="status-value"
-              data-selected-field="rotateDisplayed"
-              data-testid="selected-rotate-displayed"
             >--</span>
           </div>
           <div class="status-row" data-testid="selected-row-offset">
@@ -1014,20 +1006,28 @@ const createHud = () => {
               data-testid="selected-offset"
             >--</span>
           </div>
-          <div class="status-row" data-testid="selected-row-opacity">
-            <span class="status-label">Opacity</span>
-            <span
-              class="status-value"
-              data-selected-field="opacity"
-              data-testid="selected-opacity"
-            >--</span>
-          </div>
           <div class="status-row" data-testid="selected-row-lnglat">
             <span class="status-label">LngLat</span>
             <span
               class="status-value"
               data-selected-field="lnglat"
               data-testid="selected-lnglat"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-lnglat-from">
+            <span class="status-label">LngLat (from)</span>
+            <span
+              class="status-value"
+              data-selected-field="lnglatFrom"
+              data-testid="selected-lnglat-from"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-lnglat-to">
+            <span class="status-label">LngLat (to)</span>
+            <span
+              class="status-value"
+              data-selected-field="lnglatTo"
+              data-testid="selected-lnglat-to"
             >--</span>
           </div>
           <div class="status-row" data-testid="selected-row-screen">
@@ -1707,18 +1707,18 @@ const main = async () => {
     lnglat: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="lnglat"]'
     ),
+    lnglatFrom: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="lnglatFrom"]'
+    ),
+    lnglatTo: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="lnglatTo"]'
+    ),
     screen: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="screen"]'
     ),
     tag: document.querySelector<HTMLSpanElement>('[data-selected-field="tag"]'),
     rotateDeg: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="rotate"]'
-    ),
-    rotateResolved: document.querySelector<HTMLSpanElement>(
-      '[data-selected-field="rotateResolved"]'
-    ),
-    rotateDisplayed: document.querySelector<HTMLSpanElement>(
-      '[data-selected-field="rotateDisplayed"]'
     ),
     offset: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="offset"]'
@@ -1915,16 +1915,17 @@ const main = async () => {
     if (selectedFieldEls.visible) {
       // Reflect whether the sprite image was visible (non-zero opacity) at the time of the click.
       selectedFieldEls.visible.textContent =
-        imageState.opacity.current !== 0.0 ? 'Visible' : 'Hidden';
+        imageState.finalOpacity.current !== 0.0 ? 'Visible' : 'Hidden';
     }
     if (selectedFieldEls.rotateDeg) {
-      selectedFieldEls.rotateDeg.textContent = `${imageState.rotateDeg.current.toFixed(2)}°`;
-    }
-    if (selectedFieldEls.rotateResolved) {
-      selectedFieldEls.rotateResolved.textContent = `${imageState.resolvedBaseRotateDeg.toFixed(2)}°`;
-    }
-    if (selectedFieldEls.rotateDisplayed) {
-      selectedFieldEls.rotateDisplayed.textContent = `${imageState.displayedRotateDeg.toFixed(2)}°`;
+      const { from, current, to } = imageState.finalRotateDeg;
+      const parts = [
+        typeof from === 'number' ? `${from.toFixed(2)}°` : null,
+        `${current.toFixed(2)}°`,
+        typeof to === 'number' ? `${to.toFixed(2)}°` : null,
+      ].filter(Boolean);
+      selectedFieldEls.rotateDeg.textContent =
+        parts.length === 1 ? (parts[0] ?? '') : parts.join(' --> ');
     }
     if (selectedFieldEls.offset) {
       selectedFieldEls.offset.textContent = `meters=${imageState.offset.offsetMeters.current.toFixed(
@@ -1932,9 +1933,14 @@ const main = async () => {
       )}, deg=${imageState.offset.offsetDeg.current.toFixed(2)}`;
     }
     if (selectedFieldEls.opacity) {
-      selectedFieldEls.opacity.textContent = `${imageState.opacity.current.toFixed(
-        3
-      )}`;
+      const { from, current, to } = imageState.finalOpacity;
+      const parts = [
+        typeof from === 'number' ? from.toFixed(3) : null,
+        current.toFixed(3),
+        typeof to === 'number' ? to.toFixed(3) : null,
+      ].filter(Boolean);
+      selectedFieldEls.opacity.textContent =
+        parts.length === 1 ? (parts[0] ?? '') : parts.join(' --> ');
     }
     if (selectedFieldEls.lnglat) {
       // Show the geographic coordinates for the sprite's current location.
@@ -1942,6 +1948,22 @@ const main = async () => {
         spriteState.location.current.lng,
         spriteState.location.current.lat
       );
+    }
+    const locationFrom = spriteState.location.from;
+    const locationTo = spriteState.location.to;
+    const hasLocationInterpolation =
+      locationFrom !== undefined && locationTo !== undefined;
+    if (selectedFieldEls.lnglatFrom) {
+      selectedFieldEls.lnglatFrom.textContent = hasLocationInterpolation
+        ? formatLngLat(locationFrom.lng, locationFrom.lat)
+        : '';
+      selectedFieldEls.lnglatFrom.hidden = !hasLocationInterpolation;
+    }
+    if (selectedFieldEls.lnglatTo) {
+      selectedFieldEls.lnglatTo.textContent = hasLocationInterpolation
+        ? formatLngLat(locationTo.lng, locationTo.lat)
+        : '';
+      selectedFieldEls.lnglatTo.hidden = !hasLocationInterpolation;
     }
     if (selectedFieldEls.screen) {
       // Convert the projected screen coordinates to a human-friendly string.
@@ -2489,13 +2511,13 @@ const main = async () => {
             const imageUpdate: SpriteImageDefinitionUpdate = {
               interpolation: enabled
                 ? {
-                    rotateDeg: {
+                    finalRotateDeg: {
                       mode: rotateInterpolationMode,
                       durationMs: MOVEMENT_INTERVAL_MS,
                       easing: resolveEasingOption(rotateEasingKey),
                     },
                   }
-                : { rotateDeg: null },
+                : { finalRotateDeg: null },
             };
             spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -2545,13 +2567,13 @@ const main = async () => {
         return;
       }
       const interpolation: SpriteImageInterpolationOptions = {
-        opacity: {
+        finalOpacity: {
           durationMs: 500,
           easing: resolveEasingOption(opacityEasingKey),
         },
       };
       const clearInterpolation: SpriteImageInterpolationOptions = {
-        opacity: null,
+        finalOpacity: null,
       };
       const targetInterpolation = isOpacityInterpolationEnabled
         ? interpolation
@@ -2583,14 +2605,14 @@ const main = async () => {
             if (isOpacityInterpolationEnabled) {
               imageUpdate.interpolation = shouldInterpolate
                 ? {
-                    opacity: {
+                    finalOpacity: {
                       durationMs: 500,
                       easing: resolveEasingOption(opacityEasingKey),
                     },
                   }
-                : { opacity: null };
+                : { finalOpacity: null };
             } else {
-              imageUpdate.interpolation = { opacity: null };
+              imageUpdate.interpolation = { finalOpacity: null };
             }
             spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -2632,14 +2654,14 @@ const main = async () => {
             if (isOpacityInterpolationEnabled) {
               if (shouldInterpolate) {
                 imageUpdate.interpolation = {
-                  opacity: {
+                  finalOpacity: {
                     durationMs: 500,
                     easing: resolveEasingOption(opacityEasingKey),
                   },
                 };
               }
             } else {
-              imageUpdate.interpolation = { opacity: null };
+              imageUpdate.interpolation = { finalOpacity: null };
             }
             spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -3221,7 +3243,7 @@ const main = async () => {
         return undefined;
       }
       return {
-        rotateDeg: {
+        finalRotateDeg: {
           mode: rotateInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
           easing: resolveEasingOption(rotateEasingKey),

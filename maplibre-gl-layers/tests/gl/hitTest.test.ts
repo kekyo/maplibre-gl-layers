@@ -699,7 +699,7 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
     const state = layer.getSpriteState(spriteId);
     const image = state?.images.get(0)?.get(0);
     expect(image).toBeDefined();
-    return image?.opacity.current ?? -1;
+    return image?.finalOpacity.current ?? -1;
   };
 
   const hideSpriteViaPseudoLod = (
@@ -855,14 +855,14 @@ describe('document visibility handling', () => {
 
       layer.updateSprite('auto-rot', { location: { lng: 10, lat: 0 } });
       layer.render?.(gl, {} as any);
-      const initialAngle = getPrimaryImage()?.resolvedBaseRotateDeg ?? 0;
+      const initialAngle = getPrimaryImage()?.currentAutoRotateDeg ?? 0;
 
       fakeDocument.visibilityState = 'hidden';
       fakeDocument.dispatch('visibilitychange');
 
       layer.updateSprite('auto-rot', { location: { lng: 0, lat: 10 } });
       layer.render?.(gl, {} as any);
-      expect(getPrimaryImage()?.resolvedBaseRotateDeg ?? 0).toBeCloseTo(
+      expect(getPrimaryImage()?.currentAutoRotateDeg ?? 0).toBeCloseTo(
         initialAngle,
         5
       );
@@ -872,7 +872,7 @@ describe('document visibility handling', () => {
 
       layer.updateSprite('auto-rot', { location: { lng: 0, lat: 20 } });
       layer.render?.(gl, {} as any);
-      expect(getPrimaryImage()?.resolvedBaseRotateDeg ?? 0).not.toBeCloseTo(
+      expect(getPrimaryImage()?.currentAutoRotateDeg ?? 0).not.toBeCloseTo(
         initialAngle,
         5
       );
@@ -965,8 +965,9 @@ describe('setInterpolationCalculation', () => {
             imageId: 'marker',
             subLayer: 0,
             order: 0,
+            autoRotation: false,
             interpolation: {
-              rotateDeg: { durationMs: 500, easing: { type: 'linear' } },
+              finalRotateDeg: { durationMs: 500, easing: { type: 'linear' } },
               offsetDeg: { durationMs: 500, easing: { type: 'linear' } },
               offsetMeters: { durationMs: 500, easing: { type: 'linear' } },
             },
@@ -992,16 +993,16 @@ describe('setInterpolationCalculation', () => {
         rotateDeg: 45,
         offset: { offsetMeters: 12, offsetDeg: 30 },
         interpolation: {
-          rotateDeg: { durationMs: 1000, easing: { type: 'linear' } },
+          finalRotateDeg: { durationMs: 1000, easing: { type: 'linear' } },
           offsetDeg: { durationMs: 1000, easing: { type: 'linear' } },
           offsetMeters: { durationMs: 1000, easing: { type: 'linear' } },
         },
       });
 
       const imageState = spriteState?.images.get(0)?.get(0);
-      expect(imageState?.rotateDeg.current).toBeCloseTo(45);
-      expect(imageState?.rotateDeg.from).toBeUndefined();
-      expect(imageState?.rotateDeg.to).toBeUndefined();
+      expect(imageState?.finalRotateDeg.current).toBeCloseTo(45);
+      expect(imageState?.finalRotateDeg.from).toBeUndefined();
+      expect(imageState?.finalRotateDeg.to).toBeUndefined();
       expect(imageState?.offset.offsetMeters.current).toBeCloseTo(12);
       expect(imageState?.offset.offsetMeters.from).toBeUndefined();
       expect(imageState?.offset.offsetMeters.to).toBeUndefined();

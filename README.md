@@ -461,9 +461,9 @@ These are independent of sprite position interpolation and are controlled indivi
 
 `interpolation` supports the following channels:
 
-- `rotateDeg`: Additional rotation angle for the image. Interpolated along the shortest path and snaps to the final angle upon completion.
+- `finalRotateDeg`: Additional rotation angle for the image. Interpolated along the shortest path and snaps to the final angle upon completion.
 - `offsetDeg` / `offsetMeters`: Offset direction and distance. Angle and distance can be controlled with separate timing and easing.
-- `opacity`: Fades automatically clipping values between 0.0 and 1.0. As the value approaches 0, rendering is suppressed, making it useful for LOD or highlight effects.
+- `finalOpacity`: Fades automatically clipping values between 0.0 and 1.0. As the value approaches 0, rendering is suppressed, making it useful for LOD or highlight effects.
 
 Assign `durationMs` and an interpolation mode (`feedback`/`feedforward`) to each channel, along with an optional easing preset.
 
@@ -476,7 +476,7 @@ Below is an example applying interpolation to rotation, offset, and opacity:
 spriteLayer.updateSpriteImage('vehicle-rotated', 0, 0, {
   rotateDeg: 180, // Rotate toward 180 degrees
   interpolation: {
-    rotateDeg: { durationMs: 400, },
+    finalRotateDeg: { durationMs: 400, },
   },
 });
 
@@ -504,7 +504,7 @@ spriteLayer.updateSpriteImage('vehicle-label', 1, 0, {
 spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
   opacity: 0,
   interpolation: {
-    opacity: { durationMs: 800, },
+    finalOpacity: { durationMs: 800, },
   },
 });
 ```
@@ -587,7 +587,7 @@ spriteLayer.updateSpriteImage('car-1', 0, 0, {
   rotateDeg: 45,  // Immediately applied
   offset: { offsetMeters: 12, offsetDeg: 30 },  // Immediately applied
   interpolation: {
-    rotateDeg: { durationMs: 800 },
+    finalRotateDeg: { durationMs: 800 },
     offsetDeg: { durationMs: 500 },
   },
 });
@@ -822,7 +822,7 @@ spriteLayer.on('spriteclick', ({ sprite }) => {
 });
 ```
 
-When inspecting `sprite.images` you can use `image.rotateDeg.current` (and optional `from`/`to`) to see the manual rotation interpolation state, mirroring how `sprite.location` behaves.
+When inspecting `sprite.images` you can use `image.finalRotateDeg.current` (and optional `from`/`to`) to see the manual rotation interpolation state, mirroring how `sprite.location` behaves.
 
 You can also surface hover highlights or tooltips:
 

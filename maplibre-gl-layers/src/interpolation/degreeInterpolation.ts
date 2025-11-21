@@ -229,10 +229,10 @@ const DEGREE_INTERPOLATION_CHANNELS: Record<
   DegreeInterpolationChannelDescriptor
 > = {
   rotation: {
-    resolveInterpolation: (image) => image.rotateDeg.interpolation,
+    resolveInterpolation: (image) => image.finalRotateDeg.interpolation,
     normalize: normalizeAngleDeg,
     applyValue: (image, value) => {
-      image.displayedRotateDeg = value;
+      image.finalRotateDeg.current = normalizeAngleDeg(value);
     },
   },
   offsetDeg: {

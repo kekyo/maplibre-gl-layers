@@ -77,26 +77,21 @@ const stepDegreeInterpolationState = (
   return { state: interpolationState, active: true };
 };
 
-const resolveManualRotationFromDisplayed = (
-  image: InternalSpriteImageState
-): number => {
-  const baseRotation = image.resolvedBaseRotateDeg ?? 0;
-  const fallbackRotation = normalizeAngleDeg(
-    baseRotation + image.rotationCommandDeg
+const resolveCurrentRotation = (image: InternalSpriteImageState): number => {
+  const targetAngle = normalizeAngleDeg(
+    image.currentAutoRotateDeg + image.rotateDeg
   );
-  const displayedRotation = Number.isFinite(image.displayedRotateDeg)
-    ? image.displayedRotateDeg
-    : fallbackRotation;
-  return normalizeAngleDeg(displayedRotation - baseRotation);
+  const current = image.finalRotateDeg.current;
+  return Number.isFinite(current) ? normalizeAngleDeg(current) : targetAngle;
 };
 
 const refreshRotateDegInterpolatedValues = (
   image: InternalSpriteImageState
 ): void => {
-  image.rotateDeg.current = resolveManualRotationFromDisplayed(image);
-  if (!image.rotateDeg.interpolation.state) {
-    image.rotateDeg.from = undefined;
-    image.rotateDeg.to = undefined;
+  image.finalRotateDeg.current = resolveCurrentRotation(image);
+  if (!image.finalRotateDeg.interpolation.state) {
+    image.finalRotateDeg.from = undefined;
+    image.finalRotateDeg.to = undefined;
   }
 };
 
@@ -105,16 +100,15 @@ const updateImageDisplayedRotation = (
   optionsOverride?: SpriteInterpolationOptions | null
 ): void => {
   const targetAngle = normalizeAngleDeg(
-    image.resolvedBaseRotateDeg + image.rotationCommandDeg
+    image.currentAutoRotateDeg + image.rotateDeg
   );
-  const currentAngle = Number.isFinite(image.displayedRotateDeg)
-    ? image.displayedRotateDeg
-    : targetAngle;
-  const previousCommandAngle = image.rotateDeg.interpolation.lastCommandValue;
+  const currentAngle = resolveCurrentRotation(image);
+  const previousCommandAngle =
+    image.finalRotateDeg.interpolation.lastCommandValue;
 
   const options =
     optionsOverride === undefined
-      ? image.rotateDeg.interpolation.options
+      ? image.finalRotateDeg.interpolation.options
       : optionsOverride;
 
   const { nextAngleDeg, interpolationState } = resolveRotationTarget({
@@ -124,13 +118,20 @@ const updateImageDisplayedRotation = (
     options: options ?? undefined,
   });
 
-  image.displayedRotateDeg = nextAngleDeg;
-  image.rotateDeg.interpolation.state = interpolationState;
+  image.finalRotateDeg.current = normalizeAngleDeg(
+    Number.isFinite(nextAngleDeg) ? nextAngleDeg : targetAngle
+  );
+  image.finalRotateDeg.interpolation.state = interpolationState;
 
   if (!interpolationState) {
-    image.displayedRotateDeg = targetAngle;
+    image.finalRotateDeg.current = targetAngle;
+    image.finalRotateDeg.from = undefined;
+    image.finalRotateDeg.to = undefined;
+  } else {
+    image.finalRotateDeg.from = normalizeAngleDeg(currentAngle);
+    image.finalRotateDeg.to = normalizeAngleDeg(targetAngle);
   }
-  image.rotateDeg.interpolation.lastCommandValue = targetAngle;
+  image.finalRotateDeg.interpolation.lastCommandValue = targetAngle;
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -151,17 +152,27 @@ const stepRotationInterpolation = (
   timestamp: number
 ): boolean => {
   const { state, active } = stepDegreeInterpolationState(
-    image.rotateDeg.interpolation.state,
+    image.finalRotateDeg.interpolation.state,
     timestamp,
     (value) => {
-      image.displayedRotateDeg = value;
+      const fallback = normalizeAngleDeg(
+        image.currentAutoRotateDeg + image.rotateDeg
+      );
+      image.finalRotateDeg.current = normalizeAngleDeg(
+        Number.isFinite(value) ? value : fallback
+      );
     },
     {
-      normalize: normalizeAngleDeg,
+      normalize: (value) => {
+        const fallback = normalizeAngleDeg(
+          image.currentAutoRotateDeg + image.rotateDeg
+        );
+        return normalizeAngleDeg(Number.isFinite(value) ? value : fallback);
+      },
     }
   );
 
-  image.rotateDeg.interpolation.state = state;
+  image.finalRotateDeg.interpolation.state = state;
   refreshRotateDegInterpolatedValues(image);
   return active;
 };
@@ -256,7 +267,9 @@ export const clearOffsetMetersInterpolation = (
 export const clearOpacityInterpolation = (
   image: InternalSpriteImageState
 ): void => {
-  image.opacity.interpolation.state = null;
+  image.finalOpacity.interpolation.state = null;
+  image.finalOpacity.from = undefined;
+  image.finalOpacity.to = undefined;
 };
 
 const applyOffsetDegUpdate = (
@@ -366,32 +379,32 @@ const runOpacityTargetTransition = (
   const options = interpolationOptions;
 
   if (!options || options.durationMs <= 0) {
-    image.opacity.current = clampedTarget;
-    image.opacity.from = undefined;
-    image.opacity.to = undefined;
-    image.opacity.interpolation.state = null;
+    image.finalOpacity.current = clampedTarget;
+    image.finalOpacity.from = undefined;
+    image.finalOpacity.to = undefined;
+    image.finalOpacity.interpolation.state = null;
   } else {
     const { state, requiresInterpolation } = createDistanceInterpolationState({
-      currentValue: clampOpacity(image.opacity.current),
+      currentValue: clampOpacity(image.finalOpacity.current),
       targetValue: clampedTarget,
-      previousCommandValue: image.opacity.interpolation.lastCommandValue,
+      previousCommandValue: image.finalOpacity.interpolation.lastCommandValue,
       options,
     });
 
     if (requiresInterpolation) {
-      image.opacity.interpolation.state = state;
-      image.opacity.from = image.opacity.current;
-      image.opacity.to = clampedTarget;
+      image.finalOpacity.interpolation.state = state;
+      image.finalOpacity.from = image.finalOpacity.current;
+      image.finalOpacity.to = clampedTarget;
     } else {
-      image.opacity.current = clampedTarget;
-      image.opacity.from = undefined;
-      image.opacity.to = undefined;
-      image.opacity.interpolation.state = null;
+      image.finalOpacity.current = clampedTarget;
+      image.finalOpacity.from = undefined;
+      image.finalOpacity.to = undefined;
+      image.finalOpacity.interpolation.state = null;
     }
   }
 
-  image.opacity.interpolation.lastCommandValue = clampedTarget;
-  image.opacity.interpolation.targetValue = clampedTarget;
+  image.finalOpacity.interpolation.lastCommandValue = clampedTarget;
+  image.finalOpacity.interpolation.targetValue = clampedTarget;
 };
 
 export const applyOpacityUpdate = (
@@ -403,7 +416,8 @@ export const applyOpacityUpdate = (
   const clampedBase = clampOpacity(nextOpacity);
   const lodMultiplier =
     typeof image.lodOpacity === 'number' ? image.lodOpacity : 1;
-  image.opacity.interpolation.baseValue = clampedBase;
+  image.finalOpacity.interpolation.baseValue = clampedBase;
+  image.opacity = clampedBase;
   runOpacityTargetTransition(
     image,
     clampedBase * spriteOpacityMultiplier * lodMultiplier,
@@ -428,20 +442,20 @@ const stepOpacityInterpolation = (
   timestamp: number
 ): boolean => {
   const { state, active } = stepDistanceInterpolationState(
-    image.opacity.interpolation.state,
+    image.finalOpacity.interpolation.state,
     timestamp,
     (value) => {
-      image.opacity.current = value;
+      image.finalOpacity.current = value;
     },
     {
       normalize: clampOpacity,
     }
   );
 
-  image.opacity.interpolation.state = state;
+  image.finalOpacity.interpolation.state = state;
   if (!state) {
-    image.opacity.from = undefined;
-    image.opacity.to = undefined;
+    image.finalOpacity.from = undefined;
+    image.finalOpacity.to = undefined;
   }
   return active;
 };
@@ -499,10 +513,10 @@ export const hasActiveImageInterpolations = (
   image: InternalSpriteImageState
 ): boolean => {
   return (
-    image.rotateDeg.interpolation.state !== null ||
+    image.finalRotateDeg.interpolation.state !== null ||
     image.offset.offsetDeg.interpolation.state !== null ||
     image.offset.offsetMeters.interpolation.state !== null ||
-    image.opacity.interpolation.state !== null
+    image.finalOpacity.interpolation.state !== null
   );
 };
 

@@ -487,9 +487,9 @@ spriteLayer.updateSprite(SPRITE_ID, {
 
 `interpolation` は次のチャネルをサポートします。
 
-- `rotateDeg`: 画像の追加回転角。最短経路で補間され、完了後は最終角にスナップします。
+- `finalRotateDeg`: 画像の追加回転角。最短経路で補間され、完了後は最終角にスナップします。
 - `offsetDeg` / `offsetMeters`: オフセットの向きと距離。角度・距離を別々の時間で制御可能です。
-- `opacity`: 0.0〜1.0の値を自動的にクリップしながらフェードさせます。値が0に近づくと描画が抑制されるため、LODやハイライト演出に使えます。
+- `finalOpacity`: 0.0〜1.0の値を自動的にクリップしながらフェードさせます。値が0に近づくと描画が抑制されるため、LODやハイライト演出に使えます。
 
 各チャネルに `durationMs` と補間モード（`feedback`/`feedforward`）、任意のイージング関数種別を与えます。
 設定を削除するか `null` を渡すとそのチャネルだけ即座に停止します。
@@ -501,7 +501,7 @@ spriteLayer.updateSprite(SPRITE_ID, {
 spriteLayer.updateSpriteImage('vehicle-anchor', 0, 0, {
   rotateDeg: 180, // 現在の角度から180度に向かって回転
   interpolation: {
-    rotateDeg: { durationMs: 400 },
+    finalRotateDeg: { durationMs: 400 },
   },
 });
 
@@ -529,7 +529,7 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
 spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
   opacity: 0,
   interpolation: {
-    opacity: { durationMs: 800, },
+    finalOpacity: { durationMs: 800, },
   },
 });
 ```
@@ -612,7 +612,7 @@ spriteLayer.updateSpriteImage('car-1', 0, 0, {
   rotateDeg: 45,  // 即時反映される
   offset: { offsetMeters: 12, offsetDeg: 30 },  //即時反映される
   interpolation: {
-    rotateDeg: { durationMs: 800 },
+    finalRotateDeg: { durationMs: 800 },
     offsetDeg: { durationMs: 500 },
   },
 });
@@ -848,7 +848,7 @@ spriteLayer.on('spriteclick', ({ sprite, screenPoint }) => {
 });
 ```
 
-`sprite.images` を参照すると、`image.rotateDeg.current`（および必要に応じて `from`/`to`）で回転補間の状態を `sprite.location` と同じように確認できます。
+`sprite.images` を参照すると、`image.finalRotateDeg.current`（および必要に応じて `from`/`to`）で回転補間の状態を `sprite.location` と同じように確認できます。
 
 ホバーイベントを使えば、ツールチップやハイライトも実現できます。
 

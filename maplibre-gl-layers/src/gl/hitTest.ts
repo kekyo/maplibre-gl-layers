@@ -297,11 +297,11 @@ export const createHitTestController = <T>({
       worldDims.scaleAdjustment
     );
 
-    const totalRotateDeg = Number.isFinite(image.displayedRotateDeg)
-      ? image.displayedRotateDeg
-      : normalizeAngleDeg(
-          (image.resolvedBaseRotateDeg ?? 0) + image.rotationCommandDeg
-        );
+    const totalRotateDeg = normalizeAngleDeg(
+      Number.isFinite(image.finalRotateDeg.current)
+        ? image.finalRotateDeg.current
+        : (image.currentAutoRotateDeg ?? 0) + image.rotateDeg
+    );
 
     const cornerDisplacements = calculateSurfaceCornerDisplacements({
       worldWidthMeters: worldDims.width,
@@ -359,11 +359,11 @@ export const createHitTestController = <T>({
     const spriteMinPixel = scaling.spriteMinPixel;
     const spriteMaxPixel = scaling.spriteMaxPixel;
     const imageScale = image.scale ?? 1;
-    const totalRotateDeg = Number.isFinite(image.displayedRotateDeg)
-      ? image.displayedRotateDeg
-      : normalizeAngleDeg(
-          (image.resolvedBaseRotateDeg ?? 0) + image.rotationCommandDeg
-        );
+    const totalRotateDeg = normalizeAngleDeg(
+      Number.isFinite(image.finalRotateDeg.current)
+        ? image.finalRotateDeg.current
+        : (image.currentAutoRotateDeg ?? 0) + image.rotateDeg
+    );
 
     const pixelDims = calculateBillboardPixelDimensions(
       imageResource.width,
@@ -410,7 +410,7 @@ export const createHitTestController = <T>({
     sprite: Readonly<InternalSpriteCurrentState<T>>,
     image: Readonly<InternalSpriteImageState>
   ): LooseQuadTreeRect | null => {
-    if (image.opacity.current <= 0 || !sprite.isEnabled) {
+    if (image.finalOpacity.current <= 0 || !sprite.isEnabled) {
       return null;
     }
     if (image.mode === 'surface') {

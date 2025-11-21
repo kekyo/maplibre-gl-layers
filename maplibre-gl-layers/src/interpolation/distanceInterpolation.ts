@@ -177,15 +177,15 @@ const DISTANCE_INTERPOLATION_CHANNELS: Record<
     },
   },
   opacity: {
-    resolveInterpolation: (image) => image.opacity.interpolation,
+    resolveInterpolation: (image) => image.finalOpacity.interpolation,
     normalize: clampOpacity,
     applyValue: (image: InternalSpriteImageState, value: number) => {
-      image.opacity.current = value;
+      image.finalOpacity.current = value;
     },
     applyFinalValue: (image, value) => {
-      image.opacity.current = value;
-      image.opacity.from = undefined;
-      image.opacity.to = undefined;
+      image.finalOpacity.current = value;
+      image.finalOpacity.from = undefined;
+      image.finalOpacity.to = undefined;
     },
   },
 };

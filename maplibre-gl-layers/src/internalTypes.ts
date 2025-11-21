@@ -649,32 +649,32 @@ export interface InternalSpriteImageState extends SpriteImageState {
   imageId: string;
   imageHandle: number;
   mode: SpriteMode;
-  opacity: MutableSpriteInterpolatedValues<number>;
-  lodOpacity: number;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
   border: ResolvedSpriteImageLineAttribute | undefined;
   borderPixelWidth: number;
   leaderLine: ResolvedSpriteImageLineAttribute | undefined;
   leaderLinePixelWidth: number;
+  rotateDeg: number;
+  opacity: number;
+  lodOpacity: number;
+  finalOpacity: MutableSpriteInterpolatedValues<number>;
   offset: MutableSpriteImageInterpolatedOffset;
-  rotateDeg: MutableSpriteInterpolatedValues<number>;
-  rotationCommandDeg: number;
-  displayedRotateDeg: number;
+  finalRotateDeg: MutableSpriteInterpolatedValues<number>;
   autoRotation: boolean;
   autoRotationMinDistanceMeters: number;
-  resolvedBaseRotateDeg: number;
+  currentAutoRotateDeg: number;
   originLocation: Readonly<SpriteImageOriginLocation> | undefined;
   originReferenceKey: SpriteOriginReferenceKey;
   originRenderTargetIndex: SpriteOriginReferenceIndex;
   interpolationDirty: boolean;
-  surfaceShaderInputs?: Readonly<SurfaceShaderInputs>;
-  hitTestCorners?: [
+  surfaceShaderInputs: Readonly<SurfaceShaderInputs> | undefined;
+  hitTestCorners: [
     MutableSpriteScreenPoint,
     MutableSpriteScreenPoint,
     MutableSpriteScreenPoint,
     MutableSpriteScreenPoint,
-  ];
+  ] | undefined;
 }
 
 /**
@@ -686,7 +686,6 @@ export interface InternalSpriteCurrentState<TTag> {
   isEnabled: boolean;
   visibilityDistanceMeters?: number;
   opacityMultiplier: number;
-  //location: MutableSpriteInterpolatedLocationValues;
   location: MutableSpriteInterpolatedValues<SpriteLocation>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
