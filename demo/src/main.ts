@@ -2032,7 +2032,7 @@ const main = async () => {
     }
     isMouseEventsMonitoringEnabled = enabled;
     if (spriteLayer) {
-      spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
+      spriteLayer.setHitTestDetection(shouldEnableHitTesting());
     }
     if (enabled) {
       attachSpriteMouseEvents();
@@ -2741,7 +2741,7 @@ const main = async () => {
         });
         return true;
       });
-      spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
+      spriteLayer.setHitTestDetection(shouldEnableHitTesting());
     };
 
     const renderPlaceholderDetails = () => {
@@ -4488,7 +4488,7 @@ const main = async () => {
           });
         }
         map.addLayer(spriteLayer);
-        spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
+        spriteLayer.setHitTestDetection(shouldEnableHitTesting());
         if (isMouseEventsMonitoringEnabled) {
           attachSpriteMouseEvents();
         }

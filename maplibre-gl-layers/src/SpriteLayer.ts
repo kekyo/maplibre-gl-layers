@@ -2361,6 +2361,12 @@ export const createSpriteLayer = <T = any>(
    */
   const getAllImageIds = (): string[] => Array.from(images.keys());
 
+  /**
+   * Returns the identifiers of every sprite registered in the layer.
+   * @returns {string[]} Array containing all spriteIds.
+   */
+  const getAllSpriteIds = (): string[] => Array.from(sprites.keys());
+
   //////////////////////////////////////////////////////////////////////////
 
   /**
@@ -3739,9 +3745,9 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
-  const setHitTestEnabled = (enabled: boolean): void => {
-    const changed = hitTestController.setHitTestEnabled(enabled);
-    if (!changed || !enabled || !map) {
+  const setHitTestDetection = (detect: boolean): void => {
+    const changed = hitTestController.setHitTestDetection(detect);
+    if (!changed || !detect || !map) {
       return;
     }
 
@@ -3770,6 +3776,7 @@ export const createSpriteLayer = <T = any>(
     unregisterImage,
     unregisterAllImages,
     getAllImageIds,
+    getAllSpriteIds,
     addSprite,
     addSprites,
     removeSprite,
@@ -3784,7 +3791,7 @@ export const createSpriteLayer = <T = any>(
     mutateSprites,
     updateForEach,
     setInterpolationCalculation,
-    setHitTestEnabled,
+    setHitTestDetection,
     on: addEventListener,
     off: removeEventListener,
   };

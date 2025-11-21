@@ -793,6 +793,13 @@ SpriteLayer exposes interaction events so your application can react to clicks a
 
 If either event fails to detect the target image, it will notify with `sprite`/`image` set to `undefined`.
 
+These event detections can be enabled using `setHitTestDetection`:
+
+```typescript
+// Enable hit test detection
+spriteLayer.setHitTestDetection(true);
+```
+
 Inside either handler you can call `updateSprite` or other APIs to react to user interaction.
 
 ```typescript
@@ -836,8 +843,8 @@ spriteLayer.on('spritehover', ({ sprite, image }) => {
 });
 ```
 
-Note: Hooking event handlers incurs additional overhead for coordinate detection.
-This may impact performance, especially when frequently updating sprite coordinates.
+Note: Enabling hit testing incurs additional overhead for coordinate detection.
+This may impact performance, especially when handling large numbers of sprites.
 
 ## Tags
 

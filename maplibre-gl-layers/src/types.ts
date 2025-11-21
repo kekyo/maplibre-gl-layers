@@ -954,11 +954,11 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
     spriteId: string
   ) => SpriteCurrentState<TTag> | undefined;
   /**
-   * Enables or disables hit-test maintenance (quad-tree updates).
+   * Returns all sprite IDs currently managed by the layer.
    *
-   * @param {boolean} enabled - When false, hit testing is skipped and the internal data structure is cleared.
+   * @returns {string[]} Array of sprite identifiers.
    */
-  readonly setHitTestEnabled: (enabled: boolean) => void;
+  readonly getAllSpriteIds: () => string[];
 
   ////////////////////////////////////////////////////////////////////////////////
 
@@ -1060,6 +1060,12 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    */
   readonly setInterpolationCalculation: (moveable: boolean) => void;
 
+  /**
+   * Enables or disables hit-test.
+   *
+   * @param {boolean} detect - When false, hit testing is skipped.
+   */
+  readonly setHitTestDetection: (detect: boolean) => void;
   /**
    * Adds an event listener.
    *

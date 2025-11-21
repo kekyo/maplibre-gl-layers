@@ -127,7 +127,7 @@ export interface HitTestController<T> {
     canvasElement: HTMLCanvasElement | undefined,
     map: MapLibreMap | undefined
   ) => HitTestResult<T> | undefined;
-  readonly setHitTestEnabled: (enabled: boolean) => boolean;
+  readonly setHitTestDetection: (enabled: boolean) => boolean;
   readonly isHitTestEnabled: () => boolean;
 }
 
@@ -794,7 +794,7 @@ export const createHitTestController = <T>({
     >();
   };
 
-  const setHitTestEnabled = (enabled: boolean): boolean => {
+  const setHitTestDetection = (enabled: boolean): boolean => {
     if (isHitTestEnabled === enabled) {
       return false;
     }
@@ -816,7 +816,7 @@ export const createHitTestController = <T>({
     refreshSpriteHitTestBounds,
     findTopmostHitEntry,
     resolveHitTestResult,
-    setHitTestEnabled,
+    setHitTestDetection,
     isHitTestEnabled: isHitTestEnabledFn,
   };
 };
