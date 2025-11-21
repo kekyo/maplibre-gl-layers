@@ -11,7 +11,7 @@ import type {
 } from '../types';
 import { resolveEasing } from './easing';
 import type {
-  DegreeInterpolationEvaluationResult,
+  SpriteInterpolationEvaluationResult,
   EasingFunction,
   InternalSpriteImageState,
   MutableSpriteInterpolation,
@@ -157,28 +157,6 @@ export const createDegreeInterpolationState = (
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Parameters describing interpolation evaluation state.
- */
-export interface EvaluateDegreeInterpolationParams {
-  /** State generated via {@link createDegreeInterpolationState}. */
-  state: SpriteInterpolationState<number>;
-  /** Timestamp in milliseconds used to sample the interpolation curve. */
-  timestamp: number;
-}
-
-/**
- * Result of evaluating a numeric interpolation at a specific timestamp.
- */
-export interface EvaluateDegreeInterpolationResult {
-  /** Current interpolated value (or final value after completion). */
-  readonly value: number;
-  /** Indicates whether interpolation reached the end. */
-  readonly completed: boolean;
-  /** Start timestamp applied during evaluation. */
-  readonly effectiveStartTimestamp: number;
-}
-
-/**
  * Clamps a numeric value to the inclusive range [0, 1], handling infinities gracefully.
  * @param {number} value - Raw easing output to normalize.
  * @returns {number} Value clamped between 0 and 1.
@@ -199,19 +177,11 @@ const clamp01 = (value: number): number => {
   return value;
 };
 
-/**
- * Evaluates a numeric interpolation against the provided timestamp.
- * @param {EvaluateDegreeInterpolationParams} params - Inputs containing interpolation state and sample timestamp.
- * @returns {EvaluateDegreeInterpolationResult} Current value, completion flag, and effective start time.
- */
 export const evaluateDegreeInterpolation = (
-  params: EvaluateDegreeInterpolationParams
-): EvaluateDegreeInterpolationResult => {
-  const { state } = params;
+  state: SpriteInterpolationState<number>,
+  timestamp: number
+): SpriteInterpolationEvaluationResult<number> => {
   const targetValue = state.pathTarget ?? state.to;
-  const timestamp = Number.isFinite(params.timestamp)
-    ? params.timestamp
-    : Date.now();
 
   const duration = Math.max(0, state.durationMs);
   const effectiveStart =
@@ -286,10 +256,10 @@ const updateDegreeInterpolationState = (
   descriptor.resolveInterpolation(image).state = nextState;
 };
 
-export interface DegreeInterpolationWorkItem {
+export interface DegreeInterpolationWorkItem
+  extends SpriteInterpolationState<number> {
   readonly descriptor: DegreeInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
-  readonly state: SpriteInterpolationState<number>;
 }
 
 export const collectDegreeInterpolationWorkItems = (
@@ -300,9 +270,9 @@ export const collectDegreeInterpolationWorkItems = (
     DEGREE_INTERPOLATION_CHANNELS.rotation.resolveInterpolation(image).state;
   if (rotationState) {
     workItems.push({
+      ...rotationState,
       descriptor: DEGREE_INTERPOLATION_CHANNELS.rotation,
       image,
-      state: rotationState,
     });
   }
 
@@ -310,30 +280,26 @@ export const collectDegreeInterpolationWorkItems = (
     DEGREE_INTERPOLATION_CHANNELS.offsetDeg.resolveInterpolation(image).state;
   if (offsetState) {
     workItems.push({
+      ...offsetState,
       descriptor: DEGREE_INTERPOLATION_CHANNELS.offsetDeg,
       image,
-      state: offsetState,
     });
   }
 };
 
 export const applyDegreeInterpolationEvaluations = (
   workItems: readonly DegreeInterpolationWorkItem[],
-  evaluations: readonly DegreeInterpolationEvaluationResult[],
+  evaluations: readonly SpriteInterpolationEvaluationResult<number>[],
   timestamp: number
 ): boolean => {
   let active = false;
   for (let index = 0; index < workItems.length; index += 1) {
     const item = workItems[index]!;
     const evaluation =
-      evaluations[index] ??
-      evaluateDegreeInterpolation({
-        state: item.state,
-        timestamp,
-      });
+      evaluations[index] ?? evaluateDegreeInterpolation(item, timestamp);
 
-    if (item.state.startTimestamp < 0) {
-      item.state.startTimestamp = evaluation.effectiveStartTimestamp;
+    if (item.startTimestamp < 0) {
+      item.startTimestamp = evaluation.effectiveStartTimestamp;
     }
 
     const normalize = item.descriptor.normalize ?? ((value: number) => value);
@@ -344,11 +310,11 @@ export const applyDegreeInterpolationEvaluations = (
     item.descriptor.applyValue(item.image, interpolatedValue);
 
     if (evaluation.completed) {
-      const finalValue = normalize(item.state.to);
+      const finalValue = normalize(item.to);
       applyFinalValue(item.image, finalValue);
       updateDegreeInterpolationState(item.image, item.descriptor, null);
     } else {
-      updateDegreeInterpolationState(item.image, item.descriptor, item.state);
+      updateDegreeInterpolationState(item.image, item.descriptor, item);
       active = true;
     }
   }

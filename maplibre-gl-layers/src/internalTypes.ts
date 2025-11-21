@@ -520,35 +520,8 @@ export interface SpriteInterpolationState<TValue> {
   startTimestamp: number;
 }
 
-export interface DistanceInterpolationEvaluationParams {
-  readonly state: SpriteInterpolationState<number>;
-  readonly timestamp: number;
-}
-
-export interface DistanceInterpolationEvaluationResult {
-  readonly value: number;
-  readonly completed: boolean;
-  readonly effectiveStartTimestamp: number;
-}
-
-export interface DegreeInterpolationEvaluationParams {
-  readonly state: SpriteInterpolationState<number>;
-  readonly timestamp: number;
-}
-
-export interface DegreeInterpolationEvaluationResult {
-  readonly value: number;
-  readonly completed: boolean;
-  readonly effectiveStartTimestamp: number;
-}
-
-export interface SpriteInterpolationEvaluationParams {
-  readonly state: SpriteInterpolationState<SpriteLocation>;
-  readonly timestamp: number;
-}
-
-export interface SpriteInterpolationEvaluationResult {
-  readonly location: SpriteLocation;
+export interface SpriteInterpolationEvaluationResult<TValue> {
+  readonly value: TValue;
   readonly completed: boolean;
   readonly effectiveStartTimestamp: number;
 }

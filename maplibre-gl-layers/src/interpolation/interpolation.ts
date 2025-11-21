@@ -10,7 +10,7 @@ import type {
   SpriteLocation,
 } from '../types';
 import type {
-  SpriteInterpolationEvaluationParams,
+  InternalSpriteCurrentState,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
 } from '../internalTypes';
@@ -155,21 +155,11 @@ export const createInterpolationState = (
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * Evaluates an interpolation state at a specific point in time and returns the intermediate location.
- *
- * @param params - The interpolation state and the reference timestamp for evaluation.
- * @returns The lerped location, whether the interpolation has finished, and the effective start time.
- */
 export const evaluateInterpolation = (
-  params: SpriteInterpolationEvaluationParams
-): SpriteInterpolationEvaluationResult => {
-  const { state } = params;
+  state: SpriteInterpolationState<SpriteLocation>,
+  timestamp: number
+): SpriteInterpolationEvaluationResult<SpriteLocation> => {
   const easingFn = state.easingFunc;
-  // Use the provided timestamp when valid; otherwise fall back to real time to keep animation advancing.
-  const timestamp = Number.isFinite(params.timestamp)
-    ? params.timestamp
-    : Date.now();
 
   const duration = Math.max(0, state.durationMs);
   // Reuse an existing start timestamp when set; if unset we kick off the interpolation at the current tick.
@@ -181,7 +171,7 @@ export const evaluateInterpolation = (
 
   if (duration === 0 || spriteLocationsEqual(state.from, target)) {
     return {
-      location: cloneSpriteLocation(state.to),
+      value: cloneSpriteLocation(state.to),
       completed: true,
       effectiveStartTimestamp: effectiveStart,
     };
@@ -191,12 +181,19 @@ export const evaluateInterpolation = (
   // Guard against non-positive durations to prevent division by zero, treating them as instantly complete.
   const rawProgress = duration <= 0 ? 1 : elapsed / duration;
   const eased = easingFn(rawProgress);
-  const location = lerpSpriteLocation(state.from, target, eased);
+  const value = lerpSpriteLocation(state.from, target, eased);
   const completed = rawProgress >= 1;
 
   return {
-    location,
+    value,
     completed,
     effectiveStartTimestamp: effectiveStart,
   };
 };
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+export interface SpriteInterpolationWorkItem<TTag>
+  extends SpriteInterpolationState<SpriteLocation> {
+  readonly sprite: InternalSpriteCurrentState<TTag>;
+}

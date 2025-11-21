@@ -40,10 +40,6 @@ import {
   computeBillboardCornersShaderModel,
 } from '../gl/shader';
 import type {
-  DistanceInterpolationEvaluationParams,
-  DistanceInterpolationEvaluationResult,
-  DegreeInterpolationEvaluationParams,
-  DegreeInterpolationEvaluationResult,
   InternalSpriteCurrentState,
   InternalSpriteImageState,
   ImageResourceTable,
@@ -62,7 +58,6 @@ import type {
   RenderInterpolationResult,
   ProcessDrawSpriteImagesParams,
   ProcessDrawSpriteImagesResult,
-  SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
 } from '../internalTypes';
@@ -111,7 +106,10 @@ import {
   evaluateDegreeInterpolation,
   type DegreeInterpolationWorkItem,
 } from '../interpolation/degreeInterpolation';
-import { evaluateInterpolation } from '../interpolation/interpolation';
+import {
+  evaluateInterpolation,
+  type SpriteInterpolationWorkItem,
+} from '../interpolation/interpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
@@ -1605,90 +1603,97 @@ export const filterVisiblePreparedItems = <TTag>(
 //////////////////////////////////////////////////////////////////////////////////////
 
 const evaluateDistanceInterpolationsBatch = (
-  requests: readonly DistanceInterpolationEvaluationParams[]
-): DistanceInterpolationEvaluationResult[] => {
-  if (!requests.length) {
+  states: readonly SpriteInterpolationState<number>[],
+  timestamp: number
+): SpriteInterpolationEvaluationResult<number>[] => {
+  if (!states.length) {
     return [];
   }
-  return requests.map((request) => evaluateDistanceInterpolation(request));
+  return states.map((state) => evaluateDistanceInterpolation(state, timestamp));
 };
 
 const evaluateDegreeInterpolationsBatch = (
-  requests: readonly DegreeInterpolationEvaluationParams[]
-): DegreeInterpolationEvaluationResult[] => {
-  if (!requests.length) {
+  states: readonly SpriteInterpolationState<number>[],
+  timestamp: number
+): SpriteInterpolationEvaluationResult<number>[] => {
+  if (!states.length) {
     return [];
   }
-  return requests.map((request) => evaluateDegreeInterpolation(request));
+  return states.map((state) => evaluateDegreeInterpolation(state, timestamp));
 };
 
 const evaluateSpriteInterpolationsBatch = (
-  requests: readonly SpriteInterpolationEvaluationParams[]
-): SpriteInterpolationEvaluationResult[] => {
-  if (!requests.length) {
+  states: readonly SpriteInterpolationState<SpriteLocation>[],
+  timestamp: number
+): SpriteInterpolationEvaluationResult<SpriteLocation>[] => {
+  if (!states.length) {
     return [];
   }
-  return requests.map((request) => evaluateInterpolation(request));
+  return states.map((state) => evaluateInterpolation(state, timestamp));
 };
 
 export interface ProcessInterpolationPresetRequests {
-  readonly distance: readonly DistanceInterpolationEvaluationParams[];
-  readonly degree: readonly DegreeInterpolationEvaluationParams[];
-  readonly sprite: readonly SpriteInterpolationEvaluationParams[];
+  readonly distance: readonly SpriteInterpolationState<number>[];
+  readonly degree: readonly SpriteInterpolationState<number>[];
+  readonly sprite: readonly SpriteInterpolationState<SpriteLocation>[];
 }
 
 export interface ProcessInterpolationsEvaluationHandlers {
-  readonly prepare?: (requests: ProcessInterpolationPresetRequests) => void;
+  readonly prepare?: (
+    requests: ProcessInterpolationPresetRequests,
+    timestamp: number
+  ) => void;
   readonly evaluateDistance: (
-    requests: readonly DistanceInterpolationEvaluationParams[]
-  ) => readonly DistanceInterpolationEvaluationResult[];
+    states: readonly SpriteInterpolationState<number>[],
+    timestamp: number
+  ) => readonly SpriteInterpolationEvaluationResult<number>[];
   readonly evaluateDegree: (
-    requests: readonly DegreeInterpolationEvaluationParams[]
-  ) => readonly DegreeInterpolationEvaluationResult[];
+    states: readonly SpriteInterpolationState<number>[],
+    timestamp: number
+  ) => readonly SpriteInterpolationEvaluationResult<number>[];
   readonly evaluateSprite: (
-    requests: readonly SpriteInterpolationEvaluationParams[]
-  ) => readonly SpriteInterpolationEvaluationResult[];
+    states: readonly SpriteInterpolationState<SpriteLocation>[],
+    timestamp: number
+  ) => readonly SpriteInterpolationEvaluationResult<SpriteLocation>[];
 }
 
 const defaultInterpolationEvaluationHandlers: ProcessInterpolationsEvaluationHandlers =
   {
-    evaluateDistance: (requests) =>
-      evaluateDistanceInterpolationsBatch(requests),
-    evaluateDegree: (requests) => evaluateDegreeInterpolationsBatch(requests),
-    evaluateSprite: (requests) => evaluateSpriteInterpolationsBatch(requests),
-  };
+    evaluateDistance: (states, timestamp) =>
+      evaluateDistanceInterpolationsBatch(states, timestamp),
+    evaluateDegree: (states, timestamp) =>
+      evaluateDegreeInterpolationsBatch(states, timestamp),
+    evaluateSprite: (states, timestamp) =>
+      evaluateSpriteInterpolationsBatch(states, timestamp),
+  } as const;
 
 //////////////////////////////////////////////////////////////////////////////////////
 
-interface SpriteInterpolationWorkItem<TTag> {
-  readonly sprite: InternalSpriteCurrentState<TTag>;
-  readonly state: SpriteInterpolationState<SpriteLocation>;
-}
-
 const applySpriteInterpolationEvaluations = <TTag>(
   workItems: readonly SpriteInterpolationWorkItem<TTag>[],
-  evaluations: readonly SpriteInterpolationEvaluationResult[],
+  evaluations: readonly SpriteInterpolationEvaluationResult<SpriteLocation>[],
   timestamp: number
 ): boolean => {
   let active = false;
   for (let index = 0; index < workItems.length; index += 1) {
     const item = workItems[index]!;
-    const { sprite, state } = item;
+    const { sprite } = item;
     const evaluation =
-      evaluations[index] ??
-      evaluateInterpolation({
-        state,
-        timestamp,
-      });
+      evaluations[index] ?? evaluateInterpolation(item, timestamp);
 
-    if (state.startTimestamp < 0) {
-      state.startTimestamp = evaluation.effectiveStartTimestamp;
+    if (item.startTimestamp < 0) {
+      const effectiveStart = evaluation.effectiveStartTimestamp;
+      item.startTimestamp = effectiveStart;
+      const interpolationState = sprite.location.interpolation.state;
+      if (interpolationState && interpolationState.startTimestamp < 0) {
+        interpolationState.startTimestamp = effectiveStart;
+      }
     }
 
-    sprite.location.current = evaluation.location;
+    sprite.location.current = evaluation.value;
 
     if (evaluation.completed) {
-      sprite.location.current = cloneSpriteLocation(state.to);
+      sprite.location.current = cloneSpriteLocation(item.to);
       sprite.location.from = undefined;
       sprite.location.to = undefined;
       sprite.location.interpolation.state = null;
@@ -1769,7 +1774,7 @@ export const processInterpolationsInternal = <TTag>(
     const locationInterpolation = sprite.location.interpolation;
     const state = locationInterpolation.state;
     if (state) {
-      spriteInterpolationWorkItems.push({ sprite, state });
+      spriteInterpolationWorkItems.push({ ...state, sprite });
     }
 
     sprite.images.forEach((orderMap) => {
@@ -1780,9 +1785,8 @@ export const processInterpolationsInternal = <TTag>(
           collectDistanceInterpolationWorkItems(
             image,
             distanceInterpolationWorkItems,
-            {
-              includeOpacity: false,
-            }
+            true, // includeOffsetMeters
+            false
           );
         }
 
@@ -1832,43 +1836,27 @@ export const processInterpolationsInternal = <TTag>(
     });
   }
 
-  const distanceRequests =
-    distanceInterpolationWorkItems.length > 0
-      ? distanceInterpolationWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-  const degreeRequests =
-    degreeInterpolationWorkItems.length > 0
-      ? degreeInterpolationWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-  const spriteRequests =
-    spriteInterpolationWorkItems.length > 0
-      ? spriteInterpolationWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-
   const hasRequests =
-    distanceRequests.length > 0 ||
-    degreeRequests.length > 0 ||
-    spriteRequests.length > 0;
+    distanceInterpolationWorkItems.length > 0 ||
+    degreeInterpolationWorkItems.length > 0 ||
+    spriteInterpolationWorkItems.length > 0;
 
   if (hasRequests) {
-    evaluationHandlers.prepare?.({
-      distance: distanceRequests,
-      degree: degreeRequests,
-      sprite: spriteRequests,
-    });
+    evaluationHandlers.prepare?.(
+      {
+        distance: distanceInterpolationWorkItems,
+        degree: degreeInterpolationWorkItems,
+        sprite: spriteInterpolationWorkItems,
+      },
+      timestamp
+    );
   }
 
-  if (distanceRequests.length > 0) {
-    const evaluations = evaluationHandlers.evaluateDistance(distanceRequests);
+  if (distanceInterpolationWorkItems.length > 0) {
+    const evaluations = evaluationHandlers.evaluateDistance(
+      distanceInterpolationWorkItems,
+      timestamp
+    );
     if (
       applyDistanceInterpolationEvaluations(
         distanceInterpolationWorkItems,
@@ -1880,8 +1868,11 @@ export const processInterpolationsInternal = <TTag>(
     }
   }
 
-  if (degreeRequests.length > 0) {
-    const evaluations = evaluationHandlers.evaluateDegree(degreeRequests);
+  if (degreeInterpolationWorkItems.length > 0) {
+    const evaluations = evaluationHandlers.evaluateDegree(
+      degreeInterpolationWorkItems,
+      timestamp
+    );
     if (
       applyDegreeInterpolationEvaluations(
         degreeInterpolationWorkItems,
@@ -1893,8 +1884,11 @@ export const processInterpolationsInternal = <TTag>(
     }
   }
 
-  if (spriteRequests.length > 0) {
-    const evaluations = evaluationHandlers.evaluateSprite(spriteRequests);
+  if (spriteInterpolationWorkItems.length > 0) {
+    const evaluations = evaluationHandlers.evaluateSprite(
+      spriteInterpolationWorkItems,
+      timestamp
+    );
     if (
       applySpriteInterpolationEvaluations(
         spriteInterpolationWorkItems,
@@ -1934,9 +1928,12 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
       orderMap.forEach((image) => {
         ensureOpacityInterpolationTarget(sprite, image);
         if (image.opacity.interpolation.state !== null) {
-          collectDistanceInterpolationWorkItems(image, opacityWorkItems, {
-            includeOffsetMeters: false,
-          });
+          collectDistanceInterpolationWorkItems(
+            image,
+            opacityWorkItems,
+            false,
+            true // includeOpacity
+          );
         }
       });
     });
@@ -1949,26 +1946,24 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
     };
   }
 
-  const opacityRequests =
-    opacityWorkItems.length > 0
-      ? opacityWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-
-  if (opacityRequests.length > 0) {
-    evaluationHandlers.prepare?.({
-      distance: opacityRequests,
-      degree: [],
-      sprite: [],
-    });
+  if (opacityWorkItems.length > 0) {
+    evaluationHandlers.prepare?.(
+      {
+        distance: opacityWorkItems,
+        degree: [],
+        sprite: [],
+      },
+      timestamp
+    );
   }
 
   let hasActiveInterpolation = false;
 
-  if (opacityRequests.length > 0) {
-    const evaluations = evaluationHandlers.evaluateDistance(opacityRequests);
+  if (opacityWorkItems.length > 0) {
+    const evaluations = evaluationHandlers.evaluateDistance(
+      opacityWorkItems,
+      timestamp
+    );
     if (
       applyDistanceInterpolationEvaluations(
         opacityWorkItems,

@@ -114,13 +114,10 @@ describe('evaluateInterpolation', () => {
       options: { durationMs: 0 },
     });
 
-    const result = evaluateInterpolation({
-      state,
-      timestamp: 1000,
-    });
+    const result = evaluateInterpolation(state, 1000);
 
     expect(result.completed).toBe(true);
-    expect(spriteLocationsEqual(result.location, state.to)).toBe(true);
+    expect(spriteLocationsEqual(result.value, state.to)).toBe(true);
   });
 
   it('interpolates linearly over time', () => {
@@ -131,33 +128,24 @@ describe('evaluateInterpolation', () => {
     });
 
     const startTimestamp = 500;
-    const halfway = evaluateInterpolation({
-      state,
-      timestamp: startTimestamp,
-    });
+    const halfway = evaluateInterpolation(state, startTimestamp);
     state.startTimestamp = halfway.effectiveStartTimestamp;
 
-    const midResult = evaluateInterpolation({
-      state,
-      timestamp: startTimestamp + 500,
-    });
+    const midResult = evaluateInterpolation(state, startTimestamp + 500);
 
     expect(midResult.completed).toBe(false);
     const target = state.pathTarget ?? state.to;
     expect(
       spriteLocationsEqual(
-        midResult.location,
+        midResult.value,
         lerpSpriteLocation(state.from, target, 0.5)
       )
     ).toBe(true);
 
-    const finalResult = evaluateInterpolation({
-      state,
-      timestamp: startTimestamp + 1500,
-    });
+    const finalResult = evaluateInterpolation(state, startTimestamp + 1500);
 
     expect(finalResult.completed).toBe(true);
-    expect(spriteLocationsEqual(finalResult.location, state.to)).toBe(true);
+    expect(spriteLocationsEqual(finalResult.value, state.to)).toBe(true);
   });
 
   it('caps easing progress when timestamp goes backwards', () => {
@@ -167,18 +155,12 @@ describe('evaluateInterpolation', () => {
       options: { durationMs: 1000 },
     });
 
-    const forward = evaluateInterpolation({
-      state,
-      timestamp: 1000,
-    });
+    const forward = evaluateInterpolation(state, 1000);
 
     state.startTimestamp = forward.effectiveStartTimestamp;
-    const backwards = evaluateInterpolation({
-      state,
-      timestamp: state.startTimestamp - 250,
-    });
+    const backwards = evaluateInterpolation(state, state.startTimestamp - 250);
 
     expect(backwards.completed).toBe(false);
-    expect(backwards.location.lng).toBeCloseTo(0);
+    expect(backwards.value.lng).toBeCloseTo(0);
   });
 });

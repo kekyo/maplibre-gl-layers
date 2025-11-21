@@ -56,10 +56,7 @@ const stepDegreeInterpolationState = (
     return { state: null, active: false };
   }
 
-  const evaluation = evaluateDegreeInterpolation({
-    state: interpolationState,
-    timestamp,
-  });
+  const evaluation = evaluateDegreeInterpolation(interpolationState, timestamp);
 
   if (interpolationState.startTimestamp < 0) {
     interpolationState.startTimestamp = evaluation.effectiveStartTimestamp;
@@ -218,10 +215,10 @@ const stepDistanceInterpolationState = (
     return { state: null, active: false };
   }
 
-  const evaluation = evaluateDistanceInterpolation({
-    state: interpolationState,
-    timestamp,
-  });
+  const evaluation = evaluateDistanceInterpolation(
+    interpolationState,
+    timestamp
+  );
 
   if (interpolationState.startTimestamp < 0) {
     interpolationState.startTimestamp = evaluation.effectiveStartTimestamp;
@@ -471,7 +468,7 @@ const IMAGE_INTERPOLATION_STEPPERS: readonly ImageInterpolationStepperEntry[] =
     { id: 'offsetDeg', step: stepOffsetDegInterpolation },
     { id: 'offsetMeters', step: stepOffsetMetersInterpolation },
     { id: 'opacity', step: stepOpacityInterpolation },
-  ];
+  ] as const;
 
 /**
  * Executes all interpolation steppers for an image and reports whether any remain active.

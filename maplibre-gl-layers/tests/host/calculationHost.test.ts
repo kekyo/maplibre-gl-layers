@@ -25,6 +25,7 @@ import {
   applyOpacityUpdate,
   stepSpriteImageInterpolations,
 } from '../../src/interpolation/interpolationChannels';
+import { createDegreeInterpolationState } from '../../src/interpolation/degreeInterpolation';
 import {
   calculateBillboardAnchorShiftPixels,
   calculateZoomScaleFactor,
@@ -488,8 +489,7 @@ const createSpriteState = (
     layers.get(image.subLayer)!.set(image.order, image);
   });
 
-  const baseLocation =
-    overrides.location?.current ?? ({ lng: 0, lat: 0, z: 0 } as SpriteLocation);
+  const baseLocation = overrides.location?.current ?? { lng: 0, lat: 0, z: 0 };
   const cachedMercator =
     overrides.cachedMercator ??
     MercatorCoordinate.fromLngLat(baseLocation, baseLocation.z ?? 0);
@@ -1746,7 +1746,7 @@ describe('processInterpolationsInternal', () => {
       evaluateDegree: vi.fn(() => []),
       evaluateSprite: vi.fn((requests) =>
         requests.map(() => ({
-          location: { lng: 3, lat: 1 },
+          value: { lng: 3, lat: 1 },
           completed: false,
           effectiveStartTimestamp: timestamp - 100,
         }))
@@ -1768,6 +1768,12 @@ describe('processInterpolationsInternal', () => {
     expect(handlers.evaluateSprite).toHaveBeenCalledTimes(1);
     expect(image.offset.offsetMeters.current).toBeCloseTo(4);
     expect(sprite.location.current.lng).toBeCloseTo(3);
+    expect(image.offset.offsetMeters.interpolation.state?.startTimestamp).toBe(
+      timestamp - 100
+    );
+    expect(sprite.location.interpolation.state?.startTimestamp).toBe(
+      timestamp - 100
+    );
     expect(sprite.location.interpolation.state).not.toBeNull();
   });
 
@@ -1805,5 +1811,44 @@ describe('processInterpolationsInternal', () => {
     expect(handlers.evaluateDistance).toHaveBeenCalledTimes(1);
     expect(image.offset.offsetMeters.current).toBe(6);
     expect(image.offset.offsetMeters.interpolation.state).toBeNull();
+  });
+
+  it('writes degree interpolation start timestamp back into state', () => {
+    const { state: rotationState } = createDegreeInterpolationState({
+      currentValue: 0,
+      targetValue: 90,
+      options: { durationMs: 1000, easing: { type: 'linear' } },
+    });
+    const image = createImageState({
+      imageHandle: 2,
+      rotateDeg: 0,
+      rotationInterpolationState: rotationState,
+    });
+    const sprite = createSpriteState('sprite-rotation', [image]);
+
+    const effectiveStart = 125;
+    processInterpolationsInternal(
+      {
+        sprites: [sprite],
+        timestamp: 200,
+      },
+      {
+        prepare: vi.fn(),
+        evaluateDistance: vi.fn(() => []),
+        evaluateDegree: vi.fn((states) =>
+          states.map(() => ({
+            value: 45,
+            completed: false,
+            effectiveStartTimestamp: effectiveStart,
+          }))
+        ),
+        evaluateSprite: vi.fn(() => []),
+      }
+    );
+
+    expect(image.displayedRotateDeg).toBeCloseTo(45);
+    expect(image.rotateDeg.interpolation.state?.startTimestamp).toBe(
+      effectiveStart
+    );
   });
 });

@@ -58,24 +58,18 @@ describe('evaluateDegreeInterpolation', () => {
       options: { durationMs: 1000 },
     });
 
-    const start = evaluateDegreeInterpolation({
-      state,
-      timestamp: 500,
-    });
+    const start = evaluateDegreeInterpolation(state, 500);
     state.startTimestamp = start.effectiveStartTimestamp;
 
-    const midway = evaluateDegreeInterpolation({
+    const midway = evaluateDegreeInterpolation(
       state,
-      timestamp: state.startTimestamp + 500,
-    });
+      state.startTimestamp + 500
+    );
 
     expect(midway.completed).toBe(false);
     expect(midway.value).toBeCloseTo(-45);
 
-    const end = evaluateDegreeInterpolation({
-      state,
-      timestamp: state.startTimestamp + 1500,
-    });
+    const end = evaluateDegreeInterpolation(state, state.startTimestamp + 1500);
 
     expect(end.completed).toBe(true);
     expect(end.value).toBe(270);
@@ -88,10 +82,7 @@ describe('evaluateDegreeInterpolation', () => {
       options: { durationMs: 0 },
     });
 
-    const result = evaluateDegreeInterpolation({
-      state,
-      timestamp: 0,
-    });
+    const result = evaluateDegreeInterpolation(state, 0);
 
     expect(result.completed).toBe(true);
     expect(result.value).toBe(360);

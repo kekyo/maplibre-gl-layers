@@ -24,8 +24,6 @@ import type {
   PrepareDrawSpriteImageParams,
   RegisteredImage,
   RenderTargetEntryLike,
-  DistanceInterpolationEvaluationResult,
-  DegreeInterpolationEvaluationResult,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
 } from '../../src/internalTypes';
@@ -59,9 +57,9 @@ const SPRITE_INTERPOLATION_ITEM_LENGTH = 14;
 const PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
 interface WasmProcessInterpolationResults {
-  distance: DistanceInterpolationEvaluationResult[];
-  degree: DegreeInterpolationEvaluationResult[];
-  sprite: SpriteInterpolationEvaluationResult[];
+  distance: SpriteInterpolationEvaluationResult<number>[];
+  degree: SpriteInterpolationEvaluationResult<number>[];
+  sprite: SpriteInterpolationEvaluationResult<SpriteLocation>[];
 }
 
 class MockWasmHost implements WasmHost {
@@ -207,10 +205,10 @@ class MockWasmHost implements WasmHost {
       view[writeCursor++] = entry.effectiveStartTimestamp;
     }
     for (const entry of response.sprite) {
-      view[writeCursor++] = entry.location.lng;
-      view[writeCursor++] = entry.location.lat;
-      view[writeCursor++] = entry.location.z ?? 0;
-      view[writeCursor++] = entry.location.z !== undefined ? 1 : 0;
+      view[writeCursor++] = entry.value.lng;
+      view[writeCursor++] = entry.value.lat;
+      view[writeCursor++] = entry.value.z ?? 0;
+      view[writeCursor++] = entry.value.z !== undefined ? 1 : 0;
       view[writeCursor++] = entry.completed ? 1 : 0;
       view[writeCursor++] = entry.effectiveStartTimestamp;
     }
@@ -667,9 +665,9 @@ describe('processInterpolationsViaWasm', () => {
     };
 
     const requests = {
-      distance: [{ state: distanceState, timestamp: 50 }],
-      degree: [{ state: degreeState, timestamp: 50 }],
-      sprite: [{ state: spriteState, timestamp: 50 }],
+      distance: [distanceState],
+      degree: [degreeState],
+      sprite: [spriteState],
     };
 
     wasm.setNextProcessResponse({
@@ -677,7 +675,7 @@ describe('processInterpolationsViaWasm', () => {
       degree: [{ value: 30, completed: true, effectiveStartTimestamp: 20 }],
       sprite: [
         {
-          location: { lng: 1, lat: 2 },
+          value: { lng: 1, lat: 2 },
           completed: false,
           effectiveStartTimestamp: 30,
         },
@@ -686,13 +684,14 @@ describe('processInterpolationsViaWasm', () => {
 
     const result = __wasmCalculationTestInternals.processInterpolationsViaWasm(
       wasm,
-      requests
+      requests,
+      50
     );
 
     expect(result.distance).toHaveLength(1);
     expect(result.distance[0]?.value).toBe(3);
     expect(result.degree[0]?.completed).toBe(true);
-    expect(result.sprite[0]?.location.lng).toBeCloseTo(1);
+    expect(result.sprite[0]?.value.lng).toBeCloseTo(1);
     expect(wasm.lastProcessRequestCounts).toEqual({
       distance: 1,
       degree: 1,
