@@ -657,24 +657,25 @@ export interface InternalSpriteImageState extends SpriteImageState {
   leaderLinePixelWidth: number;
   rotateDeg: number;
   opacity: number;
-  lodOpacity: number;
+  lodOpacity: number; // For Pseudo LOD
   finalOpacity: MutableSpriteInterpolatedValues<number>;
   offset: MutableSpriteImageInterpolatedOffset;
   finalRotateDeg: MutableSpriteInterpolatedValues<number>;
   autoRotation: boolean;
   autoRotationMinDistanceMeters: number;
-  currentAutoRotateDeg: number;
   originLocation: Readonly<SpriteImageOriginLocation> | undefined;
   originReferenceKey: SpriteOriginReferenceKey;
   originRenderTargetIndex: SpriteOriginReferenceIndex;
   interpolationDirty: boolean;
   surfaceShaderInputs: Readonly<SurfaceShaderInputs> | undefined;
-  hitTestCorners: [
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-  ] | undefined;
+  hitTestCorners:
+    | [
+        MutableSpriteScreenPoint,
+        MutableSpriteScreenPoint,
+        MutableSpriteScreenPoint,
+        MutableSpriteScreenPoint,
+      ]
+    | undefined;
 }
 
 /**
@@ -684,13 +685,13 @@ export interface InternalSpriteCurrentState<TTag> {
   spriteId: string;
   handle: IdHandle;
   isEnabled: boolean;
-  visibilityDistanceMeters?: number;
+  visibilityDistanceMeters?: number; // For Pseudo LOD
   opacityMultiplier: number;
   location: MutableSpriteInterpolatedValues<SpriteLocation>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
   lastAutoRotationLocation: Readonly<SpriteLocation>;
-  lastAutoRotationAngleDeg: number;
+  currentAutoRotateDeg: number;
   autoRotationInvalidated: boolean;
   interpolationDirty: boolean;
   cachedMercator: Readonly<SpriteMercatorCoordinate>;

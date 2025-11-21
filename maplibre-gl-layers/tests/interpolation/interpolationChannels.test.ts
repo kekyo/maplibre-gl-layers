@@ -88,11 +88,12 @@ const createImageState = (): InternalSpriteImageState => ({
   },
   autoRotation: false,
   autoRotationMinDistanceMeters: 0,
-  currentAutoRotateDeg: 0,
   originReferenceKey: SPRITE_ORIGIN_REFERENCE_KEY_NONE,
   originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   originLocation: undefined,
   interpolationDirty: false,
+  surfaceShaderInputs: undefined,
+  hitTestCorners: undefined,
 });
 
 describe('applyOffsetUpdate', () => {

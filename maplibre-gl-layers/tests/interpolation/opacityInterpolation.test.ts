@@ -83,11 +83,12 @@ const createMockImageState = (opacity = 0.5): InternalSpriteImageState => ({
   },
   autoRotation: false,
   autoRotationMinDistanceMeters: 0,
-  currentAutoRotateDeg: 0,
   originLocation: undefined,
   originReferenceKey: 0,
   originRenderTargetIndex: 0,
   interpolationDirty: false,
+  surfaceShaderInputs: undefined,
+  hitTestCorners: undefined,
 });
 
 describe('applyOpacityUpdate', () => {

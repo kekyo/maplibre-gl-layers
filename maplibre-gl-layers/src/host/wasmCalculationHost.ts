@@ -204,6 +204,13 @@ const resolveImageOffset = (
   };
 };
 
+const resolveAutoRotationDeg = <T>(
+  sprite: Readonly<InternalSpriteCurrentState<T>>,
+  image: Readonly<InternalSpriteImageState>
+): number => {
+  return image.autoRotation ? sprite.currentAutoRotateDeg : 0;
+};
+
 const encodeDistanceInterpolationRequest = (
   buffer: Float64Array,
   cursor: number,
@@ -529,12 +536,15 @@ const processInterpolationsWithWasm = <TTag>(
           shouldSkipChannels = true;
         }
 
+        const interpolationOptions = shouldSkipChannels
+          ? {
+              skipChannels,
+              autoRotationDeg: resolveAutoRotationDeg(sprite, image),
+            }
+          : { autoRotationDeg: resolveAutoRotationDeg(sprite, image) };
+
         if (
-          stepSpriteImageInterpolations(
-            image,
-            timestamp,
-            shouldSkipChannels ? { skipChannels } : undefined
-          )
+          stepSpriteImageInterpolations(image, timestamp, interpolationOptions)
         ) {
           hasActiveInterpolation = true;
         }
@@ -1642,11 +1652,12 @@ const convertToWasmProjectionState = <TTag>(
       const offset = resolveImageOffset(image);
       parameterBuffer[cursor++] = offset.offsetMeters;
       parameterBuffer[cursor++] = offset.offsetDeg;
+      const autoRotationDeg = resolveAutoRotationDeg(sprite, image);
       const resolvedRotation = normalizeAngleDeg(
         toFiniteOr(image.finalRotateDeg.current, 0)
       );
       parameterBuffer[cursor++] = resolvedRotation;
-      parameterBuffer[cursor++] = toFiniteOr(image.currentAutoRotateDeg, 0);
+      parameterBuffer[cursor++] = toFiniteOr(autoRotationDeg, 0);
       parameterBuffer[cursor++] = toFiniteOr(image.rotateDeg, 0);
       parameterBuffer[cursor++] = image.order;
       parameterBuffer[cursor++] = image.subLayer;

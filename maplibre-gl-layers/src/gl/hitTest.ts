@@ -62,6 +62,13 @@ const resolveImageOffset = (
   };
 };
 
+const resolveImageAutoRotationDeg = <T>(
+  sprite: Readonly<InternalSpriteCurrentState<T>>,
+  image: Readonly<InternalSpriteImageState>
+): number => {
+  return image.autoRotation ? sprite.currentAutoRotateDeg : 0;
+};
+
 interface HitTestTreeState<T> {
   readonly sprite: Readonly<InternalSpriteCurrentState<T>>;
   readonly image: Readonly<InternalSpriteImageState>;
@@ -297,10 +304,11 @@ export const createHitTestController = <T>({
       worldDims.scaleAdjustment
     );
 
+    const autoRotationDeg = resolveImageAutoRotationDeg(sprite, image);
     const totalRotateDeg = normalizeAngleDeg(
       Number.isFinite(image.finalRotateDeg.current)
         ? image.finalRotateDeg.current
-        : (image.currentAutoRotateDeg ?? 0) + image.rotateDeg
+        : autoRotationDeg + image.rotateDeg
     );
 
     const cornerDisplacements = calculateSurfaceCornerDisplacements({
@@ -359,10 +367,11 @@ export const createHitTestController = <T>({
     const spriteMinPixel = scaling.spriteMinPixel;
     const spriteMaxPixel = scaling.spriteMaxPixel;
     const imageScale = image.scale ?? 1;
+    const autoRotationDeg = resolveImageAutoRotationDeg(sprite, image);
     const totalRotateDeg = normalizeAngleDeg(
       Number.isFinite(image.finalRotateDeg.current)
         ? image.finalRotateDeg.current
-        : (image.currentAutoRotateDeg ?? 0) + image.rotateDeg
+        : autoRotationDeg + image.rotateDeg
     );
 
     const pixelDims = calculateBillboardPixelDimensions(

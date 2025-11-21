@@ -130,6 +130,13 @@ const resolveImageOffset = (
   };
 };
 
+const resolveAutoRotationDeg = <T>(
+  sprite: Readonly<InternalSpriteCurrentState<T>>,
+  image: Readonly<InternalSpriteImageState>
+): number => {
+  return image.autoRotation ? sprite.currentAutoRotateDeg : 0;
+};
+
 const calculateBorderWidthPixels = (
   widthMeters: number | undefined,
   imageScale: number,
@@ -377,10 +384,11 @@ export const collectDepthSortedItemsInternal = <T>(
           spriteMaxPixel,
         }
       );
+      const autoRotationDeg = resolveAutoRotationDeg(spriteEntry, imageEntry);
       const totalRotateDeg = normalizeAngleDeg(
         Number.isFinite(imageEntry.finalRotateDeg.current)
           ? imageEntry.finalRotateDeg.current
-          : (imageEntry.currentAutoRotateDeg ?? 0) + imageEntry.rotateDeg
+          : autoRotationDeg + imageEntry.rotateDeg
       );
       const offsetMeters = calculateSurfaceOffsetMeters(
         offsetResolved,
@@ -597,10 +605,11 @@ const computeImageCenterXY = <T>(
     }
   }
 
+  const autoRotationDeg = resolveAutoRotationDeg(sprite, image);
   const totalRotDeg = normalizeAngleDeg(
     Number.isFinite(image.finalRotateDeg.current)
       ? image.finalRotateDeg.current
-      : (image.currentAutoRotateDeg ?? 0) + image.rotateDeg
+      : autoRotationDeg + image.rotateDeg
   );
   const imageScaleLocal = image.scale ?? 1;
   const imageResourceRef = imageResources[image.imageHandle];
@@ -879,12 +888,13 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   // Use per-image anchor/offset when provided; otherwise fall back to defaults.
   const anchor = imageEntry.anchor ?? DEFAULT_ANCHOR;
   const offsetDef = resolveImageOffset(imageEntry);
+  const autoRotationDeg = resolveAutoRotationDeg(spriteEntry, imageEntry);
 
   // Prefer the dynamically interpolated rotation when available; otherwise synthesize it from base + manual rotations.
   const totalRotateDeg = normalizeAngleDeg(
     Number.isFinite(imageEntry.finalRotateDeg.current)
       ? imageEntry.finalRotateDeg.current
-      : (imageEntry.currentAutoRotateDeg ?? 0) + imageEntry.rotateDeg
+      : autoRotationDeg + imageEntry.rotateDeg
   );
 
   const projected = projectionHost.project(spriteEntry.location.current);
@@ -1773,13 +1783,15 @@ export const processInterpolationsInternal = <TTag>(
           skipChannels.offsetDeg = true;
           shouldSkipChannels = true;
         }
+        const interpolationOptions = shouldSkipChannels
+          ? {
+              skipChannels,
+              autoRotationDeg: resolveAutoRotationDeg(sprite, image),
+            }
+          : { autoRotationDeg: resolveAutoRotationDeg(sprite, image) };
 
         if (
-          stepSpriteImageInterpolations(
-            image,
-            timestamp,
-            shouldSkipChannels ? { skipChannels } : undefined
-          )
+          stepSpriteImageInterpolations(image, timestamp, interpolationOptions)
         ) {
           hasActiveInterpolation = true;
         }

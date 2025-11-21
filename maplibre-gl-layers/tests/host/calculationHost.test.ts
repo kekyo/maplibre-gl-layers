@@ -448,7 +448,6 @@ const createImageState = (
     finalRotateDeg: rotateDeg,
     autoRotation: overrides.autoRotation ?? false,
     autoRotationMinDistanceMeters: overrides.autoRotationMinDistanceMeters ?? 0,
-    currentAutoRotateDeg: overrides.currentAutoRotateDeg ?? 0,
     originLocation,
     originReferenceKey: overrides.originReferenceKey ?? originReferenceKey,
     originRenderTargetIndex:
@@ -506,7 +505,7 @@ const createSpriteState = (
     tag: overrides.tag ?? null,
     lastAutoRotationLocation:
       overrides.lastAutoRotationLocation ?? baseLocation,
-    lastAutoRotationAngleDeg: overrides.lastAutoRotationAngleDeg ?? 0,
+    currentAutoRotateDeg: overrides.currentAutoRotateDeg ?? 0,
     autoRotationInvalidated: overrides.autoRotationInvalidated ?? false,
     interpolationDirty: overrides.interpolationDirty ?? false,
     cachedMercator,

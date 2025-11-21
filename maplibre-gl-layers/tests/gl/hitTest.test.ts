@@ -846,36 +846,30 @@ describe('document visibility handling', () => {
         ],
       });
 
-      const getPrimaryImage = (): InternalSpriteImageState | undefined => {
-        const spriteState = layer.getSpriteState('auto-rot');
-        return spriteState?.images.get(0)?.get(0) as
-          | InternalSpriteImageState
+      const getAutoRotationDeg = (): number => {
+        const spriteState = layer.getSpriteState('auto-rot') as
+          | InternalSpriteCurrentState<unknown>
           | undefined;
+        return spriteState?.currentAutoRotateDeg ?? 0;
       };
 
       layer.updateSprite('auto-rot', { location: { lng: 10, lat: 0 } });
       layer.render?.(gl, {} as any);
-      const initialAngle = getPrimaryImage()?.currentAutoRotateDeg ?? 0;
+      const initialAngle = getAutoRotationDeg();
 
       fakeDocument.visibilityState = 'hidden';
       fakeDocument.dispatch('visibilitychange');
 
       layer.updateSprite('auto-rot', { location: { lng: 0, lat: 10 } });
       layer.render?.(gl, {} as any);
-      expect(getPrimaryImage()?.currentAutoRotateDeg ?? 0).toBeCloseTo(
-        initialAngle,
-        5
-      );
+      expect(getAutoRotationDeg()).toBeCloseTo(initialAngle, 5);
 
       fakeDocument.visibilityState = 'visible';
       fakeDocument.dispatch('visibilitychange');
 
       layer.updateSprite('auto-rot', { location: { lng: 0, lat: 20 } });
       layer.render?.(gl, {} as any);
-      expect(getPrimaryImage()?.currentAutoRotateDeg ?? 0).not.toBeCloseTo(
-        initialAngle,
-        5
-      );
+      expect(getAutoRotationDeg()).not.toBeCloseTo(initialAngle, 5);
     } finally {
       layer.onRemove?.(map as unknown as any, gl);
     }

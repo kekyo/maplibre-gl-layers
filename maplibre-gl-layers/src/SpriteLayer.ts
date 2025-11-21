@@ -207,6 +207,13 @@ const reapplySpriteOpacityMultiplier = <T>(
   });
 };
 
+const resolveImageAutoRotationDeg = <T>(
+  sprite: InternalSpriteCurrentState<T>,
+  image: InternalSpriteImageState
+): number => {
+  return image.autoRotation ? sprite.currentAutoRotateDeg : 0;
+};
+
 /**
  * Applies auto-rotation to all images within a sprite when movement exceeds the configured threshold.
  * @template T Arbitrary sprite tag type.
@@ -263,8 +270,10 @@ export const applyAutoRotation = <T>(
 
   const resolvedAngleRaw = isFiniteNumber(bearingDeg)
     ? bearingDeg
-    : sprite.lastAutoRotationAngleDeg;
+    : sprite.currentAutoRotateDeg;
   const resolvedAngle = normalizeAngleDeg(resolvedAngleRaw);
+
+  sprite.currentAutoRotateDeg = resolvedAngle;
 
   sprite.images.forEach((orderMap) => {
     orderMap.forEach((image) => {
@@ -272,14 +281,12 @@ export const applyAutoRotation = <T>(
       if (!image.autoRotation) {
         return;
       }
-      image.currentAutoRotateDeg = resolvedAngle;
-      syncImageRotationChannel(image);
+      syncImageRotationChannel(image, resolvedAngle);
       updateImageInterpolationDirtyState(sprite, image);
     });
   });
 
   sprite.lastAutoRotationLocation = cloneSpriteLocation(nextLocation);
-  sprite.lastAutoRotationAngleDeg = resolvedAngle;
 
   return true;
 };
@@ -455,7 +462,8 @@ export const createImageStateFromInit = (
   subLayer: number,
   order: number,
   originReference: SpriteOriginReference,
-  invalidated: boolean
+  invalidated: boolean,
+  spriteAutoRotationDeg = 0
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
@@ -513,11 +521,12 @@ export const createImageStateFromInit = (
     autoRotationMinDistanceMeters:
       imageInit.autoRotationMinDistanceMeters ??
       DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
-    currentAutoRotateDeg: 0,
     originLocation,
     originReferenceKey,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
     interpolationDirty: false,
+    surfaceShaderInputs: undefined,
+    hitTestCorners: undefined,
   };
 
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
@@ -533,7 +542,11 @@ export const createImageStateFromInit = (
       cloneInterpolationOptions(opacityInitOption);
   }
 
-  syncImageRotationChannel(state);
+  syncImageRotationChannel(
+    state,
+    spriteAutoRotationDeg,
+    state.finalRotateDeg.interpolation.options ?? undefined
+  );
 
   return state;
 };
@@ -1008,8 +1021,8 @@ export const createSpriteLayer = <T = any>(
         invalidateImageInterpolationState(sprite, image);
         // Preserve the prior displayed rotation so manual angles
         // aren't overwritten during visibility transitions.
-        image.finalRotateDeg.current =
-          image.currentAutoRotateDeg + image.rotateDeg;
+        const autoRotationDeg = resolveImageAutoRotationDeg(sprite, image);
+        image.finalRotateDeg.current = autoRotationDeg + image.rotateDeg;
       });
     });
   };
@@ -2478,7 +2491,7 @@ export const createSpriteLayer = <T = any>(
       // Tags default to null to simplify downstream comparisons.
       tag: init.tag ?? null,
       lastAutoRotationLocation: cloneSpriteLocation(currentLocation),
-      lastAutoRotationAngleDeg: 0,
+      currentAutoRotateDeg: 0,
       autoRotationInvalidated: false,
       interpolationDirty: false,
       cachedMercator: initialMercator,
@@ -2731,7 +2744,8 @@ export const createSpriteLayer = <T = any>(
       subLayer,
       order,
       originReference,
-      !isLayerVisible() || sprite.location.invalidated === true
+      !isLayerVisible() || sprite.location.invalidated === true,
+      sprite.currentAutoRotateDeg
     );
     state.imageHandle = resolveImageHandle(state.imageId);
 
@@ -2768,11 +2782,8 @@ export const createSpriteLayer = <T = any>(
       }
     }
 
-    if (state.autoRotation) {
-      state.currentAutoRotateDeg = sprite.lastAutoRotationAngleDeg;
-    }
-
-    syncImageRotationChannel(state);
+    const autoRotationDeg = resolveImageAutoRotationDeg(sprite, state);
+    syncImageRotationChannel(state, autoRotationDeg);
     updateImageInterpolationDirtyState(sprite, state);
 
     setImageState(sprite, state);
@@ -2856,6 +2867,8 @@ export const createSpriteLayer = <T = any>(
     const mapCurrentlyVisible = isLayerVisible();
     const interpolationAllowed =
       interpolationCalculationEnabled && mapCurrentlyVisible;
+    const resolveAutoRotationDeg = () =>
+      resolveImageAutoRotationDeg(sprite, state);
 
     // Apply updates for each provided attribute.
     if (imageUpdate.imageId !== undefined) {
@@ -2980,7 +2993,7 @@ export const createSpriteLayer = <T = any>(
     if (imageUpdate.rotateDeg !== undefined) {
       const nextRotation = normalizeAngleDeg(imageUpdate.rotateDeg);
       const targetDisplayed = normalizeAngleDeg(
-        state.currentAutoRotateDeg + nextRotation
+        resolveAutoRotationDeg() + nextRotation
       );
       state.finalRotateDeg.from = state.finalRotateDeg.current;
       state.finalRotateDeg.to = targetDisplayed;
@@ -2993,7 +3006,6 @@ export const createSpriteLayer = <T = any>(
       state.autoRotation = imageUpdate.autoRotation;
       if (imageUpdate.autoRotation) {
         if (!prevAutoRotation) {
-          state.currentAutoRotateDeg = sprite.lastAutoRotationAngleDeg;
           shouldReapplyAutoRotation = true;
         }
       } else if (prevAutoRotation) {
@@ -3012,22 +3024,22 @@ export const createSpriteLayer = <T = any>(
     }
 
     if (shouldResetResolvedAngle) {
-      state.currentAutoRotateDeg = 0;
       requireRotationSync = true;
     }
 
     if (shouldReapplyAutoRotation) {
       const applied = applyAutoRotation(sprite, sprite.location.current, true);
       if (!applied && state.autoRotation) {
-        state.currentAutoRotateDeg = sprite.lastAutoRotationAngleDeg;
         requireRotationSync = true;
       }
     }
 
     if (requireRotationSync) {
+      const autoRotationDeg = resolveAutoRotationDeg();
       // Ensure displayed angle reflects the latest base rotation and overrides.
       syncImageRotationChannel(
         state,
+        autoRotationDeg,
         // When a rotation override has been computed, pass it along (null clears interpolation); otherwise leave undefined.
         interpolationAllowed
           ? hasRotationOverride
