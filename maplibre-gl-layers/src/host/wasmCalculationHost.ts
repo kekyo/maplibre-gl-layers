@@ -40,7 +40,6 @@ import type {
   SpriteMode,
   SpriteEasingParam,
   SpriteEasingType,
-  SpriteImageOffset,
 } from '../types';
 import { prepareWasmHost, type BufferHolder, type WasmHost } from './wasmHost';
 import {
@@ -191,9 +190,11 @@ const encodeEasingPreset = (preset: SpriteEasingParam): EncodedEasingPreset => {
 
 const MAX_MERCATOR_LATITUDE = 85.051129;
 
+type ResolvedOffset = { offsetMeters: number; offsetDeg: number };
+
 const resolveImageOffset = (
   image: Readonly<InternalSpriteImageState>
-): SpriteImageOffset => {
+): ResolvedOffset => {
   const offset = image.offset;
   if (!offset) {
     return { offsetMeters: 0, offsetDeg: 0 };

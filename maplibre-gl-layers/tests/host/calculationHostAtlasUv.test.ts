@@ -28,11 +28,7 @@ import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
 } from '../../src/internalTypes';
-import type {
-  SpriteAnchor,
-  SpriteImageOffset,
-  SpriteLocation,
-} from '../../src/types';
+import type { SpriteAnchor, SpriteLocation } from '../../src/types';
 import {
   createProjectionHost,
   type ProjectionHostParams,
@@ -119,7 +115,7 @@ const createImageState = (
   imageHandle: number
 ): InternalSpriteImageState => {
   const anchor: SpriteAnchor = DEFAULT_ANCHOR;
-  const offset: SpriteImageOffset = DEFAULT_IMAGE_OFFSET;
+  const offset = DEFAULT_IMAGE_OFFSET;
   return {
     subLayer: 0,
     order: 0,

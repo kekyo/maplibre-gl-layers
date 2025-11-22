@@ -66,7 +66,6 @@ import type {
   SpriteLocation,
   SpritePoint,
   SpriteScreenPoint,
-  SpriteImageOffset,
 } from '../types';
 import { createMapLibreProjectionHost } from './mapLibreProjectionHost';
 import {
@@ -117,9 +116,11 @@ import {
   applyResolvedOpacityTarget,
 } from '../interpolation/interpolationChannels';
 
+type ResolvedOffset = { offsetMeters: number; offsetDeg: number };
+
 const resolveImageOffset = (
   image: Readonly<InternalSpriteImageState>
-): SpriteImageOffset => {
+): ResolvedOffset => {
   const offset = image.offset;
   if (!offset) {
     return { ...DEFAULT_IMAGE_OFFSET };

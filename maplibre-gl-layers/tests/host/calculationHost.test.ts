@@ -54,7 +54,6 @@ import {
 } from '../../src/internalTypes';
 import type {
   SpriteAnchor,
-  SpriteImageOffset,
   SpriteImageLineAttribute,
   SpriteLocation,
   SpritePoint,
@@ -79,7 +78,9 @@ const IDENTITY_MATRIX = new Float64Array([
 ]);
 
 const DEFAULT_ANCHOR: SpriteAnchor = { x: 0, y: 0 };
-const DEFAULT_OFFSET: SpriteImageOffset = { offsetMeters: 0, offsetDeg: 0 };
+type TestSpriteOffset = { offsetMeters: number; offsetDeg: number };
+
+const DEFAULT_OFFSET: TestSpriteOffset = { offsetMeters: 0, offsetDeg: 0 };
 const DEFAULT_CLIP_CONTEXT: ClipContext = { mercatorMatrix: IDENTITY_MATRIX };
 
 type SpriteStateOverrides = Partial<
@@ -127,7 +128,7 @@ const isMutableInterpolatedValues = <TValue>(
 };
 
 const isMutableOffset = (
-  offset: MutableSpriteImageInterpolatedOffset | SpriteImageOffset | undefined
+  offset: MutableSpriteImageInterpolatedOffset | TestSpriteOffset | undefined
 ): offset is MutableSpriteImageInterpolatedOffset => {
   if (!offset) {
     return false;
@@ -216,7 +217,7 @@ const createImageResource = (id: string): RegisteredImage => ({
 const originReference = createSpriteOriginReference();
 
 const resolveMutableOffset = (
-  offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset | undefined
+  offset?: MutableSpriteImageInterpolatedOffset | TestSpriteOffset | undefined
 ): MutableSpriteImageInterpolatedOffset => {
   if (isMutableOffset(offset)) {
     return {
@@ -228,7 +229,7 @@ const resolveMutableOffset = (
       ),
     };
   }
-  const base: SpriteImageOffset = offset ?? DEFAULT_OFFSET;
+  const base: TestSpriteOffset = offset ?? DEFAULT_OFFSET;
   return {
     offsetMeters: cloneDistanceInterpolatedValues(undefined, base.offsetMeters),
     offsetDeg: cloneDegreeInterpolatedValues(undefined, base.offsetDeg),
@@ -315,7 +316,7 @@ type ImageStateOverrides = Partial<
   >
 > & {
   finalOpacity?: MutableSpriteInterpolatedValues<number>;
-  offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset;
+  offset?: MutableSpriteImageInterpolatedOffset | TestSpriteOffset;
   finalRotateDeg?: MutableSpriteInterpolatedValues<number>;
   border?:
     | ResolvedSpriteImageLineAttribute

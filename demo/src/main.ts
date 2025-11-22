@@ -713,7 +713,7 @@ let isSecondaryLeaderLineEnabled = false;
 let orbitDegEasingKey: EasingOptionKey = 'linear';
 let isOrbitDegInterpolationEnabled = isEasingEnabled(orbitDegEasingKey);
 /** Whether we interpolate the orbital distance of the secondary image. */
-let orbitMetersEasingKey: EasingOptionKey = 'sine';
+let orbitMetersEasingKey: EasingOptionKey = 'ease-out';
 let isOrbitMetersInterpolationEnabled = isEasingEnabled(orbitMetersEasingKey);
 /** Interpolation mode applied to orbital angle changes. */
 let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
@@ -2454,34 +2454,32 @@ const main = async () => {
       secondaryImageOrbitDegrees =
         (secondaryImageOrbitDegrees + SECONDARY_ORBIT_STEP_DEG) % 360;
 
-      const orbitRadiusMeters =
-        currentSecondaryImageType === 'text'
-          ? SECONDARY_ORBIT_TEXT_RADIUS_METERS
-          : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
-
       // Iterate over every sprite.
       spriteLayer.updateForEach((sprite, update) => {
         // Traverse every image registered on the sprite.
         sprite.images.forEach((orderMap) => {
           orderMap.forEach((image) => {
             // Only update the secondary (orbiting satellite) image.
-            if (image.subLayer === SECONDARY_SUB_LAYER) {
-              // Update the offset to represent the orbiting motion.
-              const imageUpdate: SpriteImageDefinitionUpdate = {
-                offset: {
+              if (image.subLayer === SECONDARY_SUB_LAYER) {
+                // Update only the orbital angle; keep the current radius as-is to avoid restarting its interpolation.
+                const imageUpdate: SpriteImageDefinitionUpdate = {
                   offsetDeg: secondaryImageOrbitDegrees, // Apply the computed angle.
-                  offsetMeters: orbitRadiusMeters, // Maintain the configured orbit radius.
-                },
-              };
-              const orbitInterpolation = createOrbitInterpolationOptions();
-              imageUpdate.interpolation = orbitInterpolation ?? {
-                offsetDeg: null,
-                offsetMeters: null,
-              };
-              update.updateImage(image.subLayer, image.order, imageUpdate);
-            }
+                };
+                imageUpdate.interpolation = isOrbitDegInterpolationEnabled
+                  ? {
+                      offsetDeg: {
+                        mode: orbitOffsetDegInterpolationMode,
+                        durationMs: MOVEMENT_INTERVAL_MS,
+                        easing: resolveEasingOption(orbitDegEasingKey),
+                      },
+                    }
+                  : {
+                      offsetDeg: null,
+                    };
+                update.updateImage(image.subLayer, image.order, imageUpdate);
+              }
+            });
           });
-        });
         return true;
       });
     };
@@ -3165,6 +3163,10 @@ const main = async () => {
 
         return true;
       });
+
+      // Reapply the current orbit mode so the offset radius matches the selected image type
+      // (text uses a different default distance than the textured box).
+      setSecondaryImageOrbitMode(currentSecondaryImageOrbitMode);
     };
 
     /**
@@ -3172,6 +3174,7 @@ const main = async () => {
      * @param {SecondaryOrbitMode} mode - Mode to activate.
      */
     const setSecondaryImageOrbitMode = (mode: SecondaryOrbitMode) => {
+      const wasOrbit = currentSecondaryImageOrbitMode === 'orbit';
       if (!isSecondaryImageReady) {
         // When assets have not loaded yet, just remember the requested mode for later.
         currentSecondaryImageOrbitMode = mode;
@@ -3215,30 +3218,24 @@ const main = async () => {
               imageUpdate = {
                 opacity: 1.0,
                 autoRotation: false,
-                offset: {
-                  offsetMeters: 0.0,
-                  offsetDeg: 0.0,
-                },
+                offsetMeters: 0.0,
+                offsetDeg: 0.0,
               };
             } else if (mode === 'shift') {
               // Shift mode keeps a fixed radius and angle without continuous orbiting.
               imageUpdate = {
                 opacity: 1.0,
                 autoRotation: false,
-                offset: {
-                  offsetMeters: orbitRadiusMeters,
-                  offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
-                },
+                offsetMeters: orbitRadiusMeters,
+                offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
               };
             } else {
               // Orbit mode offsets the sprite by the configured radius and maintains the current angle.
               imageUpdate = {
                 opacity: 1.0,
                 autoRotation: false,
-                offset: {
-                  offsetMeters: orbitRadiusMeters,
-                  offsetDeg: secondaryImageOrbitDegrees,
-                },
+                offsetMeters: orbitRadiusMeters,
+                offsetDeg: secondaryImageOrbitDegrees,
               };
             }
             const orbitInterpolation = createOrbitInterpolationOptions();
@@ -3257,6 +3254,12 @@ const main = async () => {
         return true;
       });
       updateSecondaryImageButtons?.();
+
+      // When entering orbit mode, kick off the first angular step immediately so distance and angle
+      // interpolations start together instead of waiting for the next movement tick.
+      if (mode === 'orbit' && !wasOrbit) {
+        advanceSecondaryOrbitRotation();
+      }
     };
 
     /**
@@ -4567,7 +4570,8 @@ const main = async () => {
             ...(spriteBorder ?? {}),
             ...(secondaryOffset
               ? {
-                  offset: secondaryOffset,
+                  offsetMeters: secondaryOffset.offsetMeters,
+                  offsetDeg: secondaryOffset.offsetDeg,
                 }
               : {}),
             interpolation: orbitInterpolation,

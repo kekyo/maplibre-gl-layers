@@ -6,7 +6,6 @@
 
 import type {
   SpriteAnchor,
-  SpriteImageOffset,
   SpriteLocation,
   SpritePoint,
   SpriteScalingOptions,
@@ -20,6 +19,7 @@ import type {
 } from '../internalTypes';
 import {
   DEG2RAD,
+  DEFAULT_IMAGE_OFFSET,
   EARTH_RADIUS_METERS,
   RAD2DEG,
   TILE_SIZE,
@@ -27,6 +27,15 @@ import {
   UV_CORNERS,
 } from '../const';
 import { UNLIMITED_SPRITE_SCALING_OPTIONS } from '../default';
+
+export type OffsetInput =
+  | { offsetMeters?: number; offsetDeg?: number }
+  | undefined;
+
+const resolveOffsetInput = (offset: OffsetInput) => ({
+  offsetMeters: offset?.offsetMeters ?? DEFAULT_IMAGE_OFFSET.offsetMeters,
+  offsetDeg: offset?.offsetDeg ?? DEFAULT_IMAGE_OFFSET.offsetDeg,
+});
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -572,7 +581,7 @@ export const calculateBillboardPixelDimensions = (
 
 /**
  * Computes the billboard offset in screen-space pixels.
- * @param {SpriteImageOffset | undefined} offset - Offset configuration describing length (meters) and heading (degrees).
+ * @param {OffsetInput} offset - Offset configuration describing length (meters) and heading (degrees).
  * @param {number} imageScale - User-provided scale multiplier applied to the offset distance.
  * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
  * @param {number} effectivePixelsPerMeter - Conversion factor from meters to pixels.
@@ -580,17 +589,17 @@ export const calculateBillboardPixelDimensions = (
  * @returns {SpriteScreenPoint} Screen-space offset relative to the billboard center.
  */
 export const calculateBillboardOffsetPixels = (
-  offset: SpriteImageOffset | undefined,
+  offset: OffsetInput,
   imageScale: number,
   zoomScaleFactor: number,
   effectivePixelsPerMeter: number,
   sizeScaleAdjustment = 1
 ): SpriteScreenPoint => {
-  const offsetMeters =
-    (offset?.offsetMeters ?? 0) * imageScale * zoomScaleFactor;
+  const resolved = resolveOffsetInput(offset);
+  const offsetMeters = resolved.offsetMeters * imageScale * zoomScaleFactor;
   const offsetPixels =
     offsetMeters * effectivePixelsPerMeter * sizeScaleAdjustment;
-  const offsetRad = (offset?.offsetDeg ?? 0) * DEG2RAD;
+  const offsetRad = resolved.offsetDeg * DEG2RAD;
   return {
     x: offsetPixels * Math.sin(offsetRad),
     y: offsetPixels * Math.cos(offsetRad),
@@ -735,25 +744,25 @@ export const calculateSurfaceAnchorShiftMeters = (
 
 /**
  * Calculates surface image offsets in meters.
- * @param {SpriteImageOffset | undefined} offset - Offset configuration for the surface sprite.
+ * @param {OffsetInput} offset - Offset configuration for the surface sprite.
  * @param {number} imageScale - User-provided scale multiplier applied to the offset distance.
  * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
  * @param {number} [sizeScaleAdjustment=1] - Additional scale factor applied when sprite size is clamped.
  * @returns {SurfaceCorner} Offset vector in meters.
  */
 export const calculateSurfaceOffsetMeters = (
-  offset: SpriteImageOffset | undefined,
+  offset: OffsetInput,
   imageScale: number,
   zoomScaleFactor: number,
   sizeScaleAdjustment = 1
 ): SurfaceCorner => {
-  const offsetMeters =
-    (offset?.offsetMeters ?? 0) * imageScale * zoomScaleFactor;
+  const resolved = resolveOffsetInput(offset);
+  const offsetMeters = resolved.offsetMeters * imageScale * zoomScaleFactor;
   // Short-circuit when no displacement is requested to avoid redundant trig.
   if (offsetMeters === 0) {
     return { east: 0, north: 0 };
   }
-  const rad = (offset?.offsetDeg ?? 0) * DEG2RAD;
+  const rad = resolved.offsetDeg * DEG2RAD;
   return {
     east: offsetMeters * Math.sin(rad) * sizeScaleAdjustment,
     north: offsetMeters * Math.cos(rad) * sizeScaleAdjustment,
@@ -1024,7 +1033,7 @@ export interface BillboardCenterParams {
   /** Anchor definition normalized between -1 and 1. */
   anchor?: Readonly<SpriteAnchor>;
   /** Offset definition applied in meters/deg. */
-  offset?: Readonly<SpriteImageOffset>;
+  offset?: OffsetInput;
 }
 
 /**
@@ -1294,7 +1303,7 @@ export interface SurfaceCenterParams {
   /** Anchor definition normalized between -1 and 1. */
   anchor?: Readonly<SpriteAnchor>;
   /** Offset definition applied in meters/deg. */
-  offset?: Readonly<SpriteImageOffset>;
+  offset?: OffsetInput;
   /** Conversion rate from meters to on-screen pixels. */
   effectivePixelsPerMeter?: number;
   /** Lower clamp for the sprite's largest pixel dimension. */

@@ -25,23 +25,6 @@ export interface SpriteLocation {
 }
 
 /**
- * Offset describing where to place an image relative to its anchor point.
- * Specifies distance and angle from the anchor, not from the sprite's base coordinate.
- */
-export interface SpriteImageOffset {
-  /**
-   * Distance in meters from the image anchor. Zero keeps the image at the anchor point.
-   */
-  offsetMeters: number;
-  /**
-   * Angle describing the offset direction. This is not the image rotation.
-   * Billboard mode: Clockwise degrees relative to the screen, 0 deg points upward.
-   * Surface mode: Clockwise degrees from geographic north.
-   */
-  offsetDeg: number;
-}
-
-/**
  * Line attribute.
  */
 export interface SpriteImageLineAttribute {
@@ -234,8 +217,10 @@ export interface SpriteImageDefinitionInit {
   scale?: number;
   /** Anchor within the image. Defaults to [0.0, 0.0]. */
   anchor?: SpriteAnchor;
-  /** Offset from the sprite coordinate. Defaults to no offset. */
-  offset?: SpriteImageOffset;
+  /** Offset distance in meters from the sprite coordinate. Defaults to 0. */
+  offsetMeters?: number;
+  /** Offset angle in degrees. Defaults to 0. */
+  offsetDeg?: number;
   /** Optional border rendered around the image. */
   border?: SpriteImageLineAttribute;
   /** Optional leader line rendered toward the origin image. */
@@ -280,8 +265,10 @@ export interface SpriteImageDefinitionUpdate {
   scale?: number;
   /** Anchor within the image. */
   anchor?: SpriteAnchor;
-  /** Offset from the sprite coordinate. */
-  offset?: SpriteImageOffset;
+  /** Offset distance in meters from the sprite coordinate. */
+  offsetMeters?: number;
+  /** Offset angle in degrees. */
+  offsetDeg?: number;
   /** Border rendered around the image. Specify null to remove. */
   border?: SpriteImageLineAttribute | null;
   /** Leader line rendered toward the origin image. Specify null to remove. */

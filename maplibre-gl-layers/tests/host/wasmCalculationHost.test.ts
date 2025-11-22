@@ -32,13 +32,11 @@ import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
 } from '../../src/internalTypes';
-import type {
-  SpriteAnchor,
-  SpriteImageOffset,
-  SpriteLocation,
-} from '../../src/types';
+import type { SpriteAnchor, SpriteLocation } from '../../src/types';
 import type { ResolvedSpriteScalingOptions } from '../../src/utils/math';
 import type { ProjectionHostParams } from '../../src/host/projectionHost';
+
+type TestSpriteOffset = { offsetMeters: number; offsetDeg: number };
 
 const RESULT_HEADER_LENGTH = 7;
 const RESULT_VERTEX_COMPONENT_LENGTH = 36;
@@ -259,7 +257,7 @@ const createSprite = (
 };
 
 const DEFAULT_ANCHOR: SpriteAnchor = { x: 0, y: 0 };
-const DEFAULT_OFFSET: SpriteImageOffset = { offsetMeters: 0, offsetDeg: 0 };
+const DEFAULT_OFFSET: TestSpriteOffset = { offsetMeters: 0, offsetDeg: 0 };
 
 const createImage = (): InternalSpriteImageState =>
   ({

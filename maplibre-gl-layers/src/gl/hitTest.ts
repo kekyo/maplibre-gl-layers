@@ -12,11 +12,7 @@ import type {
   ProjectionHost,
   RegisteredImage,
 } from '../internalTypes';
-import type {
-  SpriteLocation,
-  SpriteScreenPoint,
-  SpriteImageOffset,
-} from '../types';
+import type { SpriteLocation, SpriteScreenPoint } from '../types';
 import {
   applySurfaceDisplacement,
   calculateBillboardAnchorShiftPixels,
@@ -51,7 +47,7 @@ const HIT_TEST_QUERY_RADIUS_PIXELS = 32;
 
 const resolveImageOffset = (
   image: Readonly<InternalSpriteImageState>
-): SpriteImageOffset => {
+): { offsetMeters: number; offsetDeg: number } => {
   const offset = image.offset;
   if (!offset) {
     return { ...DEFAULT_IMAGE_OFFSET };

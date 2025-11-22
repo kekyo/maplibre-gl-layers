@@ -9,7 +9,7 @@
  * Centralizes rotation and offset channel operations so SpriteLayer stays focused on orchestration.
  */
 
-import type { SpriteInterpolationOptions, SpriteImageOffset } from '../types';
+import type { SpriteInterpolationOptions } from '../types';
 import type {
   InternalSpriteImageState,
   MutableSpriteInterpolation,
@@ -243,6 +243,8 @@ interface DistanceInterpolationStepResult {
   readonly active: boolean;
 }
 
+type OffsetUpdate = { offsetMeters: number; offsetDeg: number };
+
 const stepDistanceInterpolationState = (
   interpolationState: SpriteInterpolationState<number> | null,
   timestamp: number,
@@ -301,7 +303,7 @@ export const clearOpacityInterpolation = (
 
 const applyOffsetDegUpdate = (
   image: InternalSpriteImageState,
-  nextOffset: SpriteImageOffset,
+  nextOffset: OffsetUpdate,
   interpolationOptions?: SpriteInterpolationOptions | null
 ): void => {
   const options = interpolationOptions;
@@ -339,7 +341,7 @@ const applyOffsetDegUpdate = (
 
 const applyOffsetMetersUpdate = (
   image: InternalSpriteImageState,
-  nextOffset: SpriteImageOffset,
+  nextOffset: OffsetUpdate,
   interpolationOptions?: SpriteInterpolationOptions | null
 ): void => {
   const options = interpolationOptions;
@@ -572,9 +574,20 @@ export interface ApplyOffsetUpdateOptions {
  */
 export const applyOffsetUpdate = (
   image: InternalSpriteImageState,
-  nextOffset: SpriteImageOffset,
+  nextOffset: OffsetUpdate,
   options: ApplyOffsetUpdateOptions = {}
 ): void => {
-  applyOffsetDegUpdate(image, nextOffset, options.deg);
-  applyOffsetMetersUpdate(image, nextOffset, options.meters);
+  const shouldUpdateMeters =
+    options.meters !== undefined ||
+    nextOffset.offsetMeters !== image.offset.offsetMeters.current;
+  if (shouldUpdateMeters) {
+    applyOffsetMetersUpdate(image, nextOffset, options.meters);
+  }
+
+  const shouldUpdateDeg =
+    options.deg !== undefined ||
+    nextOffset.offsetDeg !== image.offset.offsetDeg.current;
+  if (shouldUpdateDeg) {
+    applyOffsetDegUpdate(image, nextOffset, options.deg);
+  }
 };

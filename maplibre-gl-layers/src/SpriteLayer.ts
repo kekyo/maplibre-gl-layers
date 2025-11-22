@@ -33,7 +33,6 @@ import {
   type SpriteLayerHoverEvent,
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
-  type SpriteImageOffset,
   type SpriteImageLineAttribute,
   type SpriteInterpolationOptions,
   type SpriteImageOriginLocation,
@@ -326,28 +325,18 @@ const cloneAnchor = (anchor: SpriteAnchor | undefined): SpriteAnchor => {
   return { x: anchor.x, y: anchor.y };
 };
 
-/**
- * Clones an image offset, applying defaults when missing.
- * @param {SpriteImageOffset | undefined} offset - Offset definition to copy.
- * @returns {SpriteImageOffset} Cloned offset structure.
- */
-const cloneOffset = (
-  offset: SpriteImageOffset | undefined
-): SpriteImageOffset => {
-  if (!offset) {
-    return { ...DEFAULT_IMAGE_OFFSET };
-  }
-  return {
-    offsetMeters: offset.offsetMeters,
-    offsetDeg: offset.offsetDeg,
-  };
-};
+type OffsetInput = { offsetMeters?: number; offsetDeg?: number } | undefined;
+
+const resolveOffsetInput = (offset: OffsetInput) => ({
+  offsetMeters: offset?.offsetMeters ?? DEFAULT_IMAGE_OFFSET.offsetMeters,
+  offsetDeg: offset?.offsetDeg ?? DEFAULT_IMAGE_OFFSET.offsetDeg,
+});
 
 const createInterpolatedOffsetState = (
-  offset: SpriteImageOffset | undefined,
+  offset: OffsetInput,
   invalidated: boolean
 ): MutableSpriteImageInterpolatedOffset => {
-  const base = offset ? cloneOffset(offset) : { ...DEFAULT_IMAGE_OFFSET };
+  const base = resolveOffsetInput(offset);
   return {
     offsetMeters: {
       current: base.offsetMeters,
@@ -467,7 +456,10 @@ export const createImageStateFromInit = (
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
-  const initialOffset = cloneOffset(imageInit.offset);
+  const initialOffset = resolveOffsetInput({
+    offsetMeters: imageInit.offsetMeters,
+    offsetDeg: imageInit.offsetDeg,
+  });
   const initialOpacity = clampOpacity(imageInit.opacity ?? 1.0);
   const initialRotateDeg = normalizeAngleDeg(imageInit.rotateDeg ?? 0);
   const originLocation = cloneOriginLocation(imageInit.originLocation);
@@ -2951,9 +2943,15 @@ export const createSpriteLayer = <T = any>(
       : null;
     let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
-    if (imageUpdate.offset !== undefined) {
-      const clonedOffset = cloneOffset(imageUpdate.offset);
-      applyOffsetUpdate(state, clonedOffset, {
+    const hasOffsetMetersUpdate = imageUpdate.offsetMeters !== undefined;
+    const hasOffsetDegUpdate = imageUpdate.offsetDeg !== undefined;
+    if (hasOffsetMetersUpdate || hasOffsetDegUpdate) {
+      const nextOffset = {
+        offsetMeters:
+          imageUpdate.offsetMeters ?? state.offset.offsetMeters.current,
+        offsetDeg: imageUpdate.offsetDeg ?? state.offset.offsetDeg.current,
+      };
+      applyOffsetUpdate(state, nextOffset, {
         deg: allowOffsetDegInterpolation ? offsetDegInterpolationOption : null,
         meters: allowOffsetMetersInterpolation
           ? offsetMetersInterpolationOption

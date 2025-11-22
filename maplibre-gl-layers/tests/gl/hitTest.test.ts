@@ -985,7 +985,8 @@ describe('setInterpolationCalculation', () => {
 
       layer.updateSpriteImage('instant', 0, 0, {
         rotateDeg: 45,
-        offset: { offsetMeters: 12, offsetDeg: 30 },
+        offsetMeters: 12,
+        offsetDeg: 30,
         interpolation: {
           finalRotateDeg: { durationMs: 1000, easing: { type: 'linear' } },
           offsetDeg: { durationMs: 1000, easing: { type: 'linear' } },
