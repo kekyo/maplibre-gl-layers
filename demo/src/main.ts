@@ -2460,26 +2460,26 @@ const main = async () => {
         sprite.images.forEach((orderMap) => {
           orderMap.forEach((image) => {
             // Only update the secondary (orbiting satellite) image.
-              if (image.subLayer === SECONDARY_SUB_LAYER) {
-                // Update only the orbital angle; keep the current radius as-is to avoid restarting its interpolation.
-                const imageUpdate: SpriteImageDefinitionUpdate = {
-                  offsetDeg: secondaryImageOrbitDegrees, // Apply the computed angle.
-                };
-                imageUpdate.interpolation = isOrbitDegInterpolationEnabled
-                  ? {
-                      offsetDeg: {
-                        mode: orbitOffsetDegInterpolationMode,
-                        durationMs: MOVEMENT_INTERVAL_MS,
-                        easing: resolveEasingOption(orbitDegEasingKey),
-                      },
-                    }
-                  : {
-                      offsetDeg: null,
-                    };
-                update.updateImage(image.subLayer, image.order, imageUpdate);
-              }
-            });
+            if (image.subLayer === SECONDARY_SUB_LAYER) {
+              // Update only the orbital angle; keep the current radius as-is to avoid restarting its interpolation.
+              const imageUpdate: SpriteImageDefinitionUpdate = {
+                offsetDeg: secondaryImageOrbitDegrees, // Apply the computed angle.
+              };
+              imageUpdate.interpolation = isOrbitDegInterpolationEnabled
+                ? {
+                    offsetDeg: {
+                      mode: orbitOffsetDegInterpolationMode,
+                      durationMs: MOVEMENT_INTERVAL_MS,
+                      easing: resolveEasingOption(orbitDegEasingKey),
+                    },
+                  }
+                : {
+                    offsetDeg: null,
+                  };
+              update.updateImage(image.subLayer, image.order, imageUpdate);
+            }
           });
+        });
         return true;
       });
     };
@@ -3212,6 +3212,8 @@ const main = async () => {
               imageUpdate = {
                 opacity: 0.0,
                 autoRotation: false,
+                offsetMeters: 0.0,
+                offsetDeg: 0.0,
               };
             } else if (mode === 'center') {
               // Center mode keeps the image visible but locked to the primary sprite position.
@@ -4491,6 +4493,10 @@ const main = async () => {
       switch (currentSecondaryImageOrbitMode) {
         case 'hidden':
           secondaryOpacity = 0.0;
+          secondaryOffset = {
+            offsetMeters: 0.0,
+            offsetDeg: 0.0,
+          };
           break;
         case 'center':
           secondaryOffset = {

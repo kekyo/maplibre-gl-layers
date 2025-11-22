@@ -1459,6 +1459,8 @@ export const createSpriteLayer = <T = any>(
       sprite.images.forEach((orderMap) => {
         // Inspect each ordered image entry to update rotation/offset animations.
         orderMap.forEach((image) => {
+          const isOpacityInterpolating =
+            image.finalOpacity.interpolation.state !== null;
           const baseOpacity =
             image.finalOpacity.interpolation.baseValue ??
             image.finalOpacity.interpolation.lastCommandValue;
@@ -1466,7 +1468,11 @@ export const createSpriteLayer = <T = any>(
             sprite.visibilityDistanceMeters !== undefined &&
             (baseOpacity ?? 0) > OPACITY_VISIBILITY_EPSILON;
           // Fully transparent images contribute nothing and can be ignored unless pseudo LOD controls their visibility.
-          if (image.finalOpacity.current <= 0 && !shouldForceVisibilityCheck) {
+          if (
+            image.finalOpacity.current <= 0 &&
+            !isOpacityInterpolating &&
+            !shouldForceVisibilityCheck
+          ) {
             image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
             image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
