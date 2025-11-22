@@ -788,7 +788,6 @@ const createHud = () => {
       <p>
         Each sprite stays clamped to the ground and randomly chooses between screen-aligned and map-aligned orientations. Increase the count to as many as ${MAX_NUMBER_OF_SPRITES} sprites when needed.
       </p>
-      <p>Pan, tilt, or zoom the map to inspect how the sprites respond.</p>
       <div class="control-group" data-testid="group-wasm-mode">
         <div class="status-row">
           <span class="status-label">Calculation method</span>
@@ -998,12 +997,68 @@ const createHud = () => {
               data-testid="selected-rotate"
             >--</span>
           </div>
-          <div class="status-row" data-testid="selected-row-offset">
-            <span class="status-label">Offset</span>
+          <div class="status-row" data-testid="selected-row-rotate-from">
+            <span class="status-label">Rotate Deg (from)</span>
             <span
               class="status-value"
-              data-selected-field="offset"
-              data-testid="selected-offset"
+              data-selected-field="rotateFrom"
+              data-testid="selected-rotate-from"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-rotate-to">
+            <span class="status-label">Rotate Deg (to)</span>
+            <span
+              class="status-value"
+              data-selected-field="rotateTo"
+              data-testid="selected-rotate-to"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset">
+            <span class="status-label">Offset meters</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetMeters"
+              data-testid="selected-offset-meters"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-meters-from">
+            <span class="status-label">Offset meters (from)</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetMetersFrom"
+              data-testid="selected-offset-meters-from"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-meters-to">
+            <span class="status-label">Offset meters (to)</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetMetersTo"
+              data-testid="selected-offset-meters-to"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-deg">
+            <span class="status-label">Offset deg</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetDeg"
+              data-testid="selected-offset-deg"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-deg-from">
+            <span class="status-label">Offset deg (from)</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetDegFrom"
+              data-testid="selected-offset-deg-from"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-deg-to">
+            <span class="status-label">Offset deg (to)</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetDegTo"
+              data-testid="selected-offset-deg-to"
             >--</span>
           </div>
           <div class="status-row" data-testid="selected-row-lnglat">
@@ -1720,8 +1775,29 @@ const main = async () => {
     rotateDeg: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="rotate"]'
     ),
-    offset: document.querySelector<HTMLSpanElement>(
-      '[data-selected-field="offset"]'
+    rotateDegFrom: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotateFrom"]'
+    ),
+    rotateDegTo: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotateTo"]'
+    ),
+    offsetMeters: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetMeters"]'
+    ),
+    offsetMetersFrom: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetMetersFrom"]'
+    ),
+    offsetMetersTo: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetMetersTo"]'
+    ),
+    offsetDeg: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetDeg"]'
+    ),
+    offsetDegFrom: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetDegFrom"]'
+    ),
+    offsetDegTo: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetDegTo"]'
     ),
     opacity: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="opacity"]'
@@ -1919,18 +1995,62 @@ const main = async () => {
     }
     if (selectedFieldEls.rotateDeg) {
       const { from, current, to } = imageState.finalRotateDeg;
-      const parts = [
-        typeof from === 'number' ? `${from.toFixed(2)}°` : null,
-        `${current.toFixed(2)}°`,
-        typeof to === 'number' ? `${to.toFixed(2)}°` : null,
-      ].filter(Boolean);
-      selectedFieldEls.rotateDeg.textContent =
-        parts.length === 1 ? (parts[0] ?? '') : parts.join(' --> ');
+      const formatRotation = (value: number) => `${value.toFixed(5)}°`;
+      selectedFieldEls.rotateDeg.textContent = formatRotation(current);
+      if (selectedFieldEls.rotateDegFrom) {
+        const hasFrom = typeof from === 'number';
+        selectedFieldEls.rotateDegFrom.textContent = hasFrom
+          ? formatRotation(from)
+          : '';
+        selectedFieldEls.rotateDegFrom.hidden = !hasFrom;
+      }
+      if (selectedFieldEls.rotateDegTo) {
+        const hasTo = typeof to === 'number';
+        selectedFieldEls.rotateDegTo.textContent = hasTo
+          ? formatRotation(to)
+          : '';
+        selectedFieldEls.rotateDegTo.hidden = !hasTo;
+      }
     }
-    if (selectedFieldEls.offset) {
-      selectedFieldEls.offset.textContent = `meters=${imageState.offset.offsetMeters.current.toFixed(
-        2
-      )}, deg=${imageState.offset.offsetDeg.current.toFixed(2)}`;
+    if (selectedFieldEls.offsetMeters) {
+      const meters = imageState.offset.offsetMeters;
+      const formatMeters = (value: number) => value.toFixed(3);
+      selectedFieldEls.offsetMeters.textContent = formatMeters(meters.current);
+      if (selectedFieldEls.offsetMetersFrom) {
+        const hasFrom = typeof meters.from === 'number';
+        selectedFieldEls.offsetMetersFrom.textContent = hasFrom
+          ? formatMeters(meters.from)
+          : '';
+        selectedFieldEls.offsetMetersFrom.hidden = !hasFrom;
+      }
+      if (selectedFieldEls.offsetMetersTo) {
+        const hasTo = typeof meters.to === 'number';
+        selectedFieldEls.offsetMetersTo.textContent = hasTo
+          ? formatMeters(meters.to)
+          : '';
+        selectedFieldEls.offsetMetersTo.hidden = !hasTo;
+      }
+    }
+    if (selectedFieldEls.offsetDeg) {
+      const offsetDeg = imageState.offset.offsetDeg;
+      const formatOffsetDeg = (value: number) => `${value.toFixed(5)}°`;
+      selectedFieldEls.offsetDeg.textContent = formatOffsetDeg(
+        offsetDeg.current
+      );
+      if (selectedFieldEls.offsetDegFrom) {
+        const hasFrom = typeof offsetDeg.from === 'number';
+        selectedFieldEls.offsetDegFrom.textContent = hasFrom
+          ? formatOffsetDeg(offsetDeg.from)
+          : '';
+        selectedFieldEls.offsetDegFrom.hidden = !hasFrom;
+      }
+      if (selectedFieldEls.offsetDegTo) {
+        const hasTo = typeof offsetDeg.to === 'number';
+        selectedFieldEls.offsetDegTo.textContent = hasTo
+          ? formatOffsetDeg(offsetDeg.to)
+          : '';
+        selectedFieldEls.offsetDegTo.hidden = !hasTo;
+      }
     }
     if (selectedFieldEls.opacity) {
       const { from, current, to } = imageState.finalOpacity;
