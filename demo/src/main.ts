@@ -111,7 +111,7 @@ const MOVEMENT_INTERVAL_MS = 1000;
 /**
  * Interval in milliseconds between selected sprite detail refreshes.
  */
-const SELECTED_SPRITE_REFRESH_INTERVAL_MS = 100;
+const SELECTED_SPRITE_REFRESH_INTERVAL_MS = 200;
 
 /** Opacity waving sequence */
 const PRIMARY_OPACITY_WAVING_SEQUENCE = [0.4, 1.0] as const;
@@ -721,10 +721,18 @@ let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
 let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether sprite-layer mouse events are monitored for hover/click feedback. */
 let isMouseEventsMonitoringEnabled = false;
+/** Whether to keep the selected sprite centered via tracking. */
+let isSelectedSpriteTrackingEnabled = true;
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
 /** Timer handle for selected sprite detail updates. */
 let selectedSpriteDetailsIntervalId: number | undefined;
+/** Animation frame handle for tracking the selected sprite position. */
+let selectedSpriteTrackFrameId: number | undefined;
+/** Cancels the tracking loop for the selected sprite. */
+let stopSelectedSpriteTracking: () => void = () => {};
+/** Starts the tracking loop for the selected sprite. */
+let startSelectedSpriteTracking: () => void = () => {};
 /** UI updater for the movement speed slider. */
 let updateMovementSpeedUI: ((scale: number) => void) | undefined;
 /** Indicates whether supplemental images have been registered. */
@@ -743,6 +751,8 @@ let updatePseudoLodButton: (() => void) | undefined;
 let secondaryImageOrbitDegrees = 0;
 /** UI updater for the mouse-events monitoring toggle. */
 let updateMouseEventsButton: (() => void) | undefined;
+/** UI updater for the tracking toggle. */
+let updateTrackingButton: (() => void) | undefined;
 /** UI updater for the sprite border toggle. */
 let updateSpriteBordersButton: (() => void) | undefined;
 /** Clears any selected sprite highlight and resets the detail panel. */
@@ -940,6 +950,16 @@ const createHud = () => {
             aria-pressed="${isMouseEventsMonitoringEnabled}"
             data-testid="toggle-mouse-events"
           >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
+          <button
+            type="button"
+            class="toggle-button${isSelectedSpriteTrackingEnabled ? ' active' : ''}"
+            data-control="tracking-toggle"
+            data-label="Tracking"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${isSelectedSpriteTrackingEnabled}"
+            data-testid="toggle-tracking"
+          >Tracking: ${isSelectedSpriteTrackingEnabled ? 'ON' : 'OFF'}</button>
         </div>
         <p
           class="status-placeholder"
@@ -2186,6 +2206,20 @@ const main = async () => {
     updateMouseEventsButton?.();
   };
 
+  const setSelectedSpriteTrackingEnabled = (enabled: boolean): void => {
+    if (isSelectedSpriteTrackingEnabled === enabled) {
+      updateTrackingButton?.();
+      return;
+    }
+    isSelectedSpriteTrackingEnabled = enabled;
+    if (isSelectedSpriteTrackingEnabled) {
+      startSelectedSpriteTracking();
+    } else {
+      stopSelectedSpriteTracking();
+    }
+    updateTrackingButton?.();
+  };
+
   /**
    * Reverses sprite movement on click so users can steer individual sprites.
    *
@@ -2936,10 +2970,8 @@ const main = async () => {
         return;
       }
       const imageState = resolveSelectedImageState(spriteState);
-      const projected = map.project({
-        lng: spriteState.location.current.lng,
-        lat: spriteState.location.current.lat,
-      });
+      const { lng, lat } = spriteState.location.current;
+      const projected = map.project({ lng, lat });
       renderSpriteDetails({
         type: 'spriteclick',
         sprite: spriteState,
@@ -2947,6 +2979,46 @@ const main = async () => {
         screenPoint: { x: projected.x, y: projected.y },
         originalEvent: new MouseEvent('click'),
       });
+    };
+
+    stopSelectedSpriteTracking = (): void => {
+      if (selectedSpriteTrackFrameId === undefined) {
+        return;
+      }
+      window.cancelAnimationFrame(selectedSpriteTrackFrameId);
+      selectedSpriteTrackFrameId = undefined;
+    };
+
+    const trackSelectedSpritePosition = (): void => {
+      if (!isSelectedSpriteTrackingEnabled) {
+        stopSelectedSpriteTracking();
+        return;
+      }
+      if (!selectedSpriteId || !spriteLayer) {
+        stopSelectedSpriteTracking();
+        return;
+      }
+      const spriteState = spriteLayer.getSpriteState(selectedSpriteId);
+      if (!spriteState) {
+        clearSpriteSelection();
+        stopSelectedSpriteTracking();
+        return;
+      }
+      const { lng, lat } = spriteState.location.current;
+      map.setCenter({ lng, lat });
+      selectedSpriteTrackFrameId = window.requestAnimationFrame(
+        trackSelectedSpritePosition
+      );
+    };
+
+    startSelectedSpriteTracking = (): void => {
+      stopSelectedSpriteTracking();
+      if (!selectedSpriteId || !isSelectedSpriteTrackingEnabled) {
+        return;
+      }
+      selectedSpriteTrackFrameId = window.requestAnimationFrame(
+        trackSelectedSpritePosition
+      );
     };
 
     const startSelectedSpriteDetailsInterval = (): void => {
@@ -2963,6 +3035,7 @@ const main = async () => {
 
     clearSpriteSelection = (): void => {
       stopSelectedSpriteDetailsInterval();
+      stopSelectedSpriteTracking();
       selectedSpriteImageRef = null;
       if (!selectedSpriteId) {
         renderPlaceholderDetails();
@@ -2986,6 +3059,7 @@ const main = async () => {
         applySpriteBordersToAll();
       }
       startSelectedSpriteDetailsInterval();
+      startSelectedSpriteTracking();
     };
 
     /**
@@ -3843,6 +3917,23 @@ const main = async () => {
         updateMouseEventsButton();
         mouseEventsButton.addEventListener('click', () => {
           setMouseEventsEnabled(!isMouseEventsMonitoringEnabled);
+        });
+      }
+
+      const trackingButton = queryFirst<HTMLButtonElement>(
+        '[data-control="tracking-toggle"]'
+      );
+      if (trackingButton) {
+        updateTrackingButton = () => {
+          setToggleButtonState(
+            trackingButton,
+            isSelectedSpriteTrackingEnabled,
+            'binary'
+          );
+        };
+        updateTrackingButton();
+        trackingButton.addEventListener('click', () => {
+          setSelectedSpriteTrackingEnabled(!isSelectedSpriteTrackingEnabled);
         });
       }
 
