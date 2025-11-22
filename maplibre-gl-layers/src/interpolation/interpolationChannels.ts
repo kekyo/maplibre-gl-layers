@@ -12,6 +12,7 @@
 import type { SpriteInterpolationOptions, SpriteImageOffset } from '../types';
 import type {
   InternalSpriteImageState,
+  MutableSpriteInterpolation,
   SpriteInterpolationState,
 } from '../internalTypes';
 
@@ -23,13 +24,22 @@ import {
   createDistanceInterpolationState,
   evaluateDistanceInterpolation,
 } from './distanceInterpolation';
-import {
-  normalizeAngleDeg,
-  resolveRotationTarget,
-} from './rotationInterpolation';
-import { clampOpacity } from '../utils/math';
+import { resolveRotationTarget } from './rotationInterpolation';
+import { clampOpacity, normalizeAngleDeg } from '../utils/math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
+
+export interface SpriteInterpolationChannelDescriptor {
+  readonly resolveInterpolation: (
+    image: InternalSpriteImageState
+  ) => MutableSpriteInterpolation<number>;
+  readonly normalize?: (value: number) => number;
+  readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
+  readonly applyFinalValue?: (
+    image: InternalSpriteImageState,
+    value: number
+  ) => void;
+}
 
 interface DegreeInterpolationStepOptions {
   readonly normalize?: (value: number) => number;

@@ -28,10 +28,10 @@ import {
   calculateSurfaceOffsetMeters,
   calculateSurfaceWorldDimensions,
   calculateZoomScaleFactor,
+  normalizeAngleDeg,
   resolveSpriteMercator,
   type ResolvedSpriteScalingOptions,
 } from '../utils/math';
-import { normalizeAngleDeg } from '../interpolation/rotationInterpolation';
 import {
   createLooseQuadTree,
   type Item as LooseQuadTreeItem,

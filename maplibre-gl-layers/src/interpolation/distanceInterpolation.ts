@@ -13,11 +13,11 @@ import { resolveEasing } from './easing';
 import type {
   EasingFunction,
   InternalSpriteImageState,
-  MutableSpriteInterpolation,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
 } from '../internalTypes';
 import { clampOpacity } from '../utils/math';
+import type { SpriteInterpolationChannelDescriptor } from './interpolationChannels';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -149,21 +149,9 @@ export const evaluateDistanceInterpolation = (
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-interface DistanceInterpolationChannelDescriptor {
-  readonly resolveInterpolation: (
-    image: InternalSpriteImageState
-  ) => MutableSpriteInterpolation<number>;
-  readonly normalize?: (value: number) => number;
-  readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
-  readonly applyFinalValue?: (
-    image: InternalSpriteImageState,
-    value: number
-  ) => void;
-}
-
 const DISTANCE_INTERPOLATION_CHANNELS: Record<
   'offsetMeters' | 'opacity',
-  DistanceInterpolationChannelDescriptor
+  SpriteInterpolationChannelDescriptor
 > = {
   offsetMeters: {
     resolveInterpolation: (image) => image.offset.offsetMeters.interpolation,
@@ -190,15 +178,17 @@ const DISTANCE_INTERPOLATION_CHANNELS: Record<
   },
 };
 
-export type DistanceInterpolationChannelDescriptorMap =
-  typeof DISTANCE_INTERPOLATION_CHANNELS;
-
-export type DistanceInterpolationChannelName =
-  keyof DistanceInterpolationChannelDescriptorMap;
+const updateDistanceInterpolationState = (
+  image: InternalSpriteImageState,
+  descriptor: SpriteInterpolationChannelDescriptor,
+  nextState: SpriteInterpolationState<number> | null
+): void => {
+  descriptor.resolveInterpolation(image).state = nextState;
+};
 
 export interface DistanceInterpolationWorkItem
   extends SpriteInterpolationState<number> {
-  readonly descriptor: DistanceInterpolationChannelDescriptorMap[DistanceInterpolationChannelName];
+  readonly descriptor: SpriteInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
 }
 
@@ -229,14 +219,6 @@ export const collectDistanceInterpolationWorkItems = (
       image,
     });
   }
-};
-
-const updateDistanceInterpolationState = (
-  image: InternalSpriteImageState,
-  descriptor: DistanceInterpolationChannelDescriptor,
-  nextState: SpriteInterpolationState<number> | null
-): void => {
-  descriptor.resolveInterpolation(image).state = nextState;
 };
 
 export const applyDistanceInterpolationEvaluations = (

@@ -14,10 +14,10 @@ import type {
   SpriteInterpolationEvaluationResult,
   EasingFunction,
   InternalSpriteImageState,
-  MutableSpriteInterpolation,
   SpriteInterpolationState,
 } from '../internalTypes';
 import { normalizeAngleDeg } from '../utils/math';
+import type { SpriteInterpolationChannelDescriptor } from './interpolationChannels';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -212,21 +212,9 @@ export const evaluateDegreeInterpolation = (
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-interface DegreeInterpolationChannelDescriptor {
-  readonly resolveInterpolation: (
-    image: InternalSpriteImageState
-  ) => MutableSpriteInterpolation<number>;
-  readonly normalize?: (value: number) => number;
-  readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
-  readonly applyFinalValue?: (
-    image: InternalSpriteImageState,
-    value: number
-  ) => void;
-}
-
 const DEGREE_INTERPOLATION_CHANNELS: Record<
   'rotation' | 'offsetDeg',
-  DegreeInterpolationChannelDescriptor
+  SpriteInterpolationChannelDescriptor
 > = {
   rotation: {
     resolveInterpolation: (image) => image.finalRotateDeg.interpolation,
@@ -250,7 +238,7 @@ const DEGREE_INTERPOLATION_CHANNELS: Record<
 
 const updateDegreeInterpolationState = (
   image: InternalSpriteImageState,
-  descriptor: DegreeInterpolationChannelDescriptor,
+  descriptor: SpriteInterpolationChannelDescriptor,
   nextState: SpriteInterpolationState<number> | null
 ): void => {
   descriptor.resolveInterpolation(image).state = nextState;
@@ -258,7 +246,7 @@ const updateDegreeInterpolationState = (
 
 export interface DegreeInterpolationWorkItem
   extends SpriteInterpolationState<number> {
-  readonly descriptor: DegreeInterpolationChannelDescriptor;
+  readonly descriptor: SpriteInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
 }
 

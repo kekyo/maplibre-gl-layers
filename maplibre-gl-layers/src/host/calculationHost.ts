@@ -5,7 +5,6 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import { Map as MapLibreMap } from 'maplibre-gl';
-import { normalizeAngleDeg } from '../interpolation/rotationInterpolation';
 import {
   calculateBillboardCenterPosition,
   calculateBillboardCornerScreenPositions,
@@ -31,6 +30,7 @@ import {
   resolveSpriteMercator,
   calculateCartesianDistanceMeters,
   clampOpacity,
+  normalizeAngleDeg,
 } from '../utils/math';
 import {
   BILLBOARD_BASE_CORNERS,

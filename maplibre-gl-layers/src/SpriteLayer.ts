@@ -64,7 +64,6 @@ import {
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './utils/image';
 import { createLocationInterpolationState } from './interpolation/locationInterpolation';
-import { normalizeAngleDeg } from './interpolation/rotationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
   calculateZoomScaleFactor,
@@ -73,6 +72,7 @@ import {
   cloneSpriteLocation,
   spriteLocationsEqual,
   clampOpacity,
+  normalizeAngleDeg,
 } from './utils/math';
 import { parseCssColorToRgba } from './utils/color';
 import {
