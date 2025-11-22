@@ -222,6 +222,11 @@ const DEGREE_INTERPOLATION_CHANNELS: Record<
     applyValue: (image, value) => {
       image.finalRotateDeg.current = normalizeAngleDeg(value);
     },
+    applyFinalValue: (image, value) => {
+      image.finalRotateDeg.current = normalizeAngleDeg(value);
+      image.finalRotateDeg.from = undefined;
+      image.finalRotateDeg.to = undefined;
+    },
   },
   offsetDeg: {
     resolveInterpolation: (image) => image.offset.offsetDeg.interpolation,

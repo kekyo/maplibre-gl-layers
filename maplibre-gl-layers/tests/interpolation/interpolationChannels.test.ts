@@ -16,6 +16,13 @@ import {
   clearOffsetMetersInterpolation,
   stepSpriteImageInterpolations,
 } from '../../src/interpolation/interpolationChannels';
+import {
+  applyDegreeInterpolationEvaluations,
+  collectDegreeInterpolationWorkItems,
+  createDegreeInterpolationState,
+  evaluateDegreeInterpolation,
+  type DegreeInterpolationWorkItem,
+} from '../../src/interpolation/degreeInterpolation';
 
 const createImageState = (): InternalSpriteImageState => ({
   subLayer: 0,
@@ -167,5 +174,39 @@ describe('applyOffsetUpdate', () => {
 
     expect(state.offset.offsetDeg.interpolation.state).toBeNull();
     expect(state.offset.offsetMeters.interpolation.state).toBeNull();
+  });
+});
+
+describe('rotation interpolation cleanup', () => {
+  it('clears rotation endpoints when interpolation completes in a single evaluation pass', () => {
+    const state = createImageState();
+    const { state: rotationState } = createDegreeInterpolationState({
+      currentValue: 0,
+      targetValue: 90,
+      options: { durationMs: 100 },
+    });
+
+    rotationState.startTimestamp = 0;
+    state.finalRotateDeg.interpolation.state = rotationState;
+    state.finalRotateDeg.from = rotationState.from;
+    state.finalRotateDeg.to = rotationState.to;
+
+    const workItems: DegreeInterpolationWorkItem[] = [];
+    collectDegreeInterpolationWorkItems(state, workItems);
+
+    const timestamp = 200;
+    const evaluations = [evaluateDegreeInterpolation(workItems[0]!, timestamp)];
+
+    const hasActive = applyDegreeInterpolationEvaluations(
+      workItems,
+      evaluations,
+      timestamp
+    );
+
+    expect(hasActive).toBe(false);
+    expect(state.finalRotateDeg.current).toBeCloseTo(90);
+    expect(state.finalRotateDeg.from).toBeUndefined();
+    expect(state.finalRotateDeg.to).toBeUndefined();
+    expect(state.finalRotateDeg.interpolation.state).toBeNull();
   });
 });
