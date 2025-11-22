@@ -6,9 +6,9 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  normalizeAngleDeg,
   resolveRotationTarget,
 } from '../../src/interpolation/rotationInterpolation';
+import { normalizeAngleDeg } from '../../src/utils/math';
 
 describe('normalizeAngleDeg', () => {
   it('wraps negative angles into [0, 360)', () => {
