@@ -1051,6 +1051,21 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    */
   readonly setHitTestDetection: (detect: boolean) => void;
   /**
+   * Starts tracking a sprite so the map recenters on it every animation frame.
+   * When `trackRotation` is true (default), the sprite's final rotation follows the map bearing.
+   *
+   * @param {string} spriteId - Identifier of the sprite to track.
+   * @param {boolean} [trackRotation=true] - Whether to align the sprite's rotation to the map bearing.
+   * @returns {void}
+   */
+  readonly trackSprite: (spriteId: string, trackRotation?: boolean) => void;
+  /**
+   * Stops tracking any sprite previously targeted via {@link trackSprite}.
+   *
+   * @returns {void}
+   */
+  readonly untrackSprite: () => void;
+  /**
    * Adds an event listener.
    *
    * @param {K} type - Event name.

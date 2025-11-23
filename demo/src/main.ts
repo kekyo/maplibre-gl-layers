@@ -721,18 +721,12 @@ let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
 let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether sprite-layer mouse events are monitored for hover/click feedback. */
 let isMouseEventsMonitoringEnabled = false;
-/** Whether to keep the selected sprite centered via tracking. */
-let isSelectedSpriteTrackingEnabled = true;
+/** Tracking mode for the selected sprite. */
+let selectedSpriteTrackingMode: 'full' | 'track' | 'off' = 'full';
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
 /** Timer handle for selected sprite detail updates. */
 let selectedSpriteDetailsIntervalId: number | undefined;
-/** Animation frame handle for tracking the selected sprite position. */
-let selectedSpriteTrackFrameId: number | undefined;
-/** Cancels the tracking loop for the selected sprite. */
-let stopSelectedSpriteTracking: () => void = () => {};
-/** Starts the tracking loop for the selected sprite. */
-let startSelectedSpriteTracking: () => void = () => {};
 /** UI updater for the movement speed slider. */
 let updateMovementSpeedUI: ((scale: number) => void) | undefined;
 /** Indicates whether supplemental images have been registered. */
@@ -753,6 +747,8 @@ let secondaryImageOrbitDegrees = 0;
 let updateMouseEventsButton: (() => void) | undefined;
 /** UI updater for the tracking toggle. */
 let updateTrackingButton: (() => void) | undefined;
+/** Applies the selected sprite tracking preference to the layer. */
+let applySelectedSpriteTracking: () => void = () => {};
 /** UI updater for the sprite border toggle. */
 let updateSpriteBordersButton: (() => void) | undefined;
 /** Clears any selected sprite highlight and resets the detail panel. */
@@ -952,14 +948,20 @@ const createHud = () => {
           >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
           <button
             type="button"
-            class="toggle-button${isSelectedSpriteTrackingEnabled ? ' active' : ''}"
+            class="toggle-button${selectedSpriteTrackingMode !== 'off' ? ' active' : ''}"
             data-control="tracking-toggle"
             data-label="Tracking"
             data-active-text="ON"
             data-inactive-text="OFF"
-            aria-pressed="${isSelectedSpriteTrackingEnabled}"
+            aria-pressed="${selectedSpriteTrackingMode !== 'off'}"
             data-testid="toggle-tracking"
-          >Tracking: ${isSelectedSpriteTrackingEnabled ? 'ON' : 'OFF'}</button>
+          >Tracking: ${
+            selectedSpriteTrackingMode === 'full'
+              ? 'Full'
+              : selectedSpriteTrackingMode === 'track'
+                ? 'Track'
+                : 'OFF'
+          }</button>
         </div>
         <p
           class="status-placeholder"
@@ -2190,6 +2192,7 @@ const main = async () => {
   const setMouseEventsEnabled = (enabled: boolean) => {
     if (isMouseEventsMonitoringEnabled === enabled) {
       updateMouseEventsButton?.();
+      updateTrackingButton?.();
       return;
     }
     isMouseEventsMonitoringEnabled = enabled;
@@ -2202,21 +2205,20 @@ const main = async () => {
       detachSpriteMouseEvents();
       clearSpriteSelection();
       clearSpriteDetails();
+      spriteLayer?.untrackSprite();
     }
     updateMouseEventsButton?.();
+    updateTrackingButton?.();
   };
 
-  const setSelectedSpriteTrackingEnabled = (enabled: boolean): void => {
-    if (isSelectedSpriteTrackingEnabled === enabled) {
-      updateTrackingButton?.();
-      return;
-    }
-    isSelectedSpriteTrackingEnabled = enabled;
-    if (isSelectedSpriteTrackingEnabled) {
-      startSelectedSpriteTracking();
-    } else {
-      stopSelectedSpriteTracking();
-    }
+  const cycleTrackingMode = (): void => {
+    selectedSpriteTrackingMode =
+      selectedSpriteTrackingMode === 'full'
+        ? 'track'
+        : selectedSpriteTrackingMode === 'track'
+          ? 'off'
+          : 'full';
+    applySelectedSpriteTracking();
     updateTrackingButton?.();
   };
 
@@ -2981,44 +2983,20 @@ const main = async () => {
       });
     };
 
-    stopSelectedSpriteTracking = (): void => {
-      if (selectedSpriteTrackFrameId === undefined) {
+    applySelectedSpriteTracking = (): void => {
+      if (!spriteLayer) {
         return;
       }
-      window.cancelAnimationFrame(selectedSpriteTrackFrameId);
-      selectedSpriteTrackFrameId = undefined;
-    };
-
-    const trackSelectedSpritePosition = (): void => {
-      if (!isSelectedSpriteTrackingEnabled) {
-        stopSelectedSpriteTracking();
+      if (
+        !isMouseEventsMonitoringEnabled ||
+        !selectedSpriteId ||
+        selectedSpriteTrackingMode === 'off'
+      ) {
+        spriteLayer.untrackSprite();
         return;
       }
-      if (!selectedSpriteId || !spriteLayer) {
-        stopSelectedSpriteTracking();
-        return;
-      }
-      const spriteState = spriteLayer.getSpriteState(selectedSpriteId);
-      if (!spriteState) {
-        clearSpriteSelection();
-        stopSelectedSpriteTracking();
-        return;
-      }
-      const { lng, lat } = spriteState.location.current;
-      map.setCenter({ lng, lat });
-      selectedSpriteTrackFrameId = window.requestAnimationFrame(
-        trackSelectedSpritePosition
-      );
-    };
-
-    startSelectedSpriteTracking = (): void => {
-      stopSelectedSpriteTracking();
-      if (!selectedSpriteId || !isSelectedSpriteTrackingEnabled) {
-        return;
-      }
-      selectedSpriteTrackFrameId = window.requestAnimationFrame(
-        trackSelectedSpritePosition
-      );
+      const trackRotation = selectedSpriteTrackingMode === 'full';
+      spriteLayer.trackSprite(selectedSpriteId, trackRotation);
     };
 
     const startSelectedSpriteDetailsInterval = (): void => {
@@ -3035,7 +3013,9 @@ const main = async () => {
 
     clearSpriteSelection = (): void => {
       stopSelectedSpriteDetailsInterval();
-      stopSelectedSpriteTracking();
+      if (spriteLayer) {
+        spriteLayer.untrackSprite();
+      }
       selectedSpriteImageRef = null;
       if (!selectedSpriteId) {
         renderPlaceholderDetails();
@@ -3059,7 +3039,7 @@ const main = async () => {
         applySpriteBordersToAll();
       }
       startSelectedSpriteDetailsInterval();
-      startSelectedSpriteTracking();
+      applySelectedSpriteTracking();
     };
 
     /**
@@ -3925,15 +3905,21 @@ const main = async () => {
       );
       if (trackingButton) {
         updateTrackingButton = () => {
-          setToggleButtonState(
-            trackingButton,
-            isSelectedSpriteTrackingEnabled,
-            'binary'
-          );
+          const label =
+            selectedSpriteTrackingMode === 'full'
+              ? 'Full'
+              : selectedSpriteTrackingMode === 'track'
+                ? 'Track'
+                : 'OFF';
+          trackingButton.textContent = `Tracking: ${label}`;
+          const isActive = selectedSpriteTrackingMode !== 'off';
+          trackingButton.classList.toggle('active', isActive);
+          trackingButton.setAttribute('aria-pressed', String(isActive));
+          trackingButton.disabled = !isMouseEventsMonitoringEnabled;
         };
         updateTrackingButton();
         trackingButton.addEventListener('click', () => {
-          setSelectedSpriteTrackingEnabled(!isSelectedSpriteTrackingEnabled);
+          cycleTrackingMode();
         });
       }
 
