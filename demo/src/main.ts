@@ -722,7 +722,7 @@ let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether sprite-layer mouse events are monitored for hover/click feedback. */
 let isMouseEventsMonitoringEnabled = false;
 /** Tracking mode for the selected sprite. */
-let selectedSpriteTrackingMode: 'full' | 'track' | 'off' = 'full';
+let selectedSpriteTrackingMode: 'full' | 'location' | 'off' = 'full';
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
 /** Timer handle for selected sprite detail updates. */
@@ -958,8 +958,8 @@ const createHud = () => {
           >Tracking: ${
             selectedSpriteTrackingMode === 'full'
               ? 'Full'
-              : selectedSpriteTrackingMode === 'track'
-                ? 'Track'
+              : selectedSpriteTrackingMode === 'location'
+                ? 'Location'
                 : 'OFF'
           }</button>
         </div>
@@ -2214,8 +2214,8 @@ const main = async () => {
   const cycleTrackingMode = (): void => {
     selectedSpriteTrackingMode =
       selectedSpriteTrackingMode === 'full'
-        ? 'track'
-        : selectedSpriteTrackingMode === 'track'
+        ? 'location'
+        : selectedSpriteTrackingMode === 'location'
           ? 'off'
           : 'full';
     applySelectedSpriteTracking();
@@ -3908,8 +3908,8 @@ const main = async () => {
           const label =
             selectedSpriteTrackingMode === 'full'
               ? 'Full'
-              : selectedSpriteTrackingMode === 'track'
-                ? 'Track'
+              : selectedSpriteTrackingMode === 'location'
+                ? 'Location'
                 : 'OFF';
           trackingButton.textContent = `Tracking: ${label}`;
           const isActive = selectedSpriteTrackingMode !== 'off';

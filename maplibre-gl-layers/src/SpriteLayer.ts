@@ -24,20 +24,16 @@ import {
   type SpriteAnchor,
   type SpriteLocation,
   type SpriteCurrentState,
-  type SpriteLayerEventMap,
-  type SpriteLayerEventListener,
   type SpriteUpdateEntry,
   type SpriteUpdaterEntry,
   type SpriteImageDefinitionInit,
   type SpriteImageDefinitionUpdate,
-  type SpriteLayerHoverEvent,
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
   type SpriteImageLineAttribute,
   type SpriteInterpolationOptions,
   type SpriteImageOriginLocation,
   type SpriteScreenPoint,
-  type SpriteLayerClickEvent,
   type SpriteImageState,
   type SpriteTextGlyphDimensions,
   type SpriteTextGlyphOptions,
@@ -105,6 +101,10 @@ import {
   createSpriteTrackingController,
   type SpriteTrackingController,
 } from './gl/tracking';
+import {
+  createSpriteMouseEventsController,
+  type SpriteMouseEventsController,
+} from './gl/mouseEvents';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
@@ -1176,61 +1176,7 @@ export const createSpriteLayer = <T = any>(
 
   //////////////////////////////////////////////////////////////////////////
 
-  type SpriteEventKey = keyof SpriteLayerEventMap<T>;
-  type GenericSpriteListener = SpriteLayerEventListener<T, SpriteEventKey>;
-
-  /** Event listener registry. */
-  const eventListeners = new Map<SpriteEventKey, Set<GenericSpriteListener>>();
-
-  /**
-   * Retrieves or lazily creates the listener set for a specific event type.
-   * @param {SpriteEventKey} type - Event type identifier.
-   * @returns {Set<GenericSpriteListener>} Listener set.
-   */
-  const getListenerSet = (type: SpriteEventKey): Set<GenericSpriteListener> => {
-    let set = eventListeners.get(type);
-    if (!set) {
-      set = new Set();
-      eventListeners.set(type, set);
-    }
-    return set;
-  };
-
-  /**
-   * Registers a sprite-layer event listener.
-   * @param {K} type - Event type to subscribe to.
-   * @param {SpriteLayerEventListener<T, K>} listener - Listener callback.
-   */
-  const addEventListener = <K extends SpriteEventKey>(
-    type: K,
-    listener: SpriteLayerEventListener<T, K>
-  ): void => {
-    getListenerSet(type).add(listener as GenericSpriteListener);
-  };
-
-  /**
-   * Removes a previously registered event listener.
-   * @param {K} type - Event type to unsubscribe from.
-   * @param {SpriteLayerEventListener<T, K>} listener - Listener to remove.
-   */
-  const removeEventListener = <K extends SpriteEventKey>(
-    type: K,
-    listener: SpriteLayerEventListener<T, K>
-  ): void => {
-    const listeners = eventListeners.get(type);
-    // No listener set mapped to this type, nothing to remove.
-    if (!listeners) {
-      return;
-    }
-    listeners.delete(listener as GenericSpriteListener);
-    // Drop the set entirely once it becomes empty to free memory.
-    if (listeners.size === 0) {
-      eventListeners.delete(type);
-    }
-  };
-
   let canvasElement: HTMLCanvasElement | undefined;
-  const inputListenerDisposers: Array<() => void> = [];
   let mapVisible =
     typeof document !== 'undefined'
       ? document.visibilityState !== 'hidden'
@@ -1244,29 +1190,6 @@ export const createSpriteLayer = <T = any>(
   };
 
   const isLayerVisible = (): boolean => mapVisible;
-
-  /**
-   * Determines if any listeners are registered for the specified event.
-   * @param {SpriteEventKey} type - Event type identifier.
-   * @returns {boolean} `true` when at least one listener exists.
-   */
-  const hasSpriteListeners = (type: SpriteEventKey): boolean =>
-    // Treat missing listener sets as zero, otherwise check the registered count.
-    (eventListeners.get(type)?.size ?? 0) > 0;
-
-  /**
-   * Indicates whether any `spriteclick` listeners are registered.
-   * @returns {boolean} `true` when at least one click listener exists.
-   */
-  const hasSpriteClickListeners = (): boolean =>
-    hasSpriteListeners('spriteclick');
-
-  /**
-   * Indicates whether any `spritehover` listeners are registered.
-   * @returns {boolean} `true` when at least one hover listener exists.
-   */
-  const hasSpriteHoverListeners = (): boolean =>
-    hasSpriteListeners('spritehover');
 
   /**
    * Resolves sprite and image state for a hit-test entry.
@@ -1298,70 +1221,6 @@ export const createSpriteLayer = <T = any>(
   };
 
   /**
-   * Dispatches a `spriteclick` event to registered listeners.
-   * @param {HitTestEntry} hitEntry - Entry that was hit.
-   * @param {SpriteScreenPoint} screenPoint - Screen-space location of the click.
-   * @param {MouseEvent | PointerEvent | TouchEvent} originalEvent - Native input event.
-   */
-  const dispatchSpriteClick = (
-    hitEntry: HitTestEntry<T>,
-    screenPoint: SpriteScreenPoint,
-    originalEvent: MouseEvent | PointerEvent | TouchEvent
-  ): void => {
-    const listeners = eventListeners.get('spriteclick');
-    // When no listeners are registered, short-circuit without doing extra work.
-    if (!listeners || listeners.size === 0) {
-      return;
-    }
-
-    const payload = resolveSpriteEventPayload(hitEntry);
-
-    const clickEvent: SpriteLayerClickEvent<T> = {
-      type: 'spriteclick',
-      sprite: payload.sprite,
-      image: payload.image,
-      screenPoint,
-      originalEvent,
-    };
-
-    listeners.forEach((listener) => {
-      (listener as SpriteLayerEventListener<T, 'spriteclick'>)(clickEvent);
-    });
-  };
-
-  /**
-   * Dispatches a `spritehover` event to registered listeners.
-   * @param {HitTestEntry} hitEntry - Entry that was hit.
-   * @param {SpriteScreenPoint} screenPoint - Screen-space location of the hover.
-   * @param {MouseEvent | PointerEvent} originalEvent - Native input event.
-   */
-  const dispatchSpriteHover = (
-    hitEntry: HitTestEntry<T> | undefined,
-    screenPoint: SpriteScreenPoint,
-    originalEvent: MouseEvent | PointerEvent
-  ): void => {
-    const listeners = eventListeners.get('spritehover');
-    // When no listeners are registered, short-circuit without doing extra work.
-    if (!listeners || listeners.size === 0) {
-      return;
-    }
-
-    const payload = resolveSpriteEventPayload(hitEntry);
-
-    const hoverEvent: SpriteLayerHoverEvent<T> = {
-      type: 'spritehover',
-      sprite: payload.sprite,
-      image: payload.image,
-      screenPoint,
-      originalEvent,
-    };
-
-    listeners.forEach((listener) => {
-      (listener as SpriteLayerEventListener<T, 'spritehover'>)(hoverEvent);
-    });
-  };
-
-  /**
    * Resolves hit-test information for a native event.
    * @param {MouseEvent | PointerEvent | TouchEvent} nativeEvent - Original browser event.
    * @returns {{ hitEntry: HitTestEntry; screenPoint: SpriteScreenPoint } | undefined} Hit-test result or `undefined`.
@@ -1381,43 +1240,12 @@ export const createSpriteLayer = <T = any>(
     );
   };
 
-  /**
-   * Handles pointer/touch events to trigger sprite click callbacks when matches are found.
-   * @param {MouseEvent | PointerEvent | TouchEvent} nativeEvent - Original browser event.
-   */
-  const processClickEvent = (
-    nativeEvent: MouseEvent | PointerEvent | TouchEvent
-  ): void => {
-    // Skip work entirely when no listeners are interested in click events.
-    if (!hasSpriteClickListeners()) {
-      return;
-    }
-
-    const hitResult = resolveHitTestResult(nativeEvent);
-    if (!hitResult || !hitResult.hitEntry) {
-      return;
-    }
-
-    dispatchSpriteClick(hitResult.hitEntry, hitResult.screenPoint, nativeEvent);
-  };
-
-  /**
-   * Handles pointer/mouse move events to trigger sprite hover callbacks.
-   * @param {MouseEvent | PointerEvent} nativeEvent - Original browser hover event.
-   */
-  const processHoverEvent = (nativeEvent: MouseEvent | PointerEvent): void => {
-    // Skip work entirely when no listeners are interested in hover events.
-    if (!hasSpriteHoverListeners()) {
-      return;
-    }
-
-    const hitResult = resolveHitTestResult(nativeEvent);
-    if (!hitResult) {
-      return;
-    }
-
-    dispatchSpriteHover(hitResult.hitEntry, hitResult.screenPoint, nativeEvent);
-  };
+  const mouseEventsController: SpriteMouseEventsController<T> =
+    createSpriteMouseEventsController<T>({
+      resolveHitTestResult,
+      resolveSpriteEventPayload,
+      updateVisibilityState,
+    });
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -1603,102 +1431,8 @@ export const createSpriteLayer = <T = any>(
     }
 
     canvasElement = mapInstance.getCanvas();
-    const registerDisposer = (disposer: () => void) => {
-      inputListenerDisposers.push(disposer);
-    };
-    const supportsPointerEvents =
-      typeof window !== 'undefined' && 'PointerEvent' in window;
-    // Only attach DOM listeners when a canvas is present.
-    if (canvasElement) {
-      if (supportsPointerEvents) {
-        const pointerUpListener = (event: PointerEvent) => {
-          if (event.pointerType === 'mouse' && event.button !== 0) {
-            // Ignore non-primary mouse buttons to match click semantics.
-            return;
-          }
-          processClickEvent(event);
-        };
-        canvasElement.addEventListener('pointerup', pointerUpListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener('pointerup', pointerUpListener);
-        });
-
-        const pointerMoveListener = (event: PointerEvent) => {
-          if (!event.isPrimary) {
-            // Secondary pointers are ignored to reduce duplicate hover dispatch.
-            return;
-          }
-          if (event.pointerType === 'touch') {
-            // Touch pointers do not support hover semantics.
-            return;
-          }
-          processHoverEvent(event);
-        };
-        canvasElement.addEventListener('pointermove', pointerMoveListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener(
-            'pointermove',
-            pointerMoveListener
-          );
-        });
-      } else {
-        const clickListener = (event: MouseEvent) => {
-          if (event.button !== 0) {
-            // Only respond to primary button clicks when pointer events are unavailable.
-            return;
-          }
-          processClickEvent(event);
-        };
-        canvasElement.addEventListener('click', clickListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener('click', clickListener);
-        });
-
-        const touchListener = (event: TouchEvent) => {
-          processClickEvent(event);
-        };
-        canvasElement.addEventListener('touchend', touchListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener('touchend', touchListener);
-        });
-
-        const mouseMoveListener = (event: MouseEvent) => {
-          processHoverEvent(event);
-        };
-        canvasElement.addEventListener('mousemove', mouseMoveListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener('mousemove', mouseMoveListener);
-        });
-      }
-
-      const visibilityTarget =
-        canvasElement.ownerDocument ??
-        (typeof document !== 'undefined' ? document : undefined);
-      if (visibilityTarget) {
-        const visibilityListener = () => updateVisibilityState();
-        visibilityTarget.addEventListener(
-          'visibilitychange',
-          visibilityListener
-        );
-        registerDisposer(() => {
-          visibilityTarget.removeEventListener(
-            'visibilitychange',
-            visibilityListener
-          );
-        });
-        updateVisibilityState();
-      }
-    }
+    mouseEventsController.bindCanvas(canvasElement);
+    canvasElement = mouseEventsController.canvasElement;
 
     spriteDrawProgram = createSpriteDrawProgram<T>(glContext);
 
@@ -1712,8 +1446,7 @@ export const createSpriteLayer = <T = any>(
   const onRemove = (): void => {
     trackingController?.release();
     trackingController = undefined;
-    inputListenerDisposers.forEach((dispose) => dispose());
-    inputListenerDisposers.length = 0;
+    mouseEventsController.release();
     canvasElement = undefined;
     hitTestController.clearAll();
 
@@ -1740,9 +1473,6 @@ export const createSpriteLayer = <T = any>(
         leaderLineRenderer = undefined;
       }
     }
-
-    eventListeners.forEach((set) => set.clear());
-    eventListeners.clear();
 
     gl = undefined;
     map = undefined;
@@ -3824,8 +3554,8 @@ export const createSpriteLayer = <T = any>(
     setHitTestDetection,
     trackSprite,
     untrackSprite,
-    on: addEventListener,
-    off: removeEventListener,
+    on: mouseEventsController.addEventListener,
+    off: mouseEventsController.removeEventListener,
   };
 
   return spriteLayout;
