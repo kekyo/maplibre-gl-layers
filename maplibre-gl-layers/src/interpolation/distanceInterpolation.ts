@@ -11,14 +11,13 @@ import type {
 } from '../types';
 import { resolveEasing } from './easing';
 import type {
-  DistanceInterpolationEvaluationParams,
-  DistanceInterpolationEvaluationResult,
   EasingFunction,
   InternalSpriteImageState,
-  MutableSpriteInterpolation,
+  SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
 } from '../internalTypes';
 import { clampOpacity } from '../utils/math';
+import type { SpriteInterpolationChannelDescriptor } from './interpolationChannels';
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -115,13 +114,10 @@ const clamp01 = (value: number): number => {
 };
 
 export const evaluateDistanceInterpolation = (
-  params: DistanceInterpolationEvaluationParams
-): DistanceInterpolationEvaluationResult => {
-  const { state } = params;
+  state: SpriteInterpolationState<number>,
+  timestamp: number
+): SpriteInterpolationEvaluationResult<number> => {
   const targetValue = state.pathTarget ?? state.to;
-  const timestamp = Number.isFinite(params.timestamp)
-    ? params.timestamp
-    : Date.now();
 
   const duration = Math.max(0, state.durationMs);
   const effectiveStart =
@@ -153,21 +149,9 @@ export const evaluateDistanceInterpolation = (
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-interface DistanceInterpolationChannelDescriptor {
-  readonly resolveInterpolation: (
-    image: InternalSpriteImageState
-  ) => MutableSpriteInterpolation<number>;
-  readonly normalize?: (value: number) => number;
-  readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
-  readonly applyFinalValue?: (
-    image: InternalSpriteImageState,
-    value: number
-  ) => void;
-}
-
 const DISTANCE_INTERPOLATION_CHANNELS: Record<
   'offsetMeters' | 'opacity',
-  DistanceInterpolationChannelDescriptor
+  SpriteInterpolationChannelDescriptor
 > = {
   offsetMeters: {
     resolveInterpolation: (image) => image.offset.offsetMeters.interpolation,
@@ -181,53 +165,48 @@ const DISTANCE_INTERPOLATION_CHANNELS: Record<
     },
   },
   opacity: {
-    resolveInterpolation: (image) => image.opacity.interpolation,
+    resolveInterpolation: (image) => image.finalOpacity.interpolation,
     normalize: clampOpacity,
     applyValue: (image: InternalSpriteImageState, value: number) => {
-      image.opacity.current = value;
+      image.finalOpacity.current = value;
     },
     applyFinalValue: (image, value) => {
-      image.opacity.current = value;
-      image.opacity.from = undefined;
-      image.opacity.to = undefined;
+      image.finalOpacity.current = value;
+      image.finalOpacity.from = undefined;
+      image.finalOpacity.to = undefined;
     },
   },
 };
 
-export type DistanceInterpolationChannelDescriptorMap =
-  typeof DISTANCE_INTERPOLATION_CHANNELS;
+const updateDistanceInterpolationState = (
+  image: InternalSpriteImageState,
+  descriptor: SpriteInterpolationChannelDescriptor,
+  nextState: SpriteInterpolationState<number> | null
+): void => {
+  descriptor.resolveInterpolation(image).state = nextState;
+};
 
-export type DistanceInterpolationChannelName =
-  keyof DistanceInterpolationChannelDescriptorMap;
-
-export interface DistanceInterpolationWorkItem {
-  readonly descriptor: DistanceInterpolationChannelDescriptorMap[DistanceInterpolationChannelName];
+export interface DistanceInterpolationWorkItem
+  extends SpriteInterpolationState<number> {
+  readonly descriptor: SpriteInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
-  readonly state: SpriteInterpolationState<number>;
-}
-
-export interface CollectDistanceInterpolationWorkItemOptions {
-  readonly includeOffsetMeters?: boolean;
-  readonly includeOpacity?: boolean;
 }
 
 export const collectDistanceInterpolationWorkItems = (
   image: InternalSpriteImageState,
   workItems: DistanceInterpolationWorkItem[],
-  options?: CollectDistanceInterpolationWorkItemOptions
+  includeOffsetMeters: boolean,
+  includeOpacity: boolean
 ): void => {
-  const includeOffsetMeters = options?.includeOffsetMeters ?? true;
-  const includeOpacity = options?.includeOpacity ?? true;
-
   const offsetMetersState =
     DISTANCE_INTERPOLATION_CHANNELS.offsetMeters.resolveInterpolation(
       image
     ).state;
   if (includeOffsetMeters && offsetMetersState) {
     workItems.push({
+      ...offsetMetersState,
       descriptor: DISTANCE_INTERPOLATION_CHANNELS.offsetMeters,
       image,
-      state: offsetMetersState,
     });
   }
 
@@ -235,38 +214,32 @@ export const collectDistanceInterpolationWorkItems = (
     DISTANCE_INTERPOLATION_CHANNELS.opacity.resolveInterpolation(image).state;
   if (includeOpacity && opacityState) {
     workItems.push({
+      ...opacityState,
       descriptor: DISTANCE_INTERPOLATION_CHANNELS.opacity,
       image,
-      state: opacityState,
     });
   }
 };
 
-const updateDistanceInterpolationState = (
-  image: InternalSpriteImageState,
-  descriptor: DistanceInterpolationChannelDescriptor,
-  nextState: SpriteInterpolationState<number> | null
-): void => {
-  descriptor.resolveInterpolation(image).state = nextState;
-};
-
 export const applyDistanceInterpolationEvaluations = (
   workItems: readonly DistanceInterpolationWorkItem[],
-  evaluations: readonly DistanceInterpolationEvaluationResult[],
+  evaluations: readonly SpriteInterpolationEvaluationResult<number>[],
   timestamp: number
 ): boolean => {
   let active = false;
   for (let index = 0; index < workItems.length; index += 1) {
     const item = workItems[index]!;
     const evaluation =
-      evaluations[index] ??
-      evaluateDistanceInterpolation({
-        state: item.state,
-        timestamp,
-      });
+      evaluations[index] ?? evaluateDistanceInterpolation(item, timestamp);
 
-    if (item.state.startTimestamp < 0) {
-      item.state.startTimestamp = evaluation.effectiveStartTimestamp;
+    const interpolationState = item.descriptor.resolveInterpolation(
+      item.image
+    ).state;
+    if (interpolationState && interpolationState.startTimestamp < 0) {
+      interpolationState.startTimestamp = evaluation.effectiveStartTimestamp;
+    }
+    if (item.startTimestamp < 0) {
+      item.startTimestamp = evaluation.effectiveStartTimestamp;
     }
 
     const normalize = item.descriptor.normalize ?? ((value: number) => value);
@@ -277,11 +250,11 @@ export const applyDistanceInterpolationEvaluations = (
     item.descriptor.applyValue(item.image, interpolatedValue);
 
     if (evaluation.completed) {
-      const finalValue = normalize(item.state.to);
+      const finalValue = normalize(item.to);
       applyFinalValue(item.image, finalValue);
       updateDistanceInterpolationState(item.image, item.descriptor, null);
     } else {
-      updateDistanceInterpolationState(item.image, item.descriptor, item.state);
+      updateDistanceInterpolationState(item.image, item.descriptor, item);
       active = true;
     }
   }

@@ -45,10 +45,11 @@ describe('wasm easing presets', () => {
     const result = __wasmCalculationTestInternals.processInterpolationsViaWasm(
       wasm,
       {
-        distance: [{ state, timestamp: 500 }],
+        distance: [state],
         degree: [],
         sprite: [],
-      }
+      },
+      500
     );
 
     // ease-out (power 2) at 0.5 -> 1 - (1 - 0.5)^2 = 0.75
@@ -72,10 +73,11 @@ describe('wasm easing presets', () => {
     const result = __wasmCalculationTestInternals.processInterpolationsViaWasm(
       wasm,
       {
-        distance: [{ state, timestamp: 500 }],
+        distance: [state],
         degree: [],
         sprite: [],
-      }
+      },
+      500
     );
 
     const expectedBounce = (() => {

@@ -12,11 +12,7 @@ import type {
   ProjectionHost,
   RegisteredImage,
 } from '../internalTypes';
-import type {
-  SpriteLocation,
-  SpriteScreenPoint,
-  SpriteImageOffset,
-} from '../types';
+import type { SpriteLocation, SpriteScreenPoint } from '../types';
 import {
   applySurfaceDisplacement,
   calculateBillboardAnchorShiftPixels,
@@ -27,11 +23,12 @@ import {
   calculateSurfaceCornerDisplacements,
   calculateSurfaceOffsetMeters,
   calculateSurfaceWorldDimensions,
-  calculateZoomScaleFactor,
+  calculateDistanceScaleFactor,
+  calculateCartesianDistanceMeters,
+  normalizeAngleDeg,
   resolveSpriteMercator,
   type ResolvedSpriteScalingOptions,
 } from '../utils/math';
-import { normalizeAngleDeg } from '../interpolation/rotationInterpolation';
 import {
   createLooseQuadTree,
   type Item as LooseQuadTreeItem,
@@ -51,7 +48,7 @@ const HIT_TEST_QUERY_RADIUS_PIXELS = 32;
 
 const resolveImageOffset = (
   image: Readonly<InternalSpriteImageState>
-): SpriteImageOffset => {
+): { offsetMeters: number; offsetDeg: number } => {
   const offset = image.offset;
   if (!offset) {
     return { ...DEFAULT_IMAGE_OFFSET };
@@ -60,6 +57,13 @@ const resolveImageOffset = (
     offsetMeters: offset.offsetMeters.current,
     offsetDeg: offset.offsetDeg.current,
   };
+};
+
+const resolveImageAutoRotationDeg = <T>(
+  sprite: Readonly<InternalSpriteCurrentState<T>>,
+  image: Readonly<InternalSpriteImageState>
+): number => {
+  return image.autoRotation ? sprite.currentAutoRotateDeg : 0;
 };
 
 interface HitTestTreeState<T> {
@@ -127,7 +131,7 @@ export interface HitTestController<T> {
     canvasElement: HTMLCanvasElement | undefined,
     map: MapLibreMap | undefined
   ) => HitTestResult<T> | undefined;
-  readonly setHitTestEnabled: (enabled: boolean) => boolean;
+  readonly setHitTestDetection: (enabled: boolean) => boolean;
   readonly isHitTestEnabled: () => boolean;
 }
 
@@ -242,7 +246,6 @@ export const createHitTestController = <T>({
     const scaling = getResolvedScaling();
     const baseLocation = sprite.location.current;
     const zoom = projectionHost.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, scaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
       baseLocation.lat
@@ -267,22 +270,29 @@ export const createHitTestController = <T>({
       return null;
     }
 
+    const cameraLocation = projectionHost.getCameraLocation();
+    const cameraDistanceMeters =
+      cameraLocation !== undefined
+        ? calculateCartesianDistanceMeters(cameraLocation, {
+            lng: baseLocation.lng,
+            lat: baseLocation.lat,
+            z: baseLocation.z ?? 0,
+          })
+        : Number.POSITIVE_INFINITY;
+    const distanceScaleFactor = calculateDistanceScaleFactor(
+      cameraDistanceMeters,
+      scaling
+    );
+
     const imageScale = image.scale ?? 1;
     const baseMetersPerPixel = scaling.metersPerPixel;
-    const spriteMinPixel = scaling.spriteMinPixel;
-    const spriteMaxPixel = scaling.spriteMaxPixel;
 
     const worldDims = calculateSurfaceWorldDimensions(
       imageResource.width,
       imageResource.height,
       baseMetersPerPixel,
       imageScale,
-      zoomScaleFactor,
-      {
-        effectivePixelsPerMeter,
-        spriteMinPixel,
-        spriteMaxPixel,
-      }
+      distanceScaleFactor
     );
     if (worldDims.width <= 0 || worldDims.height <= 0) {
       return null;
@@ -293,15 +303,16 @@ export const createHitTestController = <T>({
     const offsetMetersVec = calculateSurfaceOffsetMeters(
       offsetDef,
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       worldDims.scaleAdjustment
     );
 
-    const totalRotateDeg = Number.isFinite(image.displayedRotateDeg)
-      ? image.displayedRotateDeg
-      : normalizeAngleDeg(
-          (image.resolvedBaseRotateDeg ?? 0) + image.rotationCommandDeg
-        );
+    const autoRotationDeg = resolveImageAutoRotationDeg(sprite, image);
+    const totalRotateDeg = normalizeAngleDeg(
+      Number.isFinite(image.finalRotateDeg.current)
+        ? image.finalRotateDeg.current
+        : autoRotationDeg + image.rotateDeg
+    );
 
     const cornerDisplacements = calculateSurfaceCornerDisplacements({
       worldWidthMeters: worldDims.width,
@@ -330,7 +341,6 @@ export const createHitTestController = <T>({
     const scaling = getResolvedScaling();
     const baseLocation = sprite.location.current;
     const zoom = projectionHost.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, scaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
       baseLocation.lat
@@ -355,25 +365,36 @@ export const createHitTestController = <T>({
       return null;
     }
 
+    const cameraLocation = projectionHost.getCameraLocation();
+    const cameraDistanceMeters =
+      cameraLocation !== undefined
+        ? calculateCartesianDistanceMeters(cameraLocation, {
+            lng: baseLocation.lng,
+            lat: baseLocation.lat,
+            z: baseLocation.z ?? 0,
+          })
+        : Number.POSITIVE_INFINITY;
+    const distanceScaleFactor = calculateDistanceScaleFactor(
+      cameraDistanceMeters,
+      scaling
+    );
+
     const baseMetersPerPixel = scaling.metersPerPixel;
-    const spriteMinPixel = scaling.spriteMinPixel;
-    const spriteMaxPixel = scaling.spriteMaxPixel;
     const imageScale = image.scale ?? 1;
-    const totalRotateDeg = Number.isFinite(image.displayedRotateDeg)
-      ? image.displayedRotateDeg
-      : normalizeAngleDeg(
-          (image.resolvedBaseRotateDeg ?? 0) + image.rotationCommandDeg
-        );
+    const autoRotationDeg = resolveImageAutoRotationDeg(sprite, image);
+    const totalRotateDeg = normalizeAngleDeg(
+      Number.isFinite(image.finalRotateDeg.current)
+        ? image.finalRotateDeg.current
+        : autoRotationDeg + image.rotateDeg
+    );
 
     const pixelDims = calculateBillboardPixelDimensions(
       imageResource.width,
       imageResource.height,
       baseMetersPerPixel,
       imageScale,
-      zoomScaleFactor,
-      effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel
+      distanceScaleFactor,
+      effectivePixelsPerMeter
     );
 
     const halfWidthMeters = pixelDims.width / 2 / effectivePixelsPerMeter;
@@ -389,7 +410,7 @@ export const createHitTestController = <T>({
     const offsetShift = calculateBillboardOffsetPixels(
       resolveImageOffset(image),
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       effectivePixelsPerMeter
     );
 
@@ -410,7 +431,7 @@ export const createHitTestController = <T>({
     sprite: Readonly<InternalSpriteCurrentState<T>>,
     image: Readonly<InternalSpriteImageState>
   ): LooseQuadTreeRect | null => {
-    if (image.opacity.current <= 0 || !sprite.isEnabled) {
+    if (image.finalOpacity.current <= 0 || !sprite.isEnabled) {
       return null;
     }
     if (image.mode === 'surface') {
@@ -794,7 +815,7 @@ export const createHitTestController = <T>({
     >();
   };
 
-  const setHitTestEnabled = (enabled: boolean): boolean => {
+  const setHitTestDetection = (enabled: boolean): boolean => {
     if (isHitTestEnabled === enabled) {
       return false;
     }
@@ -816,7 +837,7 @@ export const createHitTestController = <T>({
     refreshSpriteHitTestBounds,
     findTopmostHitEntry,
     resolveHitTestResult,
-    setHitTestEnabled,
+    setHitTestDetection,
     isHitTestEnabled: isHitTestEnabledFn,
   };
 };

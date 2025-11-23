@@ -9,8 +9,6 @@ import type { SpriteInterpolationState } from '../internalTypes';
 import { createDegreeInterpolationState } from './degreeInterpolation';
 import { normalizeAngleDeg } from '../utils/math';
 
-export { normalizeAngleDeg } from '../utils/math';
-
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**

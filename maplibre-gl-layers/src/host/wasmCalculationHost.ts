@@ -5,10 +5,6 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type {
-  DistanceInterpolationEvaluationParams,
-  DistanceInterpolationEvaluationResult,
-  DegreeInterpolationEvaluationParams,
-  DegreeInterpolationEvaluationResult,
   ImageHandleBufferController,
   IdHandler,
   InternalSpriteCurrentState,
@@ -26,17 +22,18 @@ import type {
   SurfaceShaderCornerState,
   SurfaceShaderInputs,
   SpriteOriginReference,
-  SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
 } from '../internalTypes';
 import {
   SURFACE_CORNER_DISPLACEMENT_COUNT,
-  cloneSpriteLocation,
   calculateMetersPerPixelAtLatitude,
   calculateEffectivePixelsPerMeter,
+  calculateDistanceScaleFactor,
+  calculateCartesianDistanceMeters,
   multiplyMatrixAndVector,
   type SurfaceCorner,
+  normalizeAngleDeg,
 } from '../utils/math';
 import type {
   SpriteAnchor,
@@ -45,7 +42,6 @@ import type {
   SpriteMode,
   SpriteEasingParam,
   SpriteEasingType,
-  SpriteImageOffset,
 } from '../types';
 import { prepareWasmHost, type BufferHolder, type WasmHost } from './wasmHost';
 import {
@@ -58,7 +54,11 @@ import {
   applyDegreeInterpolationEvaluations,
   type DegreeInterpolationWorkItem,
 } from '../interpolation/degreeInterpolation';
-import { evaluateInterpolation } from '../interpolation/interpolation';
+import {
+  applyLocationInterpolationEvaluations,
+  collectLocationInterpolationWorkItems,
+  type LocationInterpolationWorkItem,
+} from '../interpolation/locationInterpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
@@ -99,6 +99,8 @@ import {
 import { QUAD_VERTEX_COUNT, VERTEX_COMPONENT_COUNT } from '../gl/shader';
 import { reportWasmRuntimeFailure } from './runtime';
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 const WASM_CalculateSurfaceDepthKey_MATRIX_ELEMENT_COUNT = 16;
 const WASM_CalculateSurfaceDepthKey_DISPLACEMENT_ELEMENT_COUNT =
   SURFACE_CORNER_DISPLACEMENT_COUNT * 2;
@@ -112,6 +114,8 @@ const WASM_DEGREE_INTERPOLATION_RESULT_LENGTH = 3;
 const WASM_SPRITE_INTERPOLATION_ITEM_LENGTH = 14;
 const WASM_SPRITE_INTERPOLATION_RESULT_LENGTH = 6;
 const WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 const EASING_PRESET_IDS: Record<SpriteEasingType, number> = {
   linear: 0,
@@ -184,11 +188,15 @@ const encodeEasingPreset = (preset: SpriteEasingParam): EncodedEasingPreset => {
   }
 };
 
+//////////////////////////////////////////////////////////////////////////////////////
+
 const MAX_MERCATOR_LATITUDE = 85.051129;
+
+type ResolvedOffset = { offsetMeters: number; offsetDeg: number };
 
 const resolveImageOffset = (
   image: Readonly<InternalSpriteImageState>
-): SpriteImageOffset => {
+): ResolvedOffset => {
   const offset = image.offset;
   if (!offset) {
     return { offsetMeters: 0, offsetDeg: 0 };
@@ -199,12 +207,19 @@ const resolveImageOffset = (
   };
 };
 
+const resolveAutoRotationDeg = <T>(
+  sprite: Readonly<InternalSpriteCurrentState<T>>,
+  image: Readonly<InternalSpriteImageState>
+): number => {
+  return image.autoRotation ? sprite.currentAutoRotateDeg : 0;
+};
+
 const encodeDistanceInterpolationRequest = (
   buffer: Float64Array,
   cursor: number,
-  request: DistanceInterpolationEvaluationParams
+  state: SpriteInterpolationState<number>,
+  timestamp: number
 ): number => {
-  const { state, timestamp } = request;
   const preset = encodeEasingPreset(state.easingParam);
   if (preset.id < 0) {
     throw new Error(
@@ -227,9 +242,9 @@ const encodeDistanceInterpolationRequest = (
 const encodeDegreeInterpolationRequest = (
   buffer: Float64Array,
   cursor: number,
-  request: DegreeInterpolationEvaluationParams
+  state: SpriteInterpolationState<number>,
+  timestamp: number
 ): number => {
-  const { state, timestamp } = request;
   const preset = encodeEasingPreset(state.easingParam);
   if (preset.id < 0) {
     throw new Error(
@@ -252,9 +267,9 @@ const encodeDegreeInterpolationRequest = (
 const encodeSpriteInterpolationRequest = (
   buffer: Float64Array,
   cursor: number,
-  request: SpriteInterpolationEvaluationParams
+  state: SpriteInterpolationState<SpriteLocation>,
+  timestamp: number
 ): number => {
-  const { state, timestamp } = request;
   const preset = encodeEasingPreset(state.easingParam);
   if (preset.id < 0) {
     throw new Error(
@@ -284,7 +299,7 @@ const decodeSpriteInterpolationResult = (
   cursor: number
 ): {
   readonly nextCursor: number;
-  readonly result: SpriteInterpolationEvaluationResult;
+  readonly result: SpriteInterpolationEvaluationResult<SpriteLocation>;
 } => {
   const lng = buffer[cursor++]!;
   const lat = buffer[cursor++]!;
@@ -292,11 +307,11 @@ const decodeSpriteInterpolationResult = (
   const hasZ = buffer[cursor++]! !== 0;
   const completed = buffer[cursor++]! !== 0;
   const effectiveStartTimestamp = buffer[cursor++]!;
-  const location: SpriteLocation = hasZ ? { lng, lat, z } : { lng, lat };
+  const value: SpriteLocation = hasZ ? { lng, lat, z } : { lng, lat };
   return {
     nextCursor: cursor,
     result: {
-      location,
+      value,
       completed,
       effectiveStartTimestamp,
     },
@@ -304,14 +319,15 @@ const decodeSpriteInterpolationResult = (
 };
 
 interface WasmProcessInterpolationResults {
-  readonly distance: DistanceInterpolationEvaluationResult[];
-  readonly degree: DegreeInterpolationEvaluationResult[];
-  readonly sprite: SpriteInterpolationEvaluationResult[];
+  readonly distance: SpriteInterpolationEvaluationResult<number>[];
+  readonly degree: SpriteInterpolationEvaluationResult<number>[];
+  readonly sprite: SpriteInterpolationEvaluationResult<SpriteLocation>[];
 }
 
 const processInterpolationsViaWasm = (
   wasm: WasmHost,
-  requests: ProcessInterpolationPresetRequests
+  requests: ProcessInterpolationPresetRequests,
+  timestamp: number
 ): WasmProcessInterpolationResults => {
   const distanceCount = requests.distance.length;
   const degreeCount = requests.degree.length;
@@ -353,14 +369,25 @@ const processInterpolationsViaWasm = (
       cursor = encodeDistanceInterpolationRequest(
         paramsBuffer,
         cursor,
-        request
+        request,
+        timestamp
       );
     }
     for (const request of requests.degree) {
-      cursor = encodeDegreeInterpolationRequest(paramsBuffer, cursor, request);
+      cursor = encodeDegreeInterpolationRequest(
+        paramsBuffer,
+        cursor,
+        request,
+        timestamp
+      );
     }
     for (const request of requests.sprite) {
-      cursor = encodeSpriteInterpolationRequest(paramsBuffer, cursor, request);
+      cursor = encodeSpriteInterpolationRequest(
+        paramsBuffer,
+        cursor,
+        request,
+        timestamp
+      );
     }
 
     const resultPrepared = resultHolder.prepare();
@@ -375,9 +402,8 @@ const processInterpolationsViaWasm = (
     const resultBuffer = resultPrepared.buffer;
     let read = WASM_PROCESS_INTERPOLATIONS_HEADER_LENGTH;
 
-    const distanceResults: DistanceInterpolationEvaluationResult[] = new Array(
-      distanceCount
-    );
+    const distanceResults: SpriteInterpolationEvaluationResult<number>[] =
+      new Array(distanceCount);
     for (let i = 0; i < distanceCount; i += 1) {
       const value = resultBuffer[read++]!;
       const completed = resultBuffer[read++]! !== 0;
@@ -389,9 +415,8 @@ const processInterpolationsViaWasm = (
       };
     }
 
-    const degreeResults: DegreeInterpolationEvaluationResult[] = new Array(
-      degreeCount
-    );
+    const degreeResults: SpriteInterpolationEvaluationResult<number>[] =
+      new Array(degreeCount);
     for (let i = 0; i < degreeCount; i += 1) {
       const value = resultBuffer[read++]!;
       const completed = resultBuffer[read++]! !== 0;
@@ -403,9 +428,8 @@ const processInterpolationsViaWasm = (
       };
     }
 
-    const spriteResults: SpriteInterpolationEvaluationResult[] = new Array(
-      spriteCount
-    );
+    const spriteResults: SpriteInterpolationEvaluationResult<SpriteLocation>[] =
+      new Array(spriteCount);
     for (let i = 0; i < spriteCount; i += 1) {
       const decoded = decodeSpriteInterpolationResult(resultBuffer, read);
       spriteResults[i] = decoded.result;
@@ -423,45 +447,6 @@ const processInterpolationsViaWasm = (
   }
 };
 
-interface SpriteInterpolationWorkItem<TTag> {
-  readonly sprite: InternalSpriteCurrentState<TTag>;
-  readonly state: SpriteInterpolationState<SpriteLocation>;
-}
-
-const applySpriteInterpolationEvaluations = <TTag>(
-  workItems: readonly SpriteInterpolationWorkItem<TTag>[],
-  evaluations: readonly SpriteInterpolationEvaluationResult[],
-  timestamp: number
-): boolean => {
-  let active = false;
-  for (let index = 0; index < workItems.length; index += 1) {
-    const item = workItems[index]!;
-    const { sprite, state } = item;
-    const evaluation =
-      evaluations[index] ??
-      evaluateInterpolation({
-        state,
-        timestamp,
-      });
-
-    if (state.startTimestamp < 0) {
-      state.startTimestamp = evaluation.effectiveStartTimestamp;
-    }
-
-    sprite.location.current = evaluation.location;
-
-    if (evaluation.completed) {
-      sprite.location.current = cloneSpriteLocation(state.to);
-      sprite.location.from = undefined;
-      sprite.location.to = undefined;
-      sprite.location.interpolation.state = null;
-    } else {
-      active = true;
-    }
-  }
-  return active;
-};
-
 const processInterpolationsWithWasm = <TTag>(
   wasm: WasmHost,
   params: RenderInterpolationParams<TTag>
@@ -476,7 +461,8 @@ const processInterpolationsWithWasm = <TTag>(
 
   const distanceInterpolationWorkItems: DistanceInterpolationWorkItem[] = [];
   const degreeInterpolationWorkItems: DegreeInterpolationWorkItem[] = [];
-  const spriteInterpolationWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+  const locationInterpolationWorkItems: LocationInterpolationWorkItem<TTag>[] =
+    [];
   const processedSprites: Array<{
     sprite: InternalSpriteCurrentState<TTag>;
     touchedImages: InternalSpriteImageState[];
@@ -491,9 +477,10 @@ const processInterpolationsWithWasm = <TTag>(
       continue;
     }
 
-    if (state) {
-      spriteInterpolationWorkItems.push({ sprite, state });
-    }
+    collectLocationInterpolationWorkItems(
+      sprite,
+      locationInterpolationWorkItems
+    );
 
     const touchedImages: InternalSpriteImageState[] = [];
 
@@ -516,17 +503,16 @@ const processInterpolationsWithWasm = <TTag>(
           collectDistanceInterpolationWorkItems(
             image,
             distanceInterpolationWorkItems,
-            {
-              includeOpacity: false,
-            }
+            true, // includeOffsetMeters
+            false
           );
         }
 
         const hasOpacityInterpolation =
-          image.opacity.interpolation.state !== null;
+          image.finalOpacity.interpolation.state !== null;
 
         const hasDegreeInterpolation =
-          image.rotateDeg.interpolation.state !== null ||
+          image.finalRotateDeg.interpolation.state !== null ||
           image.offset.offsetDeg.interpolation.state !== null;
         if (hasDegreeInterpolation) {
           collectDegreeInterpolationWorkItems(
@@ -553,12 +539,15 @@ const processInterpolationsWithWasm = <TTag>(
           shouldSkipChannels = true;
         }
 
+        const interpolationOptions = shouldSkipChannels
+          ? {
+              skipChannels,
+              autoRotationDeg: resolveAutoRotationDeg(sprite, image),
+            }
+          : { autoRotationDeg: resolveAutoRotationDeg(sprite, image) };
+
         if (
-          stepSpriteImageInterpolations(
-            image,
-            timestamp,
-            shouldSkipChannels ? { skipChannels } : undefined
-          )
+          stepSpriteImageInterpolations(image, timestamp, interpolationOptions)
         ) {
           hasActiveInterpolation = true;
         }
@@ -573,46 +562,28 @@ const processInterpolationsWithWasm = <TTag>(
     processedSprites.push({ sprite, touchedImages });
   }
 
-  const distanceRequests =
-    distanceInterpolationWorkItems.length > 0
-      ? distanceInterpolationWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-  const degreeRequests =
-    degreeInterpolationWorkItems.length > 0
-      ? degreeInterpolationWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-  const spriteRequests =
-    spriteInterpolationWorkItems.length > 0
-      ? spriteInterpolationWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-
   const hasPresetRequests =
-    distanceRequests.length > 0 ||
-    degreeRequests.length > 0 ||
-    spriteRequests.length > 0;
+    distanceInterpolationWorkItems.length > 0 ||
+    degreeInterpolationWorkItems.length > 0 ||
+    locationInterpolationWorkItems.length > 0;
 
   const wasmResults: WasmProcessInterpolationResults = hasPresetRequests
-    ? processInterpolationsViaWasm(wasm, {
-        distance: distanceRequests,
-        degree: degreeRequests,
-        sprite: spriteRequests,
-      })
+    ? processInterpolationsViaWasm(
+        wasm,
+        {
+          distance: distanceInterpolationWorkItems,
+          degree: degreeInterpolationWorkItems,
+          sprite: locationInterpolationWorkItems,
+        },
+        timestamp
+      )
     : {
         distance: [],
         degree: [],
         sprite: [],
       };
 
-  if (distanceRequests.length > 0) {
+  if (distanceInterpolationWorkItems.length > 0) {
     if (
       applyDistanceInterpolationEvaluations(
         distanceInterpolationWorkItems,
@@ -624,7 +595,7 @@ const processInterpolationsWithWasm = <TTag>(
     }
   }
 
-  if (degreeRequests.length > 0) {
+  if (degreeInterpolationWorkItems.length > 0) {
     if (
       applyDegreeInterpolationEvaluations(
         degreeInterpolationWorkItems,
@@ -636,10 +607,10 @@ const processInterpolationsWithWasm = <TTag>(
     }
   }
 
-  if (spriteRequests.length > 0) {
+  if (locationInterpolationWorkItems.length > 0) {
     if (
-      applySpriteInterpolationEvaluations(
-        spriteInterpolationWorkItems,
+      applyLocationInterpolationEvaluations(
+        locationInterpolationWorkItems,
         wasmResults.sprite,
         timestamp
       )
@@ -1539,6 +1510,10 @@ const convertToWasmProjectionState = <TTag>(
     parameterBuffer[InputHeaderIndex.ITEM_OFFSET] = itemOffset;
     parameterBuffer[InputHeaderIndex.FLAGS] = inputFlags;
 
+    const zoomScaleFactor = 1;
+    const spriteMinPixel = 0;
+    const spriteMaxPixel = 0;
+
     const frameConstView = parameterBuffer.subarray(
       frameConstOffset,
       frameConstOffset + INPUT_FRAME_CONSTANT_LENGTH
@@ -1555,12 +1530,12 @@ const convertToWasmProjectionState = <TTag>(
       0
     );
     frameConstView[fcCursor++] = callParams.baseMetersPerPixel;
-    frameConstView[fcCursor++] = callParams.spriteMinPixel;
-    frameConstView[fcCursor++] = callParams.spriteMaxPixel;
+    frameConstView[fcCursor++] = spriteMinPixel;
+    frameConstView[fcCursor++] = spriteMaxPixel;
     frameConstView[fcCursor++] = callParams.drawingBufferWidth;
     frameConstView[fcCursor++] = callParams.drawingBufferHeight;
     frameConstView[fcCursor++] = callParams.pixelRatio;
-    frameConstView[fcCursor++] = toFiniteOr(callParams.zoomScaleFactor, 1);
+    frameConstView[fcCursor++] = zoomScaleFactor;
     frameConstView[fcCursor++] = callParams.identityScaleX;
     frameConstView[fcCursor++] = callParams.identityScaleY;
     frameConstView[fcCursor++] = callParams.identityOffsetX;
@@ -1581,7 +1556,7 @@ const convertToWasmProjectionState = <TTag>(
 
     state.lastFrameParams = {
       baseMetersPerPixel: callParams.baseMetersPerPixel,
-      zoomScaleFactor: toFiniteOr(callParams.zoomScaleFactor, 1),
+      zoomScaleFactor,
     };
 
     writeMatrix(
@@ -1668,6 +1643,20 @@ const convertToWasmProjectionState = <TTag>(
         originTargetIndices?.[index] ?? image.originRenderTargetIndex;
       const originLocation = image.originLocation;
       const currentLocation = sprite.location.current;
+      const cameraLocation = preparedProjection.cameraLocation;
+      const cameraDistanceMeters =
+        cameraLocation !== undefined
+          ? calculateCartesianDistanceMeters(cameraLocation, {
+              lng: currentLocation.lng,
+              lat: currentLocation.lat,
+              z: currentLocation.z ?? 0,
+            })
+          : Number.POSITIVE_INFINITY;
+      const distanceScaleFactor = calculateDistanceScaleFactor(
+        cameraDistanceMeters,
+        callParams.resolvedScaling
+      );
+      const scaledImageScale = (image.scale ?? 1) * distanceScaleFactor;
       parameterBuffer[cursor++] = spriteHandle;
       parameterBuffer[cursor++] = imageHandle;
       parameterBuffer[cursor++] =
@@ -1676,17 +1665,21 @@ const convertToWasmProjectionState = <TTag>(
         originLocation?.useResolvedAnchor ?? false
       );
       parameterBuffer[cursor++] = modeToNumber(image.mode);
-      parameterBuffer[cursor++] = image.scale ?? 1;
-      parameterBuffer[cursor++] = image.opacity.current;
+      parameterBuffer[cursor++] = scaledImageScale;
+      parameterBuffer[cursor++] = image.finalOpacity.current;
       const anchor = image.anchor ?? { x: 0, y: 0 };
       parameterBuffer[cursor++] = anchor.x;
       parameterBuffer[cursor++] = anchor.y;
       const offset = resolveImageOffset(image);
       parameterBuffer[cursor++] = offset.offsetMeters;
       parameterBuffer[cursor++] = offset.offsetDeg;
-      parameterBuffer[cursor++] = toFiniteOr(image.displayedRotateDeg, 0);
-      parameterBuffer[cursor++] = toFiniteOr(image.resolvedBaseRotateDeg, 0);
-      parameterBuffer[cursor++] = toFiniteOr(image.rotationCommandDeg, 0);
+      const autoRotationDeg = resolveAutoRotationDeg(sprite, image);
+      const resolvedRotation = normalizeAngleDeg(
+        toFiniteOr(image.finalRotateDeg.current, 0)
+      );
+      parameterBuffer[cursor++] = resolvedRotation;
+      parameterBuffer[cursor++] = toFiniteOr(autoRotationDeg, 0);
+      parameterBuffer[cursor++] = toFiniteOr(image.rotateDeg, 0);
       parameterBuffer[cursor++] = image.order;
       parameterBuffer[cursor++] = image.subLayer;
       parameterBuffer[cursor++] = originKey ?? SPRITE_ORIGIN_REFERENCE_KEY_NONE;
@@ -1821,6 +1814,8 @@ export const createWasmCalculationHost = <TTag>(
     },
   };
 };
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 // Only testing purpose, DO NOT USE in production code.
 export const __wasmCalculationTestInternals = {

@@ -24,8 +24,6 @@ import type {
   PrepareDrawSpriteImageParams,
   RegisteredImage,
   RenderTargetEntryLike,
-  DistanceInterpolationEvaluationResult,
-  DegreeInterpolationEvaluationResult,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
 } from '../../src/internalTypes';
@@ -34,13 +32,11 @@ import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
   SPRITE_ORIGIN_REFERENCE_KEY_NONE,
 } from '../../src/internalTypes';
-import type {
-  SpriteAnchor,
-  SpriteImageOffset,
-  SpriteLocation,
-} from '../../src/types';
+import type { SpriteAnchor, SpriteLocation } from '../../src/types';
 import type { ResolvedSpriteScalingOptions } from '../../src/utils/math';
 import type { ProjectionHostParams } from '../../src/host/projectionHost';
+
+type TestSpriteOffset = { offsetMeters: number; offsetDeg: number };
 
 const RESULT_HEADER_LENGTH = 7;
 const RESULT_VERTEX_COMPONENT_LENGTH = 36;
@@ -59,9 +55,9 @@ const SPRITE_INTERPOLATION_ITEM_LENGTH = 14;
 const PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
 interface WasmProcessInterpolationResults {
-  distance: DistanceInterpolationEvaluationResult[];
-  degree: DegreeInterpolationEvaluationResult[];
-  sprite: SpriteInterpolationEvaluationResult[];
+  distance: SpriteInterpolationEvaluationResult<number>[];
+  degree: SpriteInterpolationEvaluationResult<number>[];
+  sprite: SpriteInterpolationEvaluationResult<SpriteLocation>[];
 }
 
 class MockWasmHost implements WasmHost {
@@ -207,10 +203,10 @@ class MockWasmHost implements WasmHost {
       view[writeCursor++] = entry.effectiveStartTimestamp;
     }
     for (const entry of response.sprite) {
-      view[writeCursor++] = entry.location.lng;
-      view[writeCursor++] = entry.location.lat;
-      view[writeCursor++] = entry.location.z ?? 0;
-      view[writeCursor++] = entry.location.z !== undefined ? 1 : 0;
+      view[writeCursor++] = entry.value.lng;
+      view[writeCursor++] = entry.value.lat;
+      view[writeCursor++] = entry.value.z ?? 0;
+      view[writeCursor++] = entry.value.z !== undefined ? 1 : 0;
       view[writeCursor++] = entry.completed ? 1 : 0;
       view[writeCursor++] = entry.effectiveStartTimestamp;
     }
@@ -251,7 +247,7 @@ const createSprite = (
     opacityMultiplier: 1,
     tag: null,
     lastAutoRotationLocation: location,
-    lastAutoRotationAngleDeg: 0,
+    currentAutoRotateDeg: 0,
     interpolationDirty: false,
     cachedMercator: { x: 10, y: 20, z: 30 },
     cachedMercatorLng: location.lng,
@@ -261,7 +257,7 @@ const createSprite = (
 };
 
 const DEFAULT_ANCHOR: SpriteAnchor = { x: 0, y: 0 };
-const DEFAULT_OFFSET: SpriteImageOffset = { offsetMeters: 0, offsetDeg: 0 };
+const DEFAULT_OFFSET: TestSpriteOffset = { offsetMeters: 0, offsetDeg: 0 };
 
 const createImage = (): InternalSpriteImageState =>
   ({
@@ -270,7 +266,9 @@ const createImage = (): InternalSpriteImageState =>
     imageId: 'image-1',
     imageHandle: 1,
     mode: 'surface',
-    opacity: {
+    rotateDeg: 0,
+    opacity: 1,
+    finalOpacity: {
       current: 1,
       from: undefined,
       to: undefined,
@@ -310,7 +308,7 @@ const createImage = (): InternalSpriteImageState =>
         },
       },
     },
-    rotateDeg: {
+    finalRotateDeg: {
       current: 0,
       from: undefined,
       to: undefined,
@@ -321,11 +319,8 @@ const createImage = (): InternalSpriteImageState =>
         lastCommandValue: 0,
       },
     },
-    rotationCommandDeg: 0,
-    displayedRotateDeg: 0,
     autoRotation: false,
     autoRotationMinDistanceMeters: 0,
-    resolvedBaseRotateDeg: 0,
     originLocation: undefined,
     originReferenceKey: SPRITE_ORIGIN_REFERENCE_KEY_NONE,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
@@ -350,12 +345,8 @@ const createRegisteredImage = (): RegisteredImage => ({
 
 const createResolvedScaling = (): ResolvedSpriteScalingOptions => ({
   metersPerPixel: 1,
-  zoomMin: 0,
-  zoomMax: 24,
-  scaleMin: 1,
-  scaleMax: 1,
-  spriteMinPixel: 0,
-  spriteMaxPixel: 1024,
+  minScaleDistanceMeters: 0,
+  maxScaleDistanceMeters: Number.POSITIVE_INFINITY,
 });
 
 const createPrepareParams = (
@@ -377,14 +368,11 @@ const createPrepareParams = (
       textureReady: new Uint8Array([1]),
     },
     baseMetersPerPixel: 1,
-    spriteMinPixel: 1,
-    spriteMaxPixel: 512,
     drawingBufferWidth: 800,
     drawingBufferHeight: 600,
     pixelRatio: 1,
-    clipContext: null,
+    clipContext: undefined,
     resolvedScaling: createResolvedScaling(),
-    zoomScaleFactor: 1,
     identityScaleX: 1,
     identityScaleY: 1,
     identityOffsetX: 0,
@@ -393,7 +381,7 @@ const createPrepareParams = (
     screenToClipScaleY: 1,
     screenToClipOffsetX: 0,
     screenToClipOffsetY: 0,
-  } as unknown as PrepareDrawSpriteImageParams<null>;
+  };
 };
 
 const PROJECTION_PARAMS: ProjectionHostParams = {
@@ -667,9 +655,9 @@ describe('processInterpolationsViaWasm', () => {
     };
 
     const requests = {
-      distance: [{ state: distanceState, timestamp: 50 }],
-      degree: [{ state: degreeState, timestamp: 50 }],
-      sprite: [{ state: spriteState, timestamp: 50 }],
+      distance: [distanceState],
+      degree: [degreeState],
+      sprite: [spriteState],
     };
 
     wasm.setNextProcessResponse({
@@ -677,7 +665,7 @@ describe('processInterpolationsViaWasm', () => {
       degree: [{ value: 30, completed: true, effectiveStartTimestamp: 20 }],
       sprite: [
         {
-          location: { lng: 1, lat: 2 },
+          value: { lng: 1, lat: 2 },
           completed: false,
           effectiveStartTimestamp: 30,
         },
@@ -686,13 +674,14 @@ describe('processInterpolationsViaWasm', () => {
 
     const result = __wasmCalculationTestInternals.processInterpolationsViaWasm(
       wasm,
-      requests
+      requests,
+      50
     );
 
     expect(result.distance).toHaveLength(1);
     expect(result.distance[0]?.value).toBe(3);
     expect(result.degree[0]?.completed).toBe(true);
-    expect(result.sprite[0]?.location.lng).toBeCloseTo(1);
+    expect(result.sprite[0]?.value.lng).toBeCloseTo(1);
     expect(wasm.lastProcessRequestCounts).toEqual({
       distance: 1,
       degree: 1,

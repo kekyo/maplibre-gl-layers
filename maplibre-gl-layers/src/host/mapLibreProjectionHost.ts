@@ -63,25 +63,6 @@ export const createMapLibreProjectionHost = (
   const getCameraLocation = () => {
     const params = createProjectionHostParamsFromMapLibre(mapLibreMap);
     return params.cameraLocation;
-
-    // TODO: Garbage
-    //const mercator = params.cameraLocation;
-    //if (!mercator) {
-    //  return null;
-    //}
-    //const coord = new MercatorCoordinate(
-    //  mercator.x,
-    //  mercator.y,
-    //  mercator.z ?? 0
-    //);
-    //const lngLat = coord.toLngLat();
-    //const metersPerUnit = coord.meterInMercatorCoordinateUnits();
-    //const altitude = (mercator.z ?? 0) * (metersPerUnit || 1);
-    //return {
-    //  lng: lngLat.lng,
-    //  lat: lngLat.lat,
-    //  z: altitude,
-    //};
   };
 
   /**

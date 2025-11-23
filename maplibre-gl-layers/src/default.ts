@@ -17,12 +17,8 @@ import type {
  */
 export const UNLIMITED_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
   metersPerPixel: 1.0,
-  zoomMin: 0,
-  zoomMax: 30,
-  scaleMin: 1,
-  scaleMax: 1,
-  spriteMinPixel: 0,
-  spriteMaxPixel: 100000,
+  minScaleDistanceMeters: 0,
+  maxScaleDistanceMeters: Number.POSITIVE_INFINITY,
 } as const;
 
 /**
@@ -31,12 +27,8 @@ export const UNLIMITED_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
  */
 export const STANDARD_SPRITE_SCALING_OPTIONS: SpriteScalingOptions = {
   metersPerPixel: 1.0,
-  zoomMin: 8.0,
-  zoomMax: 20.0,
-  scaleMin: 0.1,
-  scaleMax: 1.0,
-  spriteMinPixel: 24,
-  spriteMaxPixel: 100,
+  minScaleDistanceMeters: 500,
+  maxScaleDistanceMeters: 10000,
 } as const;
 
 //////////////////////////////////////////////////////////////////////////////////////////

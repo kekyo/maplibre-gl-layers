@@ -5,7 +5,6 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import { Map as MapLibreMap } from 'maplibre-gl';
-import { normalizeAngleDeg } from '../interpolation/rotationInterpolation';
 import {
   calculateBillboardCenterPosition,
   calculateBillboardCornerScreenPositions,
@@ -26,12 +25,12 @@ import {
   computeSurfaceCornerShaderModel,
   type SurfaceCorner,
   type QuadCorner,
-  calculateZoomScaleFactor,
+  calculateDistanceScaleFactor,
   resolveScalingOptions,
   resolveSpriteMercator,
-  cloneSpriteLocation,
   calculateCartesianDistanceMeters,
   clampOpacity,
+  normalizeAngleDeg,
 } from '../utils/math';
 import {
   BILLBOARD_BASE_CORNERS,
@@ -40,10 +39,6 @@ import {
   computeBillboardCornersShaderModel,
 } from '../gl/shader';
 import type {
-  DistanceInterpolationEvaluationParams,
-  DistanceInterpolationEvaluationResult,
-  DegreeInterpolationEvaluationParams,
-  DegreeInterpolationEvaluationResult,
   InternalSpriteCurrentState,
   InternalSpriteImageState,
   ImageResourceTable,
@@ -62,7 +57,6 @@ import type {
   RenderInterpolationResult,
   ProcessDrawSpriteImagesParams,
   ProcessDrawSpriteImagesResult,
-  SpriteInterpolationEvaluationParams,
   SpriteInterpolationEvaluationResult,
   SpriteInterpolationState,
 } from '../internalTypes';
@@ -72,7 +66,6 @@ import type {
   SpriteLocation,
   SpritePoint,
   SpriteScreenPoint,
-  SpriteImageOffset,
 } from '../types';
 import { createMapLibreProjectionHost } from './mapLibreProjectionHost';
 import {
@@ -111,16 +104,23 @@ import {
   evaluateDegreeInterpolation,
   type DegreeInterpolationWorkItem,
 } from '../interpolation/degreeInterpolation';
-import { evaluateInterpolation } from '../interpolation/interpolation';
+import {
+  applyLocationInterpolationEvaluations,
+  collectLocationInterpolationWorkItems,
+  evaluateLocationInterpolationsBatch,
+  type LocationInterpolationWorkItem,
+} from '../interpolation/locationInterpolation';
 import {
   stepSpriteImageInterpolations,
   type ImageInterpolationStepperId,
   applyResolvedOpacityTarget,
 } from '../interpolation/interpolationChannels';
 
+type ResolvedOffset = { offsetMeters: number; offsetDeg: number };
+
 const resolveImageOffset = (
   image: Readonly<InternalSpriteImageState>
-): SpriteImageOffset => {
+): ResolvedOffset => {
   const offset = image.offset;
   if (!offset) {
     return { ...DEFAULT_IMAGE_OFFSET };
@@ -131,10 +131,17 @@ const resolveImageOffset = (
   };
 };
 
+const resolveAutoRotationDeg = <T>(
+  sprite: Readonly<InternalSpriteCurrentState<T>>,
+  image: Readonly<InternalSpriteImageState>
+): number => {
+  return image.autoRotation ? sprite.currentAutoRotateDeg : 0;
+};
+
 const calculateBorderWidthPixels = (
   widthMeters: number | undefined,
   imageScale: number,
-  zoomScaleFactor: number,
+  distanceScaleFactor: number,
   effectivePixelsPerMeter: number,
   sizeScaleAdjustment: number
 ): number => {
@@ -152,7 +159,7 @@ const calculateBorderWidthPixels = (
     return 0;
   }
   const scaledWidthMeters =
-    widthMeters * imageScale * zoomScaleFactor * sizeScaleAdjustment;
+    widthMeters * imageScale * distanceScaleFactor * sizeScaleAdjustment;
   if (!Number.isFinite(scaledWidthMeters) || scaledWidthMeters <= 0) {
     return 0;
   }
@@ -198,6 +205,8 @@ interface DepthSortedItem<T> {
   readonly image: InternalSpriteImageState;
   readonly resource: Readonly<RegisteredImage>;
   readonly depthKey: number;
+  readonly cameraDistanceMeters: number;
+  readonly distanceScaleFactor: number;
   readonly resolveOrigin: OriginImageResolver<T>;
 }
 
@@ -269,16 +278,14 @@ const ensureHitTestCorners = (
 export const collectDepthSortedItemsInternal = <T>(
   projectionHost: ProjectionHost,
   zoom: number,
-  zoomScaleFactor: number,
   originCenterCache: ImageCenterCache,
   {
     bucket,
     bucketBuffers,
     imageResources,
+    resolvedScaling,
     clipContext,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
@@ -302,6 +309,8 @@ export const collectDepthSortedItemsInternal = <T>(
   }
 
   const resolveOrigin = createBucketOriginResolver(bucket);
+
+  const cameraLocation = projectionHost.getCameraLocation();
 
   for (const [spriteEntry, imageEntry] of bucket) {
     const imageResource = imageResources[imageEntry.imageHandle];
@@ -335,16 +344,33 @@ export const collectDepthSortedItemsInternal = <T>(
       continue;
     }
 
+    const spriteBaseLocation = spriteEntry.location.current;
+    const spriteDistanceLocation: SpriteLocation = {
+      lng: spriteBaseLocation.lng,
+      lat: spriteBaseLocation.lat,
+      z: spriteBaseLocation.z ?? 0,
+    };
+    const cameraDistanceMeters =
+      cameraLocation !== undefined
+        ? calculateCartesianDistanceMeters(
+            cameraLocation,
+            spriteDistanceLocation
+          )
+        : Number.POSITIVE_INFINITY;
+
+    const distanceScaleFactor = calculateDistanceScaleFactor(
+      cameraDistanceMeters,
+      resolvedScaling
+    );
+
     const centerParams: ComputeImageCenterParams<T> = {
       projectionHost,
       imageResources,
       originCenterCache,
       projected,
       baseMetersPerPixel,
-      spriteMinPixel,
-      spriteMaxPixel,
       effectivePixelsPerMeter,
-      zoomScaleFactor,
+      distanceScaleFactor,
       drawingBufferWidth,
       drawingBufferHeight,
       pixelRatio,
@@ -371,23 +397,18 @@ export const collectDepthSortedItemsInternal = <T>(
         imageResource.height,
         baseMetersPerPixel,
         imageScale,
-        zoomScaleFactor,
-        {
-          effectivePixelsPerMeter,
-          spriteMinPixel,
-          spriteMaxPixel,
-        }
+        distanceScaleFactor
       );
-      const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
-        ? imageEntry.displayedRotateDeg
-        : normalizeAngleDeg(
-            (imageEntry.resolvedBaseRotateDeg ?? 0) +
-              imageEntry.rotationCommandDeg
-          );
+      const autoRotationDeg = resolveAutoRotationDeg(spriteEntry, imageEntry);
+      const totalRotateDeg = normalizeAngleDeg(
+        Number.isFinite(imageEntry.finalRotateDeg.current)
+          ? imageEntry.finalRotateDeg.current
+          : autoRotationDeg + imageEntry.rotateDeg
+      );
       const offsetMeters = calculateSurfaceOffsetMeters(
         offsetResolved,
         imageScale,
-        zoomScaleFactor,
+        distanceScaleFactor,
         worldDims.scaleAdjustment
       );
       const cornerDisplacements = calculateSurfaceCornerDisplacements({
@@ -460,6 +481,8 @@ export const collectDepthSortedItemsInternal = <T>(
       image: imageEntry,
       resource: imageResource,
       depthKey,
+      cameraDistanceMeters,
+      distanceScaleFactor,
       resolveOrigin,
     });
   }
@@ -523,10 +546,8 @@ interface ComputeImageCenterParams<T> {
   readonly originCenterCache: ImageCenterCache;
   readonly projected: Readonly<SpriteScreenPoint>;
   readonly baseMetersPerPixel: number;
-  readonly spriteMinPixel: number;
-  readonly spriteMaxPixel: number;
   readonly effectivePixelsPerMeter: number;
-  readonly zoomScaleFactor: number;
+  readonly distanceScaleFactor: number;
   readonly drawingBufferWidth: number;
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
@@ -553,10 +574,8 @@ const computeImageCenterXY = <T>(
     originCenterCache,
     projected,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     effectivePixelsPerMeter,
-    zoomScaleFactor,
+    distanceScaleFactor,
     imageResources,
     projectionHost,
     drawingBufferWidth,
@@ -599,11 +618,12 @@ const computeImageCenterXY = <T>(
     }
   }
 
-  const totalRotDeg = Number.isFinite(image.displayedRotateDeg)
-    ? image.displayedRotateDeg
-    : normalizeAngleDeg(
-        (image.resolvedBaseRotateDeg ?? 0) + image.rotationCommandDeg
-      );
+  const autoRotationDeg = resolveAutoRotationDeg(sprite, image);
+  const totalRotDeg = normalizeAngleDeg(
+    Number.isFinite(image.finalRotateDeg.current)
+      ? image.finalRotateDeg.current
+      : autoRotationDeg + image.rotateDeg
+  );
   const imageScaleLocal = image.scale ?? 1;
   const imageResourceRef = imageResources[image.imageHandle];
 
@@ -614,10 +634,8 @@ const computeImageCenterXY = <T>(
       imageHeight: imageResourceRef?.height,
       baseMetersPerPixel,
       imageScale: imageScaleLocal,
-      zoomScaleFactor,
+      distanceScaleFactor,
       effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel,
       totalRotateDeg: totalRotDeg,
       anchor: image.anchor,
       offset: resolveImageOffset(image),
@@ -653,13 +671,10 @@ const computeImageCenterXY = <T>(
     imageHeight: imageResourceRef?.height,
     baseMetersPerPixel,
     imageScale: imageScaleLocal,
-    zoomScaleFactor,
+    distanceScaleFactor,
     totalRotateDeg: totalRotDeg,
     anchor: image.anchor,
     offset: resolveImageOffset(image),
-    effectivePixelsPerMeter,
-    spriteMinPixel,
-    spriteMaxPixel,
     projectToClipSpace,
     drawingBufferWidth,
     drawingBufferHeight,
@@ -804,13 +819,10 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   projectionHost: ProjectionHost,
   item: DepthSortedItem<TTag>,
   zoom: number,
-  zoomScaleFactor: number,
   originCenterCache: ImageCenterCache,
   {
     imageResources,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
@@ -845,6 +857,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   const atlasVSpan = atlasV1 - atlasV0;
 
   const spriteMercator = resolveSpriteMercator(projectionHost, item.sprite);
+  const distanceScaleFactor = item.distanceScaleFactor;
+  const cameraDistanceMeters = item.cameraDistanceMeters;
 
   // Reset previous frame state so skipped images do not leak stale uniforms.
   imageEntry.surfaceShaderInputs = undefined;
@@ -881,13 +895,14 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   // Use per-image anchor/offset when provided; otherwise fall back to defaults.
   const anchor = imageEntry.anchor ?? DEFAULT_ANCHOR;
   const offsetDef = resolveImageOffset(imageEntry);
+  const autoRotationDeg = resolveAutoRotationDeg(spriteEntry, imageEntry);
 
   // Prefer the dynamically interpolated rotation when available; otherwise synthesize it from base + manual rotations.
-  const totalRotateDeg = Number.isFinite(imageEntry.displayedRotateDeg)
-    ? imageEntry.displayedRotateDeg
-    : normalizeAngleDeg(
-        (imageEntry.resolvedBaseRotateDeg ?? 0) + imageEntry.rotationCommandDeg
-      );
+  const totalRotateDeg = normalizeAngleDeg(
+    Number.isFinite(imageEntry.finalRotateDeg.current)
+      ? imageEntry.finalRotateDeg.current
+      : autoRotationDeg + imageEntry.rotateDeg
+  );
 
   const projected = projectionHost.project(spriteEntry.location.current);
   if (!projected) {
@@ -928,10 +943,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     originCenterCache,
     projected,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     effectivePixelsPerMeter,
-    zoomScaleFactor,
+    distanceScaleFactor,
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
@@ -973,17 +986,6 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   };
 
   const baseLocation = resolveBaseLocation();
-  const cameraLocation = projectionHost.getCameraLocation();
-  const spriteBaseLocation = spriteEntry.location.current;
-  const spriteDistanceLocation: SpriteLocation = {
-    lng: spriteBaseLocation.lng,
-    lat: spriteBaseLocation.lat,
-    z: spriteBaseLocation.z ?? 0,
-  };
-  const cameraDistanceMeters =
-    cameraLocation !== undefined
-      ? calculateCartesianDistanceMeters(cameraLocation, spriteDistanceLocation)
-      : Number.POSITIVE_INFINITY;
 
   if (imageEntry.mode === 'surface') {
     screenToClipUniforms = {
@@ -1000,13 +1002,10 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       imageHeight: imageResource.height,
       baseMetersPerPixel,
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       totalRotateDeg,
       anchor,
       offset: offsetDef,
-      effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel,
       projectToClipSpace: (location) =>
         projectLngLatToClipSpace(projectionHost, location, clipContext),
       drawingBufferWidth,
@@ -1025,7 +1024,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     const offsetMeters = calculateSurfaceOffsetMeters(
       offsetDef,
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       surfaceCenter.worldDimensions.scaleAdjustment
     );
     const cornerDisplacements = calculateSurfaceCornerDisplacements({
@@ -1266,7 +1265,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
         drawingBufferHeight,
         pixelRatio,
         zoom,
-        zoomScaleFactor,
+        distanceScaleFactor,
         baseMetersPerPixel,
         projected,
         metersPerPixelAtLat,
@@ -1301,10 +1300,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       imageHeight: imageResource.height,
       baseMetersPerPixel,
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel,
       totalRotateDeg,
       anchor,
       offset: offsetDef,
@@ -1416,7 +1413,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
         drawingBufferHeight,
         pixelRatio,
         zoom,
-        zoomScaleFactor,
+        distanceScaleFactor,
         baseMetersPerPixel,
         projected,
         metersPerPixelAtLat,
@@ -1442,7 +1439,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   imageEntry.borderPixelWidth = calculateBorderWidthPixels(
     borderWidthMeters,
     imageScale,
-    zoomScaleFactor,
+    distanceScaleFactor,
     effectivePixelsPerMeter,
     borderSizeScaleAdjustment
   );
@@ -1450,7 +1447,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   imageEntry.leaderLinePixelWidth = calculateBorderWidthPixels(
     leaderLineWidthMeters,
     imageScale,
-    zoomScaleFactor,
+    distanceScaleFactor,
     effectivePixelsPerMeter,
     borderSizeScaleAdjustment
   );
@@ -1465,7 +1462,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     imageEntry,
     imageResource,
     vertexData: new Float32Array(QUAD_VERTEX_SCRATCH),
-    opacity: imageEntry.opacity.current,
+    opacity: imageEntry.finalOpacity.current,
     hitTestCorners,
     screenToClip: screenToClipUniforms,
     useShaderSurface,
@@ -1492,20 +1489,18 @@ const prepareDrawSpriteImages = <TTag>(
     params.resolvedScaling ??
     resolveScalingOptions({
       metersPerPixel: params.baseMetersPerPixel,
-      spriteMinPixel: params.spriteMinPixel,
-      spriteMaxPixel: params.spriteMaxPixel,
-      zoomMin: zoom,
-      zoomMax: zoom,
     });
-  const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
+  const preparedParams: PrepareDrawSpriteImageParams<TTag> = {
+    ...params,
+    resolvedScaling,
+  };
 
   // Step 1
   const itemsWithDepth = collectDepthSortedItemsInternal(
     projectionHost,
     zoom,
-    zoomScaleFactor,
     originCenterCache,
-    params
+    preparedParams
   );
 
   // Step 2
@@ -1515,9 +1510,8 @@ const prepareDrawSpriteImages = <TTag>(
       projectionHost,
       item,
       zoom,
-      zoomScaleFactor,
       originCenterCache,
-      params
+      preparedParams
     );
     if (prepared) {
       preparedItems.push(prepared);
@@ -1564,14 +1558,14 @@ export const applyVisibilityDistanceLod = <TTag>(
     }
     image.lodOpacity = lodMultiplier;
     const baseOpacity =
-      image.opacity.interpolation.baseValue ?? image.opacity.current;
+      image.finalOpacity.interpolation.baseValue ?? image.finalOpacity.current;
     const combinedTarget = clampOpacity(
       baseOpacity * (sprite.opacityMultiplier ?? 1) * lodMultiplier
     );
     applyResolvedOpacityTarget(
       image,
       combinedTarget,
-      image.opacity.interpolation.options ?? null
+      image.finalOpacity.interpolation.options ?? null
     );
   }
 };
@@ -1583,7 +1577,7 @@ export const syncPreparedOpacities = <TTag>(
     return;
   }
   for (const prepared of preparedItems) {
-    prepared.opacity = prepared.imageEntry.opacity.current;
+    prepared.opacity = prepared.imageEntry.finalOpacity.current;
   }
 };
 
@@ -1605,152 +1599,110 @@ export const filterVisiblePreparedItems = <TTag>(
 //////////////////////////////////////////////////////////////////////////////////////
 
 const evaluateDistanceInterpolationsBatch = (
-  requests: readonly DistanceInterpolationEvaluationParams[]
-): DistanceInterpolationEvaluationResult[] => {
-  if (!requests.length) {
+  states: readonly SpriteInterpolationState<number>[],
+  timestamp: number
+): SpriteInterpolationEvaluationResult<number>[] => {
+  if (!states.length) {
     return [];
   }
-  return requests.map((request) => evaluateDistanceInterpolation(request));
+  return states.map((state) => evaluateDistanceInterpolation(state, timestamp));
 };
 
 const evaluateDegreeInterpolationsBatch = (
-  requests: readonly DegreeInterpolationEvaluationParams[]
-): DegreeInterpolationEvaluationResult[] => {
-  if (!requests.length) {
+  states: readonly SpriteInterpolationState<number>[],
+  timestamp: number
+): SpriteInterpolationEvaluationResult<number>[] => {
+  if (!states.length) {
     return [];
   }
-  return requests.map((request) => evaluateDegreeInterpolation(request));
-};
-
-const evaluateSpriteInterpolationsBatch = (
-  requests: readonly SpriteInterpolationEvaluationParams[]
-): SpriteInterpolationEvaluationResult[] => {
-  if (!requests.length) {
-    return [];
-  }
-  return requests.map((request) => evaluateInterpolation(request));
+  return states.map((state) => evaluateDegreeInterpolation(state, timestamp));
 };
 
 export interface ProcessInterpolationPresetRequests {
-  readonly distance: readonly DistanceInterpolationEvaluationParams[];
-  readonly degree: readonly DegreeInterpolationEvaluationParams[];
-  readonly sprite: readonly SpriteInterpolationEvaluationParams[];
+  readonly distance: readonly SpriteInterpolationState<number>[];
+  readonly degree: readonly SpriteInterpolationState<number>[];
+  readonly sprite: readonly SpriteInterpolationState<SpriteLocation>[];
 }
 
 export interface ProcessInterpolationsEvaluationHandlers {
-  readonly prepare?: (requests: ProcessInterpolationPresetRequests) => void;
+  readonly prepare?: (
+    requests: ProcessInterpolationPresetRequests,
+    timestamp: number
+  ) => void;
   readonly evaluateDistance: (
-    requests: readonly DistanceInterpolationEvaluationParams[]
-  ) => readonly DistanceInterpolationEvaluationResult[];
+    states: readonly SpriteInterpolationState<number>[],
+    timestamp: number
+  ) => readonly SpriteInterpolationEvaluationResult<number>[];
   readonly evaluateDegree: (
-    requests: readonly DegreeInterpolationEvaluationParams[]
-  ) => readonly DegreeInterpolationEvaluationResult[];
+    states: readonly SpriteInterpolationState<number>[],
+    timestamp: number
+  ) => readonly SpriteInterpolationEvaluationResult<number>[];
   readonly evaluateSprite: (
-    requests: readonly SpriteInterpolationEvaluationParams[]
-  ) => readonly SpriteInterpolationEvaluationResult[];
+    states: readonly SpriteInterpolationState<SpriteLocation>[],
+    timestamp: number
+  ) => readonly SpriteInterpolationEvaluationResult<SpriteLocation>[];
 }
-
-const defaultInterpolationEvaluationHandlers: ProcessInterpolationsEvaluationHandlers =
-  {
-    evaluateDistance: (requests) =>
-      evaluateDistanceInterpolationsBatch(requests),
-    evaluateDegree: (requests) => evaluateDegreeInterpolationsBatch(requests),
-    evaluateSprite: (requests) => evaluateSpriteInterpolationsBatch(requests),
-  };
 
 //////////////////////////////////////////////////////////////////////////////////////
-
-interface SpriteInterpolationWorkItem<TTag> {
-  readonly sprite: InternalSpriteCurrentState<TTag>;
-  readonly state: SpriteInterpolationState<SpriteLocation>;
-}
-
-const applySpriteInterpolationEvaluations = <TTag>(
-  workItems: readonly SpriteInterpolationWorkItem<TTag>[],
-  evaluations: readonly SpriteInterpolationEvaluationResult[],
-  timestamp: number
-): boolean => {
-  let active = false;
-  for (let index = 0; index < workItems.length; index += 1) {
-    const item = workItems[index]!;
-    const { sprite, state } = item;
-    const evaluation =
-      evaluations[index] ??
-      evaluateInterpolation({
-        state,
-        timestamp,
-      });
-
-    if (state.startTimestamp < 0) {
-      state.startTimestamp = evaluation.effectiveStartTimestamp;
-    }
-
-    sprite.location.current = evaluation.location;
-
-    if (evaluation.completed) {
-      sprite.location.current = cloneSpriteLocation(state.to);
-      sprite.location.from = undefined;
-      sprite.location.to = undefined;
-      sprite.location.interpolation.state = null;
-    } else {
-      active = true;
-    }
-  }
-  return active;
-};
 
 const ensureOpacityInterpolationTarget = (
   sprite: InternalSpriteCurrentState<any>,
   image: InternalSpriteImageState
 ): void => {
   const target = clampOpacity(
-    (image.opacity.interpolation.baseValue ?? image.opacity.current) *
+    (image.finalOpacity.interpolation.baseValue ?? image.finalOpacity.current) *
       (sprite.opacityMultiplier ?? 1) *
       (image.lodOpacity ?? 1)
   );
-  const interpolationState = image.opacity.interpolation.state;
+  const interpolationState = image.finalOpacity.interpolation.state;
   const currentStateTarget = interpolationState
     ? clampOpacity(interpolationState.pathTarget ?? interpolationState.to)
-    : image.opacity.current;
+    : image.finalOpacity.current;
   if (interpolationState) {
     if (Math.abs(currentStateTarget - target) <= OPACITY_TARGET_EPSILON) {
       // Already interpolating toward the desired target.
       return;
     }
   } else if (
-    Math.abs(image.opacity.current - target) <= OPACITY_TARGET_EPSILON
+    Math.abs(image.finalOpacity.current - target) <= OPACITY_TARGET_EPSILON
   ) {
     // No interpolation state and current opacity already matches the target.
     return;
   }
-  const options = image.opacity.interpolation.options;
+  const options = image.finalOpacity.interpolation.options;
   if (options && options.durationMs > 0) {
     const { state, requiresInterpolation } = createDistanceInterpolationState({
-      currentValue: clampOpacity(image.opacity.current),
+      currentValue: clampOpacity(image.finalOpacity.current),
       targetValue: target,
-      previousCommandValue: image.opacity.interpolation.lastCommandValue,
+      previousCommandValue: image.finalOpacity.interpolation.lastCommandValue,
       options,
     });
     if (requiresInterpolation) {
-      image.opacity.interpolation.state = state;
-      image.opacity.from = image.opacity.current;
-      image.opacity.to = target;
+      image.finalOpacity.interpolation.state = state;
+      image.finalOpacity.from = image.finalOpacity.current;
+      image.finalOpacity.to = target;
       return;
     }
   }
-  image.opacity.current = target;
-  image.opacity.from = undefined;
-  image.opacity.to = undefined;
-  image.opacity.interpolation.state = null;
-  image.opacity.interpolation.lastCommandValue = target;
-  image.opacity.interpolation.targetValue = target;
+  image.finalOpacity.current = target;
+  image.finalOpacity.from = undefined;
+  image.finalOpacity.to = undefined;
+  image.finalOpacity.interpolation.state = null;
+  image.finalOpacity.interpolation.lastCommandValue = target;
+  image.finalOpacity.interpolation.targetValue = target;
 };
+
+const DEFAULT_INTERPOLATION_EVALUATION_HANDLERS: ProcessInterpolationsEvaluationHandlers =
+  {
+    evaluateDistance: evaluateDistanceInterpolationsBatch,
+    evaluateDegree: evaluateDegreeInterpolationsBatch,
+    evaluateSprite: evaluateLocationInterpolationsBatch,
+  } as const;
 
 export const processInterpolationsInternal = <TTag>(
   params: RenderInterpolationParams<TTag>,
-  handlers: ProcessInterpolationsEvaluationHandlers = defaultInterpolationEvaluationHandlers
+  handlers: ProcessInterpolationsEvaluationHandlers = DEFAULT_INTERPOLATION_EVALUATION_HANDLERS
 ): RenderInterpolationResult => {
-  const evaluationHandlers = handlers ?? defaultInterpolationEvaluationHandlers;
   const { sprites, timestamp } = params;
   if (!sprites.length) {
     return {
@@ -1761,16 +1713,16 @@ export const processInterpolationsInternal = <TTag>(
 
   const distanceInterpolationWorkItems: DistanceInterpolationWorkItem[] = [];
   const degreeInterpolationWorkItems: DegreeInterpolationWorkItem[] = [];
-  const spriteInterpolationWorkItems: SpriteInterpolationWorkItem<TTag>[] = [];
+  const locationInterpolationWorkItems: LocationInterpolationWorkItem<TTag>[] =
+    [];
 
   let hasActiveInterpolation = false;
 
   for (const sprite of sprites) {
-    const locationInterpolation = sprite.location.interpolation;
-    const state = locationInterpolation.state;
-    if (state) {
-      spriteInterpolationWorkItems.push({ sprite, state });
-    }
+    collectLocationInterpolationWorkItems(
+      sprite,
+      locationInterpolationWorkItems
+    );
 
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
@@ -1780,19 +1732,18 @@ export const processInterpolationsInternal = <TTag>(
           collectDistanceInterpolationWorkItems(
             image,
             distanceInterpolationWorkItems,
-            {
-              includeOpacity: false,
-            }
+            true, // includeOffsetMeters
+            false
           );
         }
 
         ensureOpacityInterpolationTarget(sprite, image);
 
         const hasOpacityInterpolation =
-          image.opacity.interpolation.state !== null;
+          image.finalOpacity.interpolation.state !== null;
 
         const hasDegreeInterpolation =
-          image.rotateDeg.interpolation.state !== null ||
+          image.finalRotateDeg.interpolation.state !== null ||
           image.offset.offsetDeg.interpolation.state !== null;
         if (hasDegreeInterpolation) {
           collectDegreeInterpolationWorkItems(
@@ -1818,13 +1769,15 @@ export const processInterpolationsInternal = <TTag>(
           skipChannels.offsetDeg = true;
           shouldSkipChannels = true;
         }
+        const interpolationOptions = shouldSkipChannels
+          ? {
+              skipChannels,
+              autoRotationDeg: resolveAutoRotationDeg(sprite, image),
+            }
+          : { autoRotationDeg: resolveAutoRotationDeg(sprite, image) };
 
         if (
-          stepSpriteImageInterpolations(
-            image,
-            timestamp,
-            shouldSkipChannels ? { skipChannels } : undefined
-          )
+          stepSpriteImageInterpolations(image, timestamp, interpolationOptions)
         ) {
           hasActiveInterpolation = true;
         }
@@ -1832,43 +1785,27 @@ export const processInterpolationsInternal = <TTag>(
     });
   }
 
-  const distanceRequests =
-    distanceInterpolationWorkItems.length > 0
-      ? distanceInterpolationWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-  const degreeRequests =
-    degreeInterpolationWorkItems.length > 0
-      ? degreeInterpolationWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-  const spriteRequests =
-    spriteInterpolationWorkItems.length > 0
-      ? spriteInterpolationWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-
   const hasRequests =
-    distanceRequests.length > 0 ||
-    degreeRequests.length > 0 ||
-    spriteRequests.length > 0;
+    distanceInterpolationWorkItems.length > 0 ||
+    degreeInterpolationWorkItems.length > 0 ||
+    locationInterpolationWorkItems.length > 0;
 
   if (hasRequests) {
-    evaluationHandlers.prepare?.({
-      distance: distanceRequests,
-      degree: degreeRequests,
-      sprite: spriteRequests,
-    });
+    handlers.prepare?.(
+      {
+        distance: distanceInterpolationWorkItems,
+        degree: degreeInterpolationWorkItems,
+        sprite: locationInterpolationWorkItems,
+      },
+      timestamp
+    );
   }
 
-  if (distanceRequests.length > 0) {
-    const evaluations = evaluationHandlers.evaluateDistance(distanceRequests);
+  if (distanceInterpolationWorkItems.length > 0) {
+    const evaluations = handlers.evaluateDistance(
+      distanceInterpolationWorkItems,
+      timestamp
+    );
     if (
       applyDistanceInterpolationEvaluations(
         distanceInterpolationWorkItems,
@@ -1880,8 +1817,11 @@ export const processInterpolationsInternal = <TTag>(
     }
   }
 
-  if (degreeRequests.length > 0) {
-    const evaluations = evaluationHandlers.evaluateDegree(degreeRequests);
+  if (degreeInterpolationWorkItems.length > 0) {
+    const evaluations = handlers.evaluateDegree(
+      degreeInterpolationWorkItems,
+      timestamp
+    );
     if (
       applyDegreeInterpolationEvaluations(
         degreeInterpolationWorkItems,
@@ -1893,11 +1833,14 @@ export const processInterpolationsInternal = <TTag>(
     }
   }
 
-  if (spriteRequests.length > 0) {
-    const evaluations = evaluationHandlers.evaluateSprite(spriteRequests);
+  if (locationInterpolationWorkItems.length > 0) {
+    const evaluations = handlers.evaluateSprite(
+      locationInterpolationWorkItems,
+      timestamp
+    );
     if (
-      applySpriteInterpolationEvaluations(
-        spriteInterpolationWorkItems,
+      applyLocationInterpolationEvaluations(
+        locationInterpolationWorkItems,
         evaluations,
         timestamp
       )
@@ -1915,10 +1858,9 @@ export const processInterpolationsInternal = <TTag>(
 export const processOpacityInterpolationsAfterPreparation = <TTag>(
   params: RenderInterpolationParams<TTag>,
   preparedItems: readonly PreparedDrawSpriteImageParams<TTag>[],
-  handlers: ProcessInterpolationsEvaluationHandlers = defaultInterpolationEvaluationHandlers
+  handlers: ProcessInterpolationsEvaluationHandlers = DEFAULT_INTERPOLATION_EVALUATION_HANDLERS
 ): RenderInterpolationResult => {
   void preparedItems;
-  const evaluationHandlers = handlers ?? defaultInterpolationEvaluationHandlers;
   const { sprites, timestamp } = params;
   if (!sprites.length) {
     return {
@@ -1933,10 +1875,13 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
     sprite.images.forEach((orderMap) => {
       orderMap.forEach((image) => {
         ensureOpacityInterpolationTarget(sprite, image);
-        if (image.opacity.interpolation.state !== null) {
-          collectDistanceInterpolationWorkItems(image, opacityWorkItems, {
-            includeOffsetMeters: false,
-          });
+        if (image.finalOpacity.interpolation.state !== null) {
+          collectDistanceInterpolationWorkItems(
+            image,
+            opacityWorkItems,
+            false,
+            true // includeOpacity
+          );
         }
       });
     });
@@ -1949,26 +1894,21 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
     };
   }
 
-  const opacityRequests =
-    opacityWorkItems.length > 0
-      ? opacityWorkItems.map(({ state }) => ({
-          state,
-          timestamp,
-        }))
-      : [];
-
-  if (opacityRequests.length > 0) {
-    evaluationHandlers.prepare?.({
-      distance: opacityRequests,
-      degree: [],
-      sprite: [],
-    });
+  if (opacityWorkItems.length > 0) {
+    handlers.prepare?.(
+      {
+        distance: opacityWorkItems,
+        degree: [],
+        sprite: [],
+      },
+      timestamp
+    );
   }
 
   let hasActiveInterpolation = false;
 
-  if (opacityRequests.length > 0) {
-    const evaluations = evaluationHandlers.evaluateDistance(opacityRequests);
+  if (opacityWorkItems.length > 0) {
+    const evaluations = handlers.evaluateDistance(opacityWorkItems, timestamp);
     if (
       applyDistanceInterpolationEvaluations(
         opacityWorkItems,
@@ -2055,6 +1995,8 @@ export const createCalculationHost = <TTag>(
   const projectionHost = createProjectionHost(params);
   return createProjectionBoundCalculationHost<TTag>(projectionHost);
 };
+
+//////////////////////////////////////////////////////////////////////////////////////
 
 const __createWasmProjectionCalculationTestHost = <TTag>(
   params: ProjectionHostParams

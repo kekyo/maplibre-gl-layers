@@ -272,7 +272,7 @@ spriteLayer.addSprite(SPRITE_ID, {
 
 各画像はスプライトの基準座標（`location`）に対して、画像内のどこを重ねるかを`anchor`で指定します。`anchor.x`と`anchor.y`は画像の左下を-1、中央を0、右上を1とする正規化値で、既定値は`{ x: 0, y: 0 }`（画像の中心）です。アンカーを変更すると、同じスプライト座標でも表示位置や回転の支点を細かく調整できます。値は-1～1を目安にしますが、必要に応じて範囲外を指定しても構いません。
 
-アンカーはモードに関わらず機能し、後述の`rotateDeg`・`scale`・`offset`・`originLocation`もこのアンカー位置から計算されます。
+アンカーはモードに関わらず機能し、後述の`rotateDeg`・`scale`・`offsetMeters`/`offsetDeg`・`originLocation`もこのアンカー位置から計算されます。
 
 以下は、矢印の先端にアンカーを設定することで、より地図上での精密な座標位置を表現させる例です。登録済みの画像は、矢印の先端が上向きに描かれてい場合に、アンカー位置を上端中央に指定することでこれを実現します:
 
@@ -293,7 +293,7 @@ spriteLayer.addSprite('vehicle-anchor', {
 
 ## オフセット
 
-`offset`ではアンカーから一定距離だけ画像を離して配置できます。`offset.offsetMeters.current`はメートル単位の距離、`offset.offsetDeg.current`は方向を表し、サーフェイスモードでは地図上の真北を0度とした時計回り、ビルボードモードでは画面上方向を0度とした時計回りで解釈されます。
+`offsetMeters` と `offsetDeg` では、アンカーから一定距離だけ画像を離して配置できます。`offsetMeters` はメートル単位の距離、`offsetDeg` は方向を表し、サーフェイスモードでは地図上の真北を0度とした時計回り、ビルボードモードでは画面上方向を0度とした時計回りで解釈されます。
 
 距離はSpriteLayerが管理する縮尺に基づいてピクセルへ換算されるため、ズームやピッチが変わっても相対位置が維持されます。設定しなければアンカー位置にそのまま描画されます。
 
@@ -307,7 +307,8 @@ spriteLayer.addSprite('vehicle-anchor', {
       order: 0,
       imageId: TEXT_LABEL1_ID, // テキストID(画像ID)
       mode: 'billboard',
-      offset: { offsetMeters: 12, offsetDeg: 90 }, // 右に12mずらす
+      offsetMeters: 12,  // 右に12mずらす
+      offsetDeg: 90,
     },
   ],
 });
@@ -339,7 +340,7 @@ spriteLayer.addSprite('vehicle-anchor', {
 
 ## 画像のスケール
 
-`scale`は画像の幅・高さを倍率で拡大縮小し、同時に`offset.offsetMeters.current`で指定した距離にも掛かります。
+`scale`は画像の幅・高さを倍率で拡大縮小し、同時に`offsetMeters`で指定した距離にも掛かります。
 
 まず元の画像サイズに`scale`とズーム倍率が掛け合わされ、その結果を基にアンカーの位置と回転の中心が決まります。
 さらに、オフセット距離も`scale`で伸縮されるため、スプライト全体の相対的なバランスが保たれます。
@@ -368,13 +369,14 @@ spriteLayer.addSprite('vehicle-scaled', {
       mode: 'billboard',
       scale: 0.5,  // スケールを指定して半分のサイズに縮小
       originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
-      offset: { offsetMeters: 10, offsetDeg: 0 },
+      offsetMeters: 10,
+      offsetDeg: 0,
     },
   ],
 });
 ```
 
-注意: `rotateDeg`や`offset`は、画像の実サイズに`scale`を適用した後、アンカーによる基準点移動を反映した状態で解釈されます。つまり:
+注意: `rotateDeg`、`offsetMeters`、`offsetDeg`は、画像の実サイズに`scale`を適用した後、アンカーによる基準点移動を反映した状態で解釈されます。つまり:
 
 1. スケールで画像の拡大・縮小を行い
 2. アンカー位置から基準座標点を確定し
@@ -411,6 +413,81 @@ spriteLayer.addSprite('vehicle-opacity', {
 });
 ```
 
+## 疑似LOD
+
+疑似LODは、カメラからスプライトまでの距離によって、描画するかどうかを決定する機能です。
+
+これは `visibilityDistanceMeters` メンバにカメラからスプライト（の基準座標点）までの距離を指定すると機能し、
+その距離以上離れるとそのスプライトの画像群は全て非表示となります。
+指定していない場合は、疑似LOD機能は無効となります。
+
+以下は疑似LODを使用する例です:
+
+```typescript
+// 1.5km以内にカメラが近づいた時だけ描画するスプライト
+spriteLayer.addSprite('vehicle-lod', {
+  location: { lng: 136.8852, lat: 35.17 },
+  visibilityDistanceMeters: 1500, // この距離を超えると自動的に非表示
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      autoRotation: true,
+    },
+  ],
+});
+
+// しきい値を変更する
+spriteLayer.updateSprite('vehicle-lod', {
+  visibilityDistanceMeters: null, // nullで疑似LODを無効化
+});
+```
+
+## 不透明度と表示制御
+
+描画に使用する最終的な不透明度は、以下の3つの要素を乗算することによって決定されます:
+
+1. スプライト画像毎の`opacity`値
+2. 疑似LODによる不透明度の値
+3. スプライト毎の`opacityMultiplier`値
+
+上記を乗算した値を、`finalOpacity`と呼称し、この値が描画に使用されます。
+従って、スプライトの全ての画像に対して一律の不透明度を適用したい場合は、`opacityMultiplier` を使用して下さい。
+
+```typescript
+// スプライトの全ての画像を半透明にする
+spriteLayer.addSprite('vehicle-half', {
+  location: { lng: 136.8852, lat: 35.17 },
+  opacityMultiplier: 0.5,  // 半透明
+  images: [
+    // ...
+  ],
+});
+```
+
+デモページでは、上記の1と3を`Wave`および`Wave All`ボタンで切り替えて試すことが出来ます。
+
+また、スプライトの表示・非表示を切り替える別の方法として、`isEnabled`があります。
+これは、スプライトのレンダリングパイプラインの有効・無効を切り替えます。
+従って、`isEnabled`を`false`にすることと、`finalOpacity`が0.0となることは、厳密には異なります。
+
+```typescript
+// スプライトを無効状態にする
+spriteLayer.addSprite('vehicle-half', {
+  location: { lng: 136.8852, lat: 35.17 },
+  isEnabled: false,  // 無効化
+  images: [
+    // ...
+  ],
+});
+```
+
+`isEnabled`を`false`にした場合は、そのスプライトの計算が殆ど行われなくなるため、パフォーマンスを向上させることに使用できます。
+一方で、スプライトを非表示に変更するために`isEnabled`を`false`に変更すると、スプライトが消え去るまでの補間処理は適用されず、いきなりスプライトが非表示となります。
+
+参考: `finalOpacity`が0.0となった場合、座標計算をスキップすることは出来ませんが、WebGLへのレンダリング要求は省かれるため、多少パフォーマンスに寄与します。
+
 ## 自動方位回転
 
 スプライトの移動方向に合わせて、自動で画像を回転させたい場合は、`autoRotation`を有効にします。
@@ -438,7 +515,7 @@ spriteLayer.addSprite('vehicle-auto', {
 
 ## スプライト移動補間
 
-SpriteLayerには、スプライトの移動を自動的に補間して、描画をなめらかにアニメーションさせる機能があります。この機能を使用するには、以下の2つの要素を考える必要があります。
+SpriteLayerには、スプライトの移動を自動的に補間して、なめらかにアニメーションさせる機能があります。この機能を使用するには、以下の2つの要素を考える必要があります。
 
 - 移動始点と終点: 補間はこの2点間を自動的に補間します。
 - 補間時間: 始点から終点に向かって補間を行う時、かかる時間を示します。
@@ -483,16 +560,21 @@ spriteLayer.updateSprite(SPRITE_ID, {
 ## 画像の回転角・オフセット・不透明度の補間
 
 スプライト移動補間と似た機能として、画像ごとの回転・オフセット・不透明度を滑らかに変化させることができます。
-これらはスプライトの位置補間とは独立しており、`SpriteImageDefinitionUpdate` の `interpolation` フィールドで個別に制御します。
+これらはスプライトの移動補間とは独立しています。
 
-`interpolation` は次のチャネルをサポートします。
+各補間パラメータは、スプライト画像の`interpolation` メンバに指定します:
 
-- `rotateDeg`: 画像の追加回転角。最短経路で補間され、完了後は最終角にスナップします。
-- `offsetDeg` / `offsetMeters`: オフセットの向きと距離。角度・距離を別々の時間で制御可能です。
-- `opacity`: 0.0〜1.0の値を自動的にクリップしながらフェードさせます。値が0に近づくと描画が抑制されるため、LODやハイライト演出に使えます。
+- `finalRotateDeg`: 画像の最終的な回転角。最終的な回転角とは、`rotateDeg`の値と自動方位回転の角度を加算した値です。最短角度で補間されます。
+- `offsetDeg`: オフセットの向き。最短角度で補間されます。
+- `offsetMeters`: オフセットの距離。
+- `finalOpacity`: 画像の最終的な不透明度。最終的な不透明度とは、`opacity`の値、疑似LODの計算結果、スプライトに対する`opacityMultiplier`の値を全て乗算して値です。0.0〜1.0の範囲でクリップされます。
 
-各チャネルに `durationMs` と補間モード（`feedback`/`feedforward`）、任意のイージング関数種別を与えます。
-設定を削除するか `null` を渡すとそのチャネルだけ即座に停止します。
+それぞれの補間パラメータには、補間期間を示す`durationMs`、補間モード（`feedback`/`feedforward`）、任意のイージング関数種別（後述）を与えます。
+
+補間モードについては、スプライト移動補間の解説と同様です。
+
+`interpolation`メンバ自体を`null`とすると、全ての補間処理が停止されます。
+それぞれの補間パラメータで`null`を指定すると、その補間処理だけ即座に停止します。
 
 以下に、回転・オフセット・不透明度で補間を適用する例を示します:
 
@@ -501,16 +583,14 @@ spriteLayer.updateSprite(SPRITE_ID, {
 spriteLayer.updateSpriteImage('vehicle-anchor', 0, 0, {
   rotateDeg: 180, // 現在の角度から180度に向かって回転
   interpolation: {
-    rotateDeg: { durationMs: 400 },
+    finalRotateDeg: { durationMs: 400 },
   },
 });
 
 // オフセットの向きを600msで補間しながら変更する
 spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
-  offset: {
-    offsetDeg: 45, // 現在の角度から45度に向かって回転
-    offsetMeters: 12,
-  },
+  offsetDeg: 45, // 現在の角度から45度に向かって回転
+  offsetMeters: 12,
   interpolation: {
     offsetDeg: { durationMs: 600, mode: 'feedforward', },
     offsetMeters: { durationMs: 600 },
@@ -520,8 +600,7 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
 // 補間を無効化するには `null` を指定する
 spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
   interpolation: {
-    offsetDeg: null,
-    offsetMeters: null,
+    offsetDeg: null,  // 回転補間を無効化
   },
 });
 
@@ -529,7 +608,7 @@ spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
 spriteLayer.updateSpriteImage('vehicle-anchor', 1, 0, {
   opacity: 0,
   interpolation: {
-    opacity: { durationMs: 800, },
+    finalOpacity: { durationMs: 800, },
   },
 });
 ```
@@ -562,12 +641,12 @@ spriteLayer.updateSpriteImage('vehicle-easing', 0, 0, {
   // ほぼ透明に
   opacity: 0.2,
   interpolation: {
-    rotateDeg: {
+    finalRotateDeg: {
       durationMs: 600,
       // 終盤で跳ねるように減速
       easing: { type: 'bounce', bounces: 4, decay: 0.6 },
     },
-    opacity: {
+    finalOpacity: {
       durationMs: 400,
       mode: 'feedforward',
       // 緩やかにフェードアウト
@@ -610,9 +689,10 @@ spriteLayer.updateSprite('car-1', {
 });
 spriteLayer.updateSpriteImage('car-1', 0, 0, {
   rotateDeg: 45,  // 即時反映される
-  offset: { offsetMeters: 12, offsetDeg: 30 },  //即時反映される
+  offsetMeters: 12,  // 即時反映される
+  offsetDeg: 30,  // 即時反映される
   interpolation: {
-    rotateDeg: { durationMs: 800 },
+    finalRotateDeg: { durationMs: 800 },
     offsetDeg: { durationMs: 500 },
   },
 });
@@ -655,7 +735,8 @@ spriteLayer.addSprite('vehicle-group', {
       imageId: TEXT_LABEL1_ID,
       mode: 'billboard',
       originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
-      offset: { offsetMeters: 8, offsetDeg: 0 }, // 画面上方向へ配置
+      offsetMeters: 30, // 矢印から30m離す
+      offsetDeg: 0, // 矢印の上方向へ配置
     },
   ],
 });
@@ -665,83 +746,6 @@ spriteLayer.addSprite('vehicle-group', {
 
 - 参照する画像は、同一のスプライト内の画像に限られます。
 - 循環参照や存在しない画像を指すとエラーになるため、チェーンはループしないように構成して下さい。
-
-## 疑似LOD
-
-疑似LODは、カメラからスプライトまでの距離によって、描画するかどうかを決定する機能です。
-
-これは `visibilityDistanceMeters` にカメラからスプライト（の基準座標点）までの距離を指定すると機能し、
-その距離以上離れるとそのスプライトの画像群は全て非表示となります。
-指定していない場合は疑似LOD機能は無効となり、`opacity`が0.0を超えていれば描画されます。
-
-以下は疑似LODを使用する例です:
-
-```typescript
-// 1.5km以内にカメラが近づいた時だけ描画するスプライト
-spriteLayer.addSprite('vehicle-lod', {
-  location: { lng: 136.8852, lat: 35.17 },
-  visibilityDistanceMeters: 1500, // この距離を超えると自動的に非表示
-  images: [
-    {
-      subLayer: 0,
-      order: 0,
-      imageId: ARROW_IMAGE_ID,
-      autoRotation: true,
-    },
-  ],
-});
-
-// しきい値を変更する
-spriteLayer.updateSprite('vehicle-lod', {
-  visibilityDistanceMeters: null, // nullで疑似LODを無効化
-});
-```
-
-## 不透明度と表示制御
-
-描画に使用する不透明度は、以下の3つの要素を乗算することによって決定されます:
-
-1. スプライト画像毎の`opacity`値
-2. 疑似LODによる不透明度の値
-3. スプライトの`opacityMultiplier`値
-
-上記を乗算した後、不透明度専用の補間計算器を通して得られた値が描画の不透明度として使用されます。
-従って、スプライトの全ての画像に対して一律の不透明度を適用したい場合は、`opacityMultiplier` を使用して下さい。
-
-```typescript
-// スプライトの全ての画像を半透明にする
-spriteLayer.addSprite('vehicle-half', {
-  location: { lng: 136.8852, lat: 35.17 },
-  opacityMultiplier: 0.5,  // 半透明
-  images: [
-    // ...
-  ],
-});
-```
-
-デモページでは、上記の1と3を`Wave`および`Wave All`ボタンで切り替えて試すことが出来ます。
-
-また、スプライトの表示・非表示を切り替える値として、`isEnabled`があります。
-これは、スプライトのレンダリングパイプラインの有効・無効を切り替えます。
-従って、`isEnabled`を`false`にすることと、不透明度の計算結果が0.0となることは、厳密には異なります。
-
-```typescript
-// スプライトを無効状態にする
-spriteLayer.addSprite('vehicle-half', {
-  location: { lng: 136.8852, lat: 35.17 },
-  isEnabled: false,  // 無効化
-  images: [
-    // ...
-  ],
-});
-```
-
-`isEnabled`を`false`にした場合は、そのスプライトの計算が殆ど行われなくなるため、パフォーマンスを向上させることに使用できます。
-一方で、スプライトを非表示にするという目的である場合は、スプライトがいきなり消失することに注意して下さい。
-つまり、スプライトが消え去るまでの補間処理は適用されません。消え去るまでの補間がアクセントとして必要な場合は、不透明度に0.0を適用する必要があります。
-
-参考: 不透明度の計算結果が0.0となる場合は、座標計算の前半処理は行われますが、WebGLへのデータ転送と（GPUによる）実際の表示は省かれます。
-従って、不透明度による非表示化も、多少パフォーマンスに影響を与えます。
 
 ## ボーダー
 
@@ -820,6 +824,13 @@ SpriteLayerは次のインタラクションイベントを提供しています
 
 どちらのイベントも、対象の画像を検出できない場合は、`sprite`/`image`が`undefined`の状態で通知されます。
 
+これらのイベント検出は、`setHitTestDetection()`で有効化出来ます:
+
+```typescript
+// ヒットテスト検出を有効化する
+spriteLayer.setHitTestDetection(true);
+```
+
 イベントハンドラ内から`updateSprite`などを呼び出せば、ユーザー操作に応じた挙動を簡単に実装できます。
 
 ```typescript
@@ -841,7 +852,7 @@ spriteLayer.on('spriteclick', ({ sprite, screenPoint }) => {
 });
 ```
 
-`sprite.images` を参照すると、`image.rotateDeg.current`（および必要に応じて `from`/`to`）で回転補間の状態を `sprite.location` と同じように確認できます。
+`sprite.images` を参照すると、`image.finalRotateDeg.current`（および必要に応じて `from`/`to`）で回転補間の状態を `sprite.location` と同じように確認できます。
 
 ホバーイベントを使えば、ツールチップやハイライトも実現できます。
 
@@ -862,14 +873,34 @@ spriteLayer.on('spritehover', ({ sprite, image }) => {
 });
 ```
 
-注意: イベントハンドラをフックすると、座標検出のための追加のコストが発生します。
-これは特に、頻繁にスプライト座標を更新する場合にパフォーマンスに影響する可能性があります。
+注意: ヒットテストを有効化すると、座標検出のための追加のコストが発生します。
+これは特に、大量のスプライトを扱う場合にパフォーマンスに影響する可能性があります。
+
+## スプライトのトラッキング
+
+`trackSprite()` を呼び出すと、指定したスプライトを毎フレーム地図の中心に追従させられます。
+`trackRotation` を省略または `true` にすると、スプライトの `finalRotateDeg` に合わせて地図の向きも追従するため、移動体の進行方向を画面上で固定したいときに便利です。
+
+存在しない ID を指定した場合はトラッキングを行いません。
+
+```typescript
+// 中心に配置し、スプライトの向きに地図を追従させる
+spriteLayer.trackSprite('vehicle-101');
+
+// 中心のみ追従させ、回転は固定する
+spriteLayer.trackSprite('vehicle-101', false);
+
+// トラッキングを停止する
+spriteLayer.untrackSprite();
+```
+
+スプライトを削除したり、ユーザー操作に制御を戻したい場合は `untrackSprite()` を呼び出してください。
 
 ## タグ
 
 SpriteLayerでは各スプライトに任意のタグ情報を付与できます。
 
-タグは`addSprite`や`updateSprite`で`tag`プロパティに設定し、`sprite.tag`として参照します。描画には直接影響しませんが、移動体の種別やデータソースの識別子、クリック時に呼び出す処理を分岐させるフラグなど、アプリケーション側のメタデータを持たせたいときに便利です。
+タグは`addSprite()`や`updateSprite()`で`tag`プロパティに設定し、`sprite.tag`として参照します。描画には直接影響しませんが、移動体の種別やデータソースの識別子、クリック時に呼び出す処理を分岐させるフラグなど、アプリケーション側のメタデータを持たせたいときに便利です。
 
 タグの型はジェネリックで定義されているため、TypeScriptではSpriteLayer生成時に型パラメータを指定すると安全に扱えます。タグを更新しても描画内容に変化が無ければ再描画は発生しません。
 
@@ -902,15 +933,15 @@ spriteLayer.on('spriteclick', ({ sprite }) => {
 });
 ```
 
-後からタグを書き換える場合は`updateSprite`で`tag`を渡します。`null`または未指定にするとタグを削除できます。
+後からタグを書き換える場合は、`updateSprite()`で`tag`を渡します。`null`または未指定にするとタグを削除できます。
 
 ## 複数スプライトの配置・変更・削除
 
-大量のスプライトをまとめて配置・削除したい場合は、`addSprites`/`removeSprites`などのバルク関数を利用すると、高速に処理できます。
+大量のスプライトをまとめて配置・削除したい場合は、`addSprites()`/`removeSprites()`などのバルク関数を利用すると、高速に処理できます。
 
-- `addSprites` は `Record<string, SpriteInit<TTag>>` 形式か、`spriteId` プロパティを追加した [`SpriteInitEntry<TTag>`](./maplibre-gl-layers/src/types.ts) の配列のいずれかを受け付けます。戻り値は新しく追加されたスプライト数です。
-- `removeSprites` は複数のスプライトIDをまとめて削除し、削除した画像数を返します。
-- `removeAllSprites` はすべてのスプライトを削除し、その数を返します。
+- `addSprites()` は `Record<string, SpriteInit<TTag>>` 形式か、`spriteId` プロパティを追加した [`SpriteInitEntry<TTag>`](./maplibre-gl-layers/src/types.ts) の配列のいずれかを受け付けます。戻り値は新しく追加されたスプライト数です。
+- `removeSprites()` は複数のスプライトIDをまとめて削除し、削除した画像数を返します。
+- `removeAllSprites()` はすべてのスプライトを削除し、その数を返します。
 - `removeAllSpriteImages(spriteId)` は指定したスプライトに紐づく画像情報だけをクリアし、削除した画像数を返します。
 
 以下に例を示します:
@@ -953,17 +984,16 @@ spriteLayer.addSprites(moreVehicles);
 const removed = spriteLayer.removeSprites(['vehicle-201', 'vehicle-302']);
 console.log(`削除したスプライト数: ${removed}`);
 
-// 一部だけリセット
 spriteLayer.removeAllSpriteImages('vehicle-202'); // 指定スプライトの画像だけを削除
 spriteLayer.removeAllSprites(); // スプライトをすべて削除
 ```
 
-多数のスプライトを一度に更新したい場合は、`mutateSprites` と `updateForEach` を利用すると効率良く処理できます。いずれも変更が発生したスプライト数を戻り値として返します。
+多数のスプライトを一度に更新したい場合は、`mutateSprites()` と `updateForEach()` を利用すると効率良く処理できます。いずれも変更が発生したスプライト数を戻り値として返します。
 
-- `mutateSprites`: 更新対象のスプライトIDを列挙できるときに便利です。サーバーから座標や状態の差分が届くケースで、新規作成・更新・削除をまとめて処理できます。
-- `updateForEach`: 登録済みスプライトをすべて走査して、クライアント側の状況に応じて一括調整します。コールバックが `false` を返すと反復処理を中断します。
+- `mutateSprites()`: 更新対象のスプライトIDを列挙できるときに便利です。サーバーから座標や状態の差分が届くケースで、新規作成・更新・削除をまとめて処理できます。
+- `updateForEach()`: 登録済みスプライトをすべて走査して、クライアント側の状況に応じて一括調整します。コールバックが `false` を返すと反復処理を中断します。
 
-以下は `mutateSprites` を使ってサーバー差分を適用する例です:
+以下は `mutateSprites()` を使ってサーバー差分を適用する例です:
 
 ```typescript
 import type { SpriteLocation, SpriteMutateSourceItem } from 'maplibre-gl-layers';
@@ -1001,10 +1031,11 @@ const changed = spriteLayer.mutateSprites(serverUpdates, {
     return 'notremove';
   },
 });
+
 console.log(`変更されたスプライト数: ${changed}`);
 ```
 
-ローカルの状態だけで既存スプライトを調整したい場合は、`updateForEach` を利用できます:
+ローカルの状態だけで既存スプライトを調整したい場合は、`updateForEach()` を利用できます:
 
 ```typescript
 // タグが bus のスプライトだけ透明度を下げる
@@ -1016,29 +1047,27 @@ const dimmed = spriteLayer.updateForEach((sprite, updater) => {
   updater.updateImage(0, 0, { opacity: 0.6 });
   return true; // 継続
 });
+
 console.log(`透明度を調整したスプライト数: ${dimmed}`);
 ```
 
-`updateForEach` の第2引数で受け取るアップデータは再利用されます。コールバックの外に保持せず、その場で必要な変更を記述してください。現在の画像構成を調べたい場合は、`updater.getImageIndexMap()` でサブレイヤーとオーダーの組み合わせを取得できます。
+`updateForEach()` の第2引数で受け取るアップデータは再利用されます。コールバックの外に保持せず、その場で必要な変更を記述してください。
+現在の画像構成を調べたい場合は、`updater.getImageIndexMap()` でサブレイヤーとオーダーの組み合わせを取得できます。
 
 ---
 
 ## 初期化オプション
 
-`createSpriteLayer(options?: SpriteLayerOptions)` では、スプライトレイヤーの識別子とスケーリング挙動を調整するためのオプションを指定できます。
+`createSpriteLayer()` では、スプライトレイヤーの識別子とスケーリング挙動を調整するためのオプションを指定できます:
 
 ```typescript
 // SpriteLayerの初期化オプションを指定して生成
 const spriteLayer = createSpriteLayer({
   id: 'vehicles',
-  spriteScaling: {  // スケーリングオプションの指定
-    zoomMin: 8,
-    zoomMax: 20,
-    scaleMin: 0.1,
-    scaleMax: 1,
-    spriteMinPixel: 24,
-    spriteMaxPixel: 100,
+  spriteScaling: {  // スケールリミットオプションの指定
     metersPerPixel: 1,
+    minScaleDistanceMeters: 500,
+    maxScaleDistanceMeters: 10000,
   },
   textureFiltering: {  // テクスチャ品質の指定
     minFilter: 'linear-mipmap-linear',
@@ -1049,45 +1078,51 @@ const spriteLayer = createSpriteLayer({
 ```
 
 - `id` - MapLibre に登録するレイヤー ID。省略すると `sprite-layer` が使用されます。
-- `spriteScaling.zoomMin` / `zoomMax` - ズーム範囲の下限と上限です。この範囲の内側では `scaleMin` から `scaleMax` へ線形補間、範囲外ではそれぞれの端値が適用されます。
-  上下が逆になっていても自動で入れ替え、警告を一度だけ出力します。
-- `spriteScaling.scaleMin` / `scaleMax` - `zoomMin` / `zoomMax` で適用されるスケール係数。
-  負の値は 0 に丸められてから補間に使用されます。
-- `spriteScaling.spriteMinPixel` / `spriteMaxPixel` - 描画後のスプライト（ビルボードとサーフェイス双方）の最大辺ピクセル数に対する下限・上限。
-  0 を指定すると該当する制限を無効化します。視認性を保ちつつ極端な拡大を抑える目的で利用します。
 - `spriteScaling.metersPerPixel` - テクスチャの 1px を地図上で何メートルとして扱うかの基準値です。
   大きい値ほど同じズームでも画像が大きく表示されます。
-  0 以下や非有限値を指定した場合は 1 に戻し、`console.warn` で警告します。
-  この値は全ての計算に影響を与えるため、デフォルトの1を指定することを強く推奨します。
-  スプライト画像の大きさを調整する場合は、画像毎に指定する`scale`を使用することができます。
-- `textureFiltering.minFilter` / `magFilter` - WebGL のテクスチャフィルタリングを上書きします。既定値はいずれも `linear` です。`minFilter` にミップマップ系 (`linear-mipmap-linear` など) を指定すると、新規登録される画像で自動的にミップマップが生成されます。
-- `textureFiltering.generateMipmaps` - ミップマップ必須でないフィルターを選んだ場合でもミップマップを生成します。WebGL2 もしくは 2 のベキ乗サイズの画像で大きく縮小した際の画質を改善できます。WebGL1 かつ非 2 のベキ乗画像でミップマップが生成できない場合は、自動的に `linear` フィルターへフォールバックします。
-- `textureFiltering.maxAnisotropy` - `EXT_texture_filter_anisotropic` 拡張が利用できる場合に異方性フィルタリング係数を指定します (1 以上)。地表に沿ったスプライトを浅い角度から見た際のシャープさを維持できます。指定値は GPU の上限でクランプされ、ミップマップが存在する場合のみ適用されます。
+  この値は全ての計算に影響するため、基本的にはデフォルトの1を指定し、スプライト画像毎に指定する `scale` で大きさを調整してください。
+- `spriteScaling.minScaleDistanceMeters` - カメラとの距離がこの値より近づいてもそれ以上は拡大しないしきい値（メートル）。0 または未指定で近距離側の制限を無効化します。
+- `spriteScaling.maxScaleDistanceMeters` - カメラとの距離がこの値より離れてもそれ以上は縮小しないしきい値（メートル）。0 または未指定で遠距離側の制限を無効化します。
+- `textureFiltering.minFilter` / `magFilter` - WebGL のテクスチャフィルタリングを上書きします。
+  既定値はいずれも `linear` です。`minFilter` にミップマップ系 (`linear-mipmap-linear` など) を指定すると、新規登録される画像で自動的にミップマップが生成されます。
+- `textureFiltering.generateMipmaps` - ミップマップ必須でないフィルターを選んだ場合でもミップマップを生成します。
+  WebGL2 もしくは 2 のベキ乗サイズの画像で大きく縮小した際の画質を改善できます。
+  WebGL1 かつ非 2 のベキ乗画像でミップマップが生成できない場合は、自動的に `linear` フィルターへフォールバックします。
+- `textureFiltering.maxAnisotropy` - `EXT_texture_filter_anisotropic` 拡張が利用できる場合に異方性フィルタリング係数を指定します (1 以上)。
+  地表に沿ったスプライトを浅い角度から見た際のシャープさを維持できます。指定値は GPU の上限でクランプされ、ミップマップが存在する場合のみ適用されます。
 
-これらの値（スケーリング／テクスチャフィルタリング）はレイヤー生成時に一度解決されます。動的に変更したい場合はレイヤーを再生成してください。
-無効な値を指定すると自動で補正され、開発中に気付きやすいよう `console.warn` 経由で通知されます。
+これらの値（スケーリング／テクスチャフィルタリング）はレイヤー生成時にのみ解決されます。動的に変更したい場合はレイヤーを再生成してください。
+無効な値を指定すると自動で補正され、`console.warn` 経由で通知されます。
 
-### スケーリングオプション
+### スケールリミットオプション
 
-スケーリングオプションを細かく調整する動機は、極端にズームインやズームアウトした時のレンダリング結果を改善することです。以下の例では、スケーリングオプションを指定しない場合にズームアウトした様子です。殆どのスプライトは非常に小さく、そこにスプライトが存在することすらわかりにくいです:
+スケールリミットオプションを細かく調整する動機は、極端なカメラ距離でもスプライトの視認性を保つことです。
+制限なし（未指定、または`UNLIMITED_SPRITE_SCALING_OPTIONS`）の状態で、大きくズームインするとスプライトが非常に大きく描画され、ズームアウトするとスプライトが非常にに小さくなり、存在がわかりづらくなります:
 
 ![Unlimited](images/scaling1.png)
 
-適度にスケーリング制限を行う標準的なオプションとして、`STANDARD_SPRITE_SCALING_OPTIONS` を使用することができます。このオプションを使用すると、ズームイン・ズームアウト時のスプライト画像のスケーリングに制限が適用され、ズームアウト時も何ががそこに存在することはわかります:
+適度にスケーリング制限を行う標準的なオプションとして、`STANDARD_SPRITE_SCALING_OPTIONS` を使用することができます。
+これは、カメラが約500mより近づいてもそれ以上は拡大せず、約10kmより遠ざかってもこれ以上縮小しません。
+
+例えば、このオプションを使用すると、ズームアウト時にもそこに何かが存在することがわかります:
 
 ![Standard](images/scaling2.png)
 
 ```typescript
-// 標準的なスケーリングオプションを指定して生成
+// 標準的なスケールリミットオプションを指定して生成
 const spriteLayer = createSpriteLayer({
   id: 'vehicles',
   spriteScaling: STANDARD_SPRITE_SCALING_OPTIONS,
 });
 ```
 
-[デモページ](https://kekyo.github.io/maplibre-gl-layers/) では、`Standard`と`Unlimited`を切り替えるボタンがあります。ズームイン・ズームアウトで何が起きるのかを確かめてみると良いでしょう。
+もちろん、`spriteScaling`の値を明示的に指定して、制限距離を自由に決めることが出来ます。
 
-注意: デフォルトのスケーリングオプションが「無制限」であるのは、制限を導入すると、正確なサイズ描画が失われるからです。特に画像やテキストの配置を試行錯誤する場合は、スケーリングオプションを無効化することを強くおすすめします。
+[デモページ](https://kekyo.github.io/maplibre-gl-layers/) では、`Standard`と`Unlimited`を切り替えるボタンがあります。
+ズームイン・ズームアウトで何が起きるのかを確かめてみると良いでしょう。
+
+注意: デフォルトのスケーリングオプションが「無制限」であるのは、制限を導入すると正確なサイズ描画が失われるからです。
+画像やテキストの配置を調整する時は無制限にしておき、見やすさを重視したいときに制限を有効化すると良いでしょう。
 
 ---
 
@@ -1193,6 +1228,7 @@ const desiredVariant = available ? 'simd-mt' : 'simd';
 const effectiveVariant = await initializeRuntimeHost({
   variant: desiredVariant,
 });
+
 console.log(`実際に使用されたバリアント: ${effectiveVariant}`);
 ```
 
@@ -1200,7 +1236,7 @@ console.log(`実際に使用されたバリアント: ${effectiveVariant}`);
 
 ## 動機
 
-移動体や地物を大量に表示させたい場合に、MapLibre標準の`Facilities`では機能的な制約が大きかったのと、もっと簡単かつ直接的に動的な操作出来るAPIが欲しかったため設計しました。
+移動体や地物を大量に表示させたい場合に、MapLibre標準の`Facilities`では機能的な制約が大きかったのと、もっと簡単かつ直接的に動的な操作が出来るAPIが欲しかったため設計しました。
 
 MapLibreのFacilitiesは、いわゆるイミュータビリティ（不変）を実現するAPIです。
 それ自体は良いことなのですが、多量の座標点（スプライト）を動的に扱うには邪魔で、パフォーマンスが著しく低下します。

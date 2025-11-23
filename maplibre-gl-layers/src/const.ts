@@ -5,11 +5,7 @@
 // https://github.com/kekyo/maplibre-gl-layers
 
 import type { Rect } from './utils/looseQuadTree';
-import type {
-  SpriteAnchor,
-  SpriteImageOffset,
-  SpriteTextGlyphHorizontalAlign,
-} from './types';
+import type { SpriteAnchor, SpriteTextGlyphHorizontalAlign } from './types';
 import type { RgbaColor } from './internalTypes';
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -21,7 +17,7 @@ export const DEFAULT_ANCHOR: Readonly<SpriteAnchor> = {
 } as const;
 
 /** Default image offset applied when none is provided. */
-export const DEFAULT_IMAGE_OFFSET: Readonly<SpriteImageOffset> = {
+export const DEFAULT_IMAGE_OFFSET = {
   offsetMeters: 0,
   offsetDeg: 0,
 } as const;

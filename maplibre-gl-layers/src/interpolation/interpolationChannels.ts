@@ -9,9 +9,10 @@
  * Centralizes rotation and offset channel operations so SpriteLayer stays focused on orchestration.
  */
 
-import type { SpriteInterpolationOptions, SpriteImageOffset } from '../types';
+import type { SpriteInterpolationOptions } from '../types';
 import type {
   InternalSpriteImageState,
+  MutableSpriteInterpolation,
   SpriteInterpolationState,
 } from '../internalTypes';
 
@@ -23,13 +24,22 @@ import {
   createDistanceInterpolationState,
   evaluateDistanceInterpolation,
 } from './distanceInterpolation';
-import {
-  normalizeAngleDeg,
-  resolveRotationTarget,
-} from './rotationInterpolation';
-import { clampOpacity } from '../utils/math';
+import { resolveRotationTarget } from './rotationInterpolation';
+import { clampOpacity, normalizeAngleDeg } from '../utils/math';
 
 //////////////////////////////////////////////////////////////////////////////////////////
+
+export interface SpriteInterpolationChannelDescriptor {
+  readonly resolveInterpolation: (
+    image: InternalSpriteImageState
+  ) => MutableSpriteInterpolation<number>;
+  readonly normalize?: (value: number) => number;
+  readonly applyValue: (image: InternalSpriteImageState, value: number) => void;
+  readonly applyFinalValue?: (
+    image: InternalSpriteImageState,
+    value: number
+  ) => void;
+}
 
 interface DegreeInterpolationStepOptions {
   readonly normalize?: (value: number) => number;
@@ -56,10 +66,7 @@ const stepDegreeInterpolationState = (
     return { state: null, active: false };
   }
 
-  const evaluation = evaluateDegreeInterpolation({
-    state: interpolationState,
-    timestamp,
-  });
+  const evaluation = evaluateDegreeInterpolation(interpolationState, timestamp);
 
   if (interpolationState.startTimestamp < 0) {
     interpolationState.startTimestamp = evaluation.effectiveStartTimestamp;
@@ -80,44 +87,53 @@ const stepDegreeInterpolationState = (
   return { state: interpolationState, active: true };
 };
 
-const resolveManualRotationFromDisplayed = (
-  image: InternalSpriteImageState
+const resolveAutoRotationDeg = (
+  image: InternalSpriteImageState,
+  spriteAutoRotationDeg: number
 ): number => {
-  const baseRotation = image.resolvedBaseRotateDeg ?? 0;
-  const fallbackRotation = normalizeAngleDeg(
-    baseRotation + image.rotationCommandDeg
+  return image.autoRotation ? spriteAutoRotationDeg : 0;
+};
+
+const resolveCurrentRotation = (
+  image: InternalSpriteImageState,
+  spriteAutoRotationDeg: number
+): number => {
+  const targetAngle = normalizeAngleDeg(
+    resolveAutoRotationDeg(image, spriteAutoRotationDeg) + image.rotateDeg
   );
-  const displayedRotation = Number.isFinite(image.displayedRotateDeg)
-    ? image.displayedRotateDeg
-    : fallbackRotation;
-  return normalizeAngleDeg(displayedRotation - baseRotation);
+  const current = image.finalRotateDeg.current;
+  return Number.isFinite(current) ? normalizeAngleDeg(current) : targetAngle;
 };
 
 const refreshRotateDegInterpolatedValues = (
-  image: InternalSpriteImageState
+  image: InternalSpriteImageState,
+  spriteAutoRotationDeg: number
 ): void => {
-  image.rotateDeg.current = resolveManualRotationFromDisplayed(image);
-  if (!image.rotateDeg.interpolation.state) {
-    image.rotateDeg.from = undefined;
-    image.rotateDeg.to = undefined;
+  image.finalRotateDeg.current = resolveCurrentRotation(
+    image,
+    spriteAutoRotationDeg
+  );
+  if (!image.finalRotateDeg.interpolation.state) {
+    image.finalRotateDeg.from = undefined;
+    image.finalRotateDeg.to = undefined;
   }
 };
 
 const updateImageDisplayedRotation = (
   image: InternalSpriteImageState,
+  spriteAutoRotationDeg: number,
   optionsOverride?: SpriteInterpolationOptions | null
 ): void => {
   const targetAngle = normalizeAngleDeg(
-    image.resolvedBaseRotateDeg + image.rotationCommandDeg
+    resolveAutoRotationDeg(image, spriteAutoRotationDeg) + image.rotateDeg
   );
-  const currentAngle = Number.isFinite(image.displayedRotateDeg)
-    ? image.displayedRotateDeg
-    : targetAngle;
-  const previousCommandAngle = image.rotateDeg.interpolation.lastCommandValue;
+  const currentAngle = resolveCurrentRotation(image, spriteAutoRotationDeg);
+  const previousCommandAngle =
+    image.finalRotateDeg.interpolation.lastCommandValue;
 
   const options =
     optionsOverride === undefined
-      ? image.rotateDeg.interpolation.options
+      ? image.finalRotateDeg.interpolation.options
       : optionsOverride;
 
   const { nextAngleDeg, interpolationState } = resolveRotationTarget({
@@ -127,13 +143,20 @@ const updateImageDisplayedRotation = (
     options: options ?? undefined,
   });
 
-  image.displayedRotateDeg = nextAngleDeg;
-  image.rotateDeg.interpolation.state = interpolationState;
+  image.finalRotateDeg.current = normalizeAngleDeg(
+    Number.isFinite(nextAngleDeg) ? nextAngleDeg : targetAngle
+  );
+  image.finalRotateDeg.interpolation.state = interpolationState;
 
   if (!interpolationState) {
-    image.displayedRotateDeg = targetAngle;
+    image.finalRotateDeg.current = targetAngle;
+    image.finalRotateDeg.from = undefined;
+    image.finalRotateDeg.to = undefined;
+  } else {
+    image.finalRotateDeg.from = normalizeAngleDeg(currentAngle);
+    image.finalRotateDeg.to = normalizeAngleDeg(targetAngle);
   }
-  image.rotateDeg.interpolation.lastCommandValue = targetAngle;
+  image.finalRotateDeg.interpolation.lastCommandValue = targetAngle;
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -143,29 +166,41 @@ const updateImageDisplayedRotation = (
  */
 export const syncImageRotationChannel = (
   image: InternalSpriteImageState,
+  spriteAutoRotationDeg: number,
   optionsOverride?: SpriteInterpolationOptions | null
 ): void => {
-  updateImageDisplayedRotation(image, optionsOverride);
-  refreshRotateDegInterpolatedValues(image);
+  updateImageDisplayedRotation(image, spriteAutoRotationDeg, optionsOverride);
+  refreshRotateDegInterpolatedValues(image, spriteAutoRotationDeg);
 };
 
 const stepRotationInterpolation = (
   image: InternalSpriteImageState,
+  spriteAutoRotationDeg: number,
   timestamp: number
 ): boolean => {
   const { state, active } = stepDegreeInterpolationState(
-    image.rotateDeg.interpolation.state,
+    image.finalRotateDeg.interpolation.state,
     timestamp,
     (value) => {
-      image.displayedRotateDeg = value;
+      const fallback = normalizeAngleDeg(
+        resolveAutoRotationDeg(image, spriteAutoRotationDeg) + image.rotateDeg
+      );
+      image.finalRotateDeg.current = normalizeAngleDeg(
+        Number.isFinite(value) ? value : fallback
+      );
     },
     {
-      normalize: normalizeAngleDeg,
+      normalize: (value) => {
+        const fallback = normalizeAngleDeg(
+          resolveAutoRotationDeg(image, spriteAutoRotationDeg) + image.rotateDeg
+        );
+        return normalizeAngleDeg(Number.isFinite(value) ? value : fallback);
+      },
     }
   );
 
-  image.rotateDeg.interpolation.state = state;
-  refreshRotateDegInterpolatedValues(image);
+  image.finalRotateDeg.interpolation.state = state;
+  refreshRotateDegInterpolatedValues(image, spriteAutoRotationDeg);
   return active;
 };
 
@@ -208,6 +243,8 @@ interface DistanceInterpolationStepResult {
   readonly active: boolean;
 }
 
+type OffsetUpdate = { offsetMeters: number; offsetDeg: number };
+
 const stepDistanceInterpolationState = (
   interpolationState: SpriteInterpolationState<number> | null,
   timestamp: number,
@@ -218,10 +255,10 @@ const stepDistanceInterpolationState = (
     return { state: null, active: false };
   }
 
-  const evaluation = evaluateDistanceInterpolation({
-    state: interpolationState,
-    timestamp,
-  });
+  const evaluation = evaluateDistanceInterpolation(
+    interpolationState,
+    timestamp
+  );
 
   if (interpolationState.startTimestamp < 0) {
     interpolationState.startTimestamp = evaluation.effectiveStartTimestamp;
@@ -259,12 +296,14 @@ export const clearOffsetMetersInterpolation = (
 export const clearOpacityInterpolation = (
   image: InternalSpriteImageState
 ): void => {
-  image.opacity.interpolation.state = null;
+  image.finalOpacity.interpolation.state = null;
+  image.finalOpacity.from = undefined;
+  image.finalOpacity.to = undefined;
 };
 
 const applyOffsetDegUpdate = (
   image: InternalSpriteImageState,
-  nextOffset: SpriteImageOffset,
+  nextOffset: OffsetUpdate,
   interpolationOptions?: SpriteInterpolationOptions | null
 ): void => {
   const options = interpolationOptions;
@@ -302,7 +341,7 @@ const applyOffsetDegUpdate = (
 
 const applyOffsetMetersUpdate = (
   image: InternalSpriteImageState,
-  nextOffset: SpriteImageOffset,
+  nextOffset: OffsetUpdate,
   interpolationOptions?: SpriteInterpolationOptions | null
 ): void => {
   const options = interpolationOptions;
@@ -369,32 +408,32 @@ const runOpacityTargetTransition = (
   const options = interpolationOptions;
 
   if (!options || options.durationMs <= 0) {
-    image.opacity.current = clampedTarget;
-    image.opacity.from = undefined;
-    image.opacity.to = undefined;
-    image.opacity.interpolation.state = null;
+    image.finalOpacity.current = clampedTarget;
+    image.finalOpacity.from = undefined;
+    image.finalOpacity.to = undefined;
+    image.finalOpacity.interpolation.state = null;
   } else {
     const { state, requiresInterpolation } = createDistanceInterpolationState({
-      currentValue: clampOpacity(image.opacity.current),
+      currentValue: clampOpacity(image.finalOpacity.current),
       targetValue: clampedTarget,
-      previousCommandValue: image.opacity.interpolation.lastCommandValue,
+      previousCommandValue: image.finalOpacity.interpolation.lastCommandValue,
       options,
     });
 
     if (requiresInterpolation) {
-      image.opacity.interpolation.state = state;
-      image.opacity.from = image.opacity.current;
-      image.opacity.to = clampedTarget;
+      image.finalOpacity.interpolation.state = state;
+      image.finalOpacity.from = image.finalOpacity.current;
+      image.finalOpacity.to = clampedTarget;
     } else {
-      image.opacity.current = clampedTarget;
-      image.opacity.from = undefined;
-      image.opacity.to = undefined;
-      image.opacity.interpolation.state = null;
+      image.finalOpacity.current = clampedTarget;
+      image.finalOpacity.from = undefined;
+      image.finalOpacity.to = undefined;
+      image.finalOpacity.interpolation.state = null;
     }
   }
 
-  image.opacity.interpolation.lastCommandValue = clampedTarget;
-  image.opacity.interpolation.targetValue = clampedTarget;
+  image.finalOpacity.interpolation.lastCommandValue = clampedTarget;
+  image.finalOpacity.interpolation.targetValue = clampedTarget;
 };
 
 export const applyOpacityUpdate = (
@@ -406,7 +445,8 @@ export const applyOpacityUpdate = (
   const clampedBase = clampOpacity(nextOpacity);
   const lodMultiplier =
     typeof image.lodOpacity === 'number' ? image.lodOpacity : 1;
-  image.opacity.interpolation.baseValue = clampedBase;
+  image.finalOpacity.interpolation.baseValue = clampedBase;
+  image.opacity = clampedBase;
   runOpacityTargetTransition(
     image,
     clampedBase * spriteOpacityMultiplier * lodMultiplier,
@@ -431,27 +471,28 @@ const stepOpacityInterpolation = (
   timestamp: number
 ): boolean => {
   const { state, active } = stepDistanceInterpolationState(
-    image.opacity.interpolation.state,
+    image.finalOpacity.interpolation.state,
     timestamp,
     (value) => {
-      image.opacity.current = value;
+      image.finalOpacity.current = value;
     },
     {
       normalize: clampOpacity,
     }
   );
 
-  image.opacity.interpolation.state = state;
+  image.finalOpacity.interpolation.state = state;
   if (!state) {
-    image.opacity.from = undefined;
-    image.opacity.to = undefined;
+    image.finalOpacity.from = undefined;
+    image.finalOpacity.to = undefined;
   }
   return active;
 };
 
 type ImageInterpolationStepper = (
   image: InternalSpriteImageState,
-  timestamp: number
+  timestamp: number,
+  autoRotationDeg: number
 ) => boolean;
 
 export type ImageInterpolationStepperId =
@@ -468,16 +509,29 @@ interface ImageInterpolationStepperEntry {
 const IMAGE_INTERPOLATION_STEPPERS: readonly ImageInterpolationStepperEntry[] =
   [
     { id: 'rotation', step: stepRotationInterpolation },
-    { id: 'offsetDeg', step: stepOffsetDegInterpolation },
-    { id: 'offsetMeters', step: stepOffsetMetersInterpolation },
-    { id: 'opacity', step: stepOpacityInterpolation },
-  ];
+    {
+      id: 'offsetDeg',
+      step: (image, timestamp, _autoRotationDeg) =>
+        stepOffsetDegInterpolation(image, timestamp),
+    },
+    {
+      id: 'offsetMeters',
+      step: (image, timestamp, _autoRotationDeg) =>
+        stepOffsetMetersInterpolation(image, timestamp),
+    },
+    {
+      id: 'opacity',
+      step: (image, timestamp, _autoRotationDeg) =>
+        stepOpacityInterpolation(image, timestamp),
+    },
+  ] as const;
 
 /**
  * Executes all interpolation steppers for an image and reports whether any remain active.
  */
 export interface StepSpriteImageInterpolationOptions {
   readonly skipChannels?: Partial<Record<ImageInterpolationStepperId, boolean>>;
+  readonly autoRotationDeg?: number;
 }
 
 export const stepSpriteImageInterpolations = (
@@ -487,11 +541,12 @@ export const stepSpriteImageInterpolations = (
 ): boolean => {
   let active = false;
   const skipChannels = options?.skipChannels ?? null;
+  const autoRotationDeg = options?.autoRotationDeg ?? 0;
   for (const { id, step } of IMAGE_INTERPOLATION_STEPPERS) {
     if (skipChannels && skipChannels[id]) {
       continue;
     }
-    if (step(image, timestamp)) {
+    if (step(image, timestamp, autoRotationDeg)) {
       active = true;
     }
   }
@@ -502,10 +557,10 @@ export const hasActiveImageInterpolations = (
   image: InternalSpriteImageState
 ): boolean => {
   return (
-    image.rotateDeg.interpolation.state !== null ||
+    image.finalRotateDeg.interpolation.state !== null ||
     image.offset.offsetDeg.interpolation.state !== null ||
     image.offset.offsetMeters.interpolation.state !== null ||
-    image.opacity.interpolation.state !== null
+    image.finalOpacity.interpolation.state !== null
   );
 };
 
@@ -519,9 +574,20 @@ export interface ApplyOffsetUpdateOptions {
  */
 export const applyOffsetUpdate = (
   image: InternalSpriteImageState,
-  nextOffset: SpriteImageOffset,
+  nextOffset: OffsetUpdate,
   options: ApplyOffsetUpdateOptions = {}
 ): void => {
-  applyOffsetDegUpdate(image, nextOffset, options.deg);
-  applyOffsetMetersUpdate(image, nextOffset, options.meters);
+  const shouldUpdateMeters =
+    options.meters !== undefined ||
+    nextOffset.offsetMeters !== image.offset.offsetMeters.current;
+  if (shouldUpdateMeters) {
+    applyOffsetMetersUpdate(image, nextOffset, options.meters);
+  }
+
+  const shouldUpdateDeg =
+    options.deg !== undefined ||
+    nextOffset.offsetDeg !== image.offset.offsetDeg.current;
+  if (shouldUpdateDeg) {
+    applyOffsetDegUpdate(image, nextOffset, options.deg);
+  }
 };

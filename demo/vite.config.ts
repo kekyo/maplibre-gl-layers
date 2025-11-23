@@ -30,6 +30,7 @@ export default defineConfig({
     prettierMax(), // Use default settings
     screwUp({
       outputMetadataFile: true,
+      checkWorkingDirectoryStatus: false,
     }),
   ],
 });

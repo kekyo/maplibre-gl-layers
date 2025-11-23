@@ -25,9 +25,9 @@ import {
   applyOpacityUpdate,
   stepSpriteImageInterpolations,
 } from '../../src/interpolation/interpolationChannels';
+import { createDegreeInterpolationState } from '../../src/interpolation/degreeInterpolation';
 import {
   calculateBillboardAnchorShiftPixels,
-  calculateZoomScaleFactor,
   resolveScalingOptions,
   type ResolvedSpriteScalingOptions,
 } from '../../src/utils/math';
@@ -53,7 +53,6 @@ import {
 } from '../../src/internalTypes';
 import type {
   SpriteAnchor,
-  SpriteImageOffset,
   SpriteImageLineAttribute,
   SpriteLocation,
   SpritePoint,
@@ -70,7 +69,7 @@ import {
   SURFACE_BASE_CORNERS,
 } from '../../src/gl/shader';
 import { createDistanceInterpolationState } from '../../src/interpolation/distanceInterpolation';
-import { createInterpolationState } from '../../src/interpolation/interpolation';
+import { createLocationInterpolationState } from '../../src/interpolation/locationInterpolation';
 
 const SCALE = 256;
 const IDENTITY_MATRIX = new Float64Array([
@@ -78,7 +77,9 @@ const IDENTITY_MATRIX = new Float64Array([
 ]);
 
 const DEFAULT_ANCHOR: SpriteAnchor = { x: 0, y: 0 };
-const DEFAULT_OFFSET: SpriteImageOffset = { offsetMeters: 0, offsetDeg: 0 };
+type TestSpriteOffset = { offsetMeters: number; offsetDeg: number };
+
+const DEFAULT_OFFSET: TestSpriteOffset = { offsetMeters: 0, offsetDeg: 0 };
 const DEFAULT_CLIP_CONTEXT: ClipContext = { mercatorMatrix: IDENTITY_MATRIX };
 
 type SpriteStateOverrides = Partial<
@@ -126,7 +127,7 @@ const isMutableInterpolatedValues = <TValue>(
 };
 
 const isMutableOffset = (
-  offset: MutableSpriteImageInterpolatedOffset | SpriteImageOffset | undefined
+  offset: MutableSpriteImageInterpolatedOffset | TestSpriteOffset | undefined
 ): offset is MutableSpriteImageInterpolatedOffset => {
   if (!offset) {
     return false;
@@ -215,7 +216,7 @@ const createImageResource = (id: string): RegisteredImage => ({
 const originReference = createSpriteOriginReference();
 
 const resolveMutableOffset = (
-  offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset | undefined
+  offset?: MutableSpriteImageInterpolatedOffset | TestSpriteOffset | undefined
 ): MutableSpriteImageInterpolatedOffset => {
   if (isMutableOffset(offset)) {
     return {
@@ -227,7 +228,7 @@ const resolveMutableOffset = (
       ),
     };
   }
-  const base: SpriteImageOffset = offset ?? DEFAULT_OFFSET;
+  const base: TestSpriteOffset = offset ?? DEFAULT_OFFSET;
   return {
     offsetMeters: cloneDistanceInterpolatedValues(undefined, base.offsetMeters),
     offsetDeg: cloneDegreeInterpolatedValues(undefined, base.offsetDeg),
@@ -295,33 +296,27 @@ const cloneOpacityInterpolatedValues = (
 };
 
 const resolveOpacityState = (
-  value?: MutableSpriteInterpolatedValues<number> | number
+  value?: MutableSpriteInterpolatedValues<number>
 ): MutableSpriteInterpolatedValues<number> => {
-  if (isMutableInterpolatedValues<number>(value)) {
-    return cloneOpacityInterpolatedValues(
-      value as MutableSpriteInterpolatedValues<number>,
-      (value as MutableSpriteInterpolatedValues<number>).current
-    );
-  }
-  const base = typeof value === 'number' ? value : 1;
-  return cloneOpacityInterpolatedValues(undefined, base);
+  const base = value?.current ?? 1;
+  return cloneOpacityInterpolatedValues(value, base);
 };
 
 type ImageStateOverrides = Partial<
   Omit<
     InternalSpriteImageState,
-    | 'opacity'
+    | 'finalOpacity'
     | 'offset'
-    | 'rotateDeg'
+    | 'finalRotateDeg'
     | 'border'
     | 'borderPixelWidth'
     | 'leaderLine'
     | 'leaderLinePixelWidth'
   >
 > & {
-  opacity?: MutableSpriteInterpolatedValues<number> | number;
-  offset?: MutableSpriteImageInterpolatedOffset | SpriteImageOffset;
-  rotateDeg?: MutableSpriteInterpolatedValues<number> | number;
+  finalOpacity?: MutableSpriteInterpolatedValues<number>;
+  offset?: MutableSpriteImageInterpolatedOffset | TestSpriteOffset;
+  finalRotateDeg?: MutableSpriteInterpolatedValues<number>;
   border?:
     | ResolvedSpriteImageLineAttribute
     | SpriteImageLineAttribute
@@ -377,25 +372,13 @@ const createImageState = (
     originLocation !== undefined
       ? originReference.encodeKey(originLocation.subLayer, originLocation.order)
       : SPRITE_ORIGIN_REFERENCE_KEY_NONE;
-  const resolvedOpacity = resolveOpacityState(
-    overrides.opacity as MutableSpriteInterpolatedValues<number>
-  );
+  const resolvedOpacity = resolveOpacityState(overrides.finalOpacity);
   const resolvedOffset = resolveMutableOffset(overrides.offset);
-  const rotateDegOverride = overrides.rotateDeg;
-  const rotationCommandDeg =
-    overrides.rotationCommandDeg ??
-    (isMutableInterpolatedValues<number>(rotateDegOverride)
-      ? rotateDegOverride.current
-      : typeof rotateDegOverride === 'number'
-        ? rotateDegOverride
-        : (overrides.displayedRotateDeg ?? 0));
+  const rotateDegOverride = overrides.finalRotateDeg;
+  const rotateDegValue = overrides.rotateDeg ?? rotateDegOverride?.current ?? 0;
   const rotateDeg = cloneDegreeInterpolatedValues(
-    isMutableInterpolatedValues<number>(rotateDegOverride)
-      ? (rotateDegOverride as MutableSpriteInterpolatedValues<number>)
-      : undefined,
-    typeof rotateDegOverride === 'number'
-      ? rotateDegOverride
-      : rotationCommandDeg
+    rotateDegOverride,
+    rotateDegValue
   );
   const border = resolveLineAttribute(overrides.border);
   const leaderLine = resolveLineAttribute(overrides.leaderLine);
@@ -450,7 +433,10 @@ const createImageState = (
     imageId: overrides.imageId ?? 'image',
     imageHandle: overrides.imageHandle ?? 0,
     mode: overrides.mode ?? 'billboard',
-    opacity: resolvedOpacity,
+    rotateDeg: rotateDegValue,
+    opacity:
+      resolvedOpacity.interpolation.baseValue ?? resolvedOpacity.current ?? 1,
+    finalOpacity: resolvedOpacity,
     lodOpacity: overrides.lodOpacity ?? 1,
     scale: overrides.scale ?? 1,
     anchor: overrides.anchor ?? DEFAULT_ANCHOR,
@@ -459,12 +445,9 @@ const createImageState = (
     leaderLine,
     leaderLinePixelWidth: overrides.leaderLinePixelWidth ?? 0,
     offset: resolvedOffset,
-    rotateDeg,
-    rotationCommandDeg,
-    displayedRotateDeg: overrides.displayedRotateDeg ?? rotationCommandDeg,
+    finalRotateDeg: rotateDeg,
     autoRotation: overrides.autoRotation ?? false,
     autoRotationMinDistanceMeters: overrides.autoRotationMinDistanceMeters ?? 0,
-    resolvedBaseRotateDeg: overrides.resolvedBaseRotateDeg ?? 0,
     originLocation,
     originReferenceKey: overrides.originReferenceKey ?? originReferenceKey,
     originRenderTargetIndex:
@@ -488,8 +471,7 @@ const createSpriteState = (
     layers.get(image.subLayer)!.set(image.order, image);
   });
 
-  const baseLocation =
-    overrides.location?.current ?? ({ lng: 0, lat: 0, z: 0 } as SpriteLocation);
+  const baseLocation = overrides.location?.current ?? { lng: 0, lat: 0, z: 0 };
   const cachedMercator =
     overrides.cachedMercator ??
     MercatorCoordinate.fromLngLat(baseLocation, baseLocation.z ?? 0);
@@ -523,7 +505,7 @@ const createSpriteState = (
     tag: overrides.tag ?? null,
     lastAutoRotationLocation:
       overrides.lastAutoRotationLocation ?? baseLocation,
-    lastAutoRotationAngleDeg: overrides.lastAutoRotationAngleDeg ?? 0,
+    currentAutoRotateDeg: overrides.currentAutoRotateDeg ?? 0,
     autoRotationInvalidated: overrides.autoRotationInvalidated ?? false,
     interpolationDirty: overrides.interpolationDirty ?? false,
     cachedMercator,
@@ -556,7 +538,6 @@ interface CollectContext {
   readonly paramsBefore: PrepareDrawSpriteImageParamsBefore<null>;
   readonly originCenterCache: ImageCenterCacheLike;
   readonly zoom: number;
-  readonly zoomScaleFactor: number;
 }
 
 interface CollectContextOverrides {
@@ -568,14 +549,11 @@ interface CollectContextOverrides {
   readonly images?: ReadonlyMap<string, Readonly<RegisteredImage>>;
   readonly clipContext?: Readonly<ClipContext> | null;
   readonly baseMetersPerPixel?: number;
-  readonly spriteMinPixel?: number;
-  readonly spriteMaxPixel?: number;
   readonly drawingBufferWidth?: number;
   readonly drawingBufferHeight?: number;
   readonly pixelRatio?: number;
   readonly resolvedScaling?: ResolvedSpriteScalingOptions;
   readonly zoom?: number;
-  readonly zoomScaleFactor?: number;
   readonly originCenterCache?: ImageCenterCacheLike;
 }
 
@@ -589,14 +567,11 @@ const createCollectContext = (
     images = new Map<string, RegisteredImage>(),
     clipContext: clipOverride,
     baseMetersPerPixel = 1,
-    spriteMinPixel = 0,
-    spriteMaxPixel = 4096,
     drawingBufferWidth = 1024,
     drawingBufferHeight = 768,
     pixelRatio = 1,
     resolvedScaling: resolvedScalingOverride,
     zoom: zoomOverride,
-    zoomScaleFactor: zoomScaleFactorOverride,
     originCenterCache: originCacheOverride,
   } = overrides;
 
@@ -612,13 +587,7 @@ const createCollectContext = (
     resolvedScalingOverride ??
     resolveScalingOptions({
       metersPerPixel: baseMetersPerPixel,
-      spriteMinPixel,
-      spriteMaxPixel,
-      zoomMin: zoom,
-      zoomMax: zoom,
     });
-  const zoomScaleFactor =
-    zoomScaleFactorOverride ?? calculateZoomScaleFactor(zoom, resolvedScaling);
 
   const originIndexBySprite = new Map<string, Map<number, number>>();
 
@@ -669,13 +638,10 @@ const createCollectContext = (
     imageHandleBuffers,
     clipContext,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
     resolvedScaling,
-    zoomScaleFactor,
   };
 
   return {
@@ -684,7 +650,6 @@ const createCollectContext = (
     originCenterCache:
       originCacheOverride ?? (new Map() as ImageCenterCacheLike),
     zoom,
-    zoomScaleFactor,
   };
 };
 
@@ -693,10 +658,7 @@ const createAfterParams = (
   overrides: Partial<
     Omit<
       PrepareDrawSpriteImageParamsAfter,
-      | 'images'
       | 'baseMetersPerPixel'
-      | 'spriteMinPixel'
-      | 'spriteMaxPixel'
       | 'clipContext'
       | 'drawingBufferWidth'
       | 'drawingBufferHeight'
@@ -708,8 +670,6 @@ const createAfterParams = (
     imageResources: before.imageResources,
     imageHandleBuffers: before.imageHandleBuffers,
     baseMetersPerPixel: before.baseMetersPerPixel,
-    spriteMinPixel: before.spriteMinPixel,
-    spriteMaxPixel: before.spriteMaxPixel,
     drawingBufferWidth: before.drawingBufferWidth,
     drawingBufferHeight: before.drawingBufferHeight,
     pixelRatio: before.pixelRatio,
@@ -743,7 +703,6 @@ const prepareItems = (
       context.projectionHost,
       item,
       context.zoom,
-      context.zoomScaleFactor,
       originCenterCache,
       paramsAfter
     );
@@ -846,7 +805,6 @@ describe('collectDepthSortedItems', () => {
     const result = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -883,7 +841,6 @@ describe('collectDepthSortedItems', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -908,7 +865,6 @@ describe('collectDepthSortedItems', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -946,7 +902,6 @@ describe('collectDepthSortedItems', () => {
     const biased = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -981,7 +936,6 @@ describe('collectDepthSortedItems', () => {
     const result = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1002,7 +956,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1046,7 +999,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1077,7 +1029,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1109,7 +1060,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1117,7 +1067,7 @@ describe('prepareDrawSpriteImages', () => {
     const prepared = prepareItems(context, items);
 
     __calculationHostTestInternals.applyVisibilityDistanceLod(prepared);
-    expect(image.opacity.interpolation.targetValue).toBe(0);
+    expect(image.finalOpacity.interpolation.targetValue).toBe(0);
     const params: RenderInterpolationParams<null> = {
       sprites: [sprite],
       timestamp: 0,
@@ -1157,7 +1107,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1175,7 +1124,7 @@ describe('prepareDrawSpriteImages', () => {
         prepared
       );
     expect(result.hasActiveInterpolation).toBe(true);
-    expect(image.opacity.interpolation.state).not.toBeNull();
+    expect(image.finalOpacity.interpolation.state).not.toBeNull();
   });
 
   it('advances opacity interpolation when processed after preparation', () => {
@@ -1200,8 +1149,8 @@ describe('prepareDrawSpriteImages', () => {
       initialParams,
       []
     );
-    expect(image.opacity.interpolation.state?.startTimestamp).toBe(0);
-    expect(image.opacity.current).toBeCloseTo(1, 6);
+    expect(image.finalOpacity.interpolation.state?.startTimestamp).toBe(0);
+    expect(image.finalOpacity.current).toBeCloseTo(1, 6);
 
     const nextParams: RenderInterpolationParams<null> = {
       sprites: [sprite],
@@ -1211,8 +1160,8 @@ describe('prepareDrawSpriteImages', () => {
       nextParams,
       []
     );
-    expect(image.opacity.current).toBeCloseTo(0.5, 6);
-    expect(image.opacity.interpolation.state?.startTimestamp).toBe(0);
+    expect(image.finalOpacity.current).toBeCloseTo(0.5, 6);
+    expect(image.finalOpacity.interpolation.state?.startTimestamp).toBe(0);
   });
 
   it('uses billboard shader geometry when enabled', () => {
@@ -1227,7 +1176,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1266,7 +1214,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1295,7 +1242,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1331,7 +1277,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1403,7 +1348,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1457,7 +1401,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1591,7 +1534,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1631,7 +1573,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1677,8 +1618,6 @@ describe('prepareDrawSpriteImages', () => {
       imageResources,
       imageHandleBuffers,
       baseMetersPerPixel: 1,
-      spriteMinPixel: 0,
-      spriteMaxPixel: 4096,
       drawingBufferWidth: 1024,
       drawingBufferHeight: 768,
       pixelRatio: 1,
@@ -1697,7 +1636,6 @@ describe('prepareDrawSpriteImages', () => {
       projectionHost,
       depthItem,
       projectionHost.getZoom(),
-      1,
       new Map() as ImageCenterCacheLike,
       paramsAfter
     );
@@ -1722,7 +1660,7 @@ describe('processInterpolationsInternal', () => {
     });
 
     const currentLocation: SpriteLocation = { lng: 0, lat: 0 };
-    const { state: spriteState } = createInterpolationState({
+    const { state: spriteState } = createLocationInterpolationState({
       currentLocation,
       lastCommandLocation: currentLocation,
       nextCommandLocation: { lng: 10, lat: 0 },
@@ -1746,7 +1684,7 @@ describe('processInterpolationsInternal', () => {
       evaluateDegree: vi.fn(() => []),
       evaluateSprite: vi.fn((requests) =>
         requests.map(() => ({
-          location: { lng: 3, lat: 1 },
+          value: { lng: 3, lat: 1 },
           completed: false,
           effectiveStartTimestamp: timestamp - 100,
         }))
@@ -1768,6 +1706,12 @@ describe('processInterpolationsInternal', () => {
     expect(handlers.evaluateSprite).toHaveBeenCalledTimes(1);
     expect(image.offset.offsetMeters.current).toBeCloseTo(4);
     expect(sprite.location.current.lng).toBeCloseTo(3);
+    expect(image.offset.offsetMeters.interpolation.state?.startTimestamp).toBe(
+      timestamp - 100
+    );
+    expect(sprite.location.interpolation.state?.startTimestamp).toBe(
+      timestamp - 100
+    );
     expect(sprite.location.interpolation.state).not.toBeNull();
   });
 
@@ -1805,5 +1749,43 @@ describe('processInterpolationsInternal', () => {
     expect(handlers.evaluateDistance).toHaveBeenCalledTimes(1);
     expect(image.offset.offsetMeters.current).toBe(6);
     expect(image.offset.offsetMeters.interpolation.state).toBeNull();
+  });
+
+  it('writes degree interpolation start timestamp back into state', () => {
+    const { state: rotationState } = createDegreeInterpolationState({
+      currentValue: 0,
+      targetValue: 90,
+      options: { durationMs: 1000, easing: { type: 'linear' } },
+    });
+    const image = createImageState({
+      imageHandle: 2,
+      finalRotateDeg: cloneDegreeInterpolatedValues(undefined, 0),
+      rotationInterpolationState: rotationState,
+    });
+    const sprite = createSpriteState('sprite-rotation', [image]);
+
+    const effectiveStart = 125;
+    processInterpolationsInternal(
+      {
+        sprites: [sprite],
+        timestamp: 200,
+      },
+      {
+        prepare: vi.fn(),
+        evaluateDistance: vi.fn(() => []),
+        evaluateDegree: vi.fn((states) =>
+          states.map(() => ({
+            value: 45,
+            completed: false,
+            effectiveStartTimestamp: effectiveStart,
+          }))
+        ),
+        evaluateSprite: vi.fn(() => []),
+      }
+    );
+
+    expect(image.finalRotateDeg.interpolation.state?.startTimestamp).toBe(
+      effectiveStart
+    );
   });
 });

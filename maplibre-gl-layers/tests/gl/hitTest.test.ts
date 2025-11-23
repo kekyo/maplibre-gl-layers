@@ -10,7 +10,8 @@ import {
   calculateBillboardPixelDimensions,
   calculateEffectivePixelsPerMeter,
   calculateMetersPerPixelAtLatitude,
-  calculateZoomScaleFactor,
+  calculateDistanceScaleFactor,
+  calculateCartesianDistanceMeters,
   resolveScalingOptions,
 } from '../../src/utils/math';
 import type { ProjectionHostParams } from '../../src/host/projectionHost';
@@ -699,7 +700,7 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
     const state = layer.getSpriteState(spriteId);
     const image = state?.images.get(0)?.get(0);
     expect(image).toBeDefined();
-    return image?.opacity.current ?? -1;
+    return image?.finalOpacity.current ?? -1;
   };
 
   const hideSpriteViaPseudoLod = (
@@ -738,7 +739,6 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
     const { color, width } = call!;
     const resolvedScaling = resolveScalingOptions();
     const zoom = map.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
       location.lat
@@ -747,21 +747,27 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
       metersPerPixelAtLat,
       map.transform.cameraToCenterDistance
     );
+    const cameraDistanceMeters = calculateCartesianDistanceMeters(
+      { ...map.getCenter(), z: map.transform?.cameraToCenterDistance ?? 0 },
+      { ...location, z: 0 }
+    );
+    const distanceScaleFactor = calculateDistanceScaleFactor(
+      cameraDistanceMeters,
+      resolvedScaling
+    );
     const imageScale = spriteImage.scale ?? 1;
     const pixelDims = calculateBillboardPixelDimensions(
       fakeBitmap.width,
       fakeBitmap.height,
       resolvedScaling.metersPerPixel,
       imageScale,
-      zoomScaleFactor,
-      effectivePixelsPerMeter,
-      resolvedScaling.spriteMinPixel,
-      resolvedScaling.spriteMaxPixel
+      distanceScaleFactor,
+      effectivePixelsPerMeter
     );
     const expectedWidth =
       widthMeters *
       imageScale *
-      zoomScaleFactor *
+      distanceScaleFactor *
       effectivePixelsPerMeter *
       pixelDims.scaleAdjustment;
     expect(width).toBeCloseTo(expectedWidth);
@@ -846,36 +852,30 @@ describe('document visibility handling', () => {
         ],
       });
 
-      const getPrimaryImage = (): InternalSpriteImageState | undefined => {
-        const spriteState = layer.getSpriteState('auto-rot');
-        return spriteState?.images.get(0)?.get(0) as
-          | InternalSpriteImageState
+      const getAutoRotationDeg = (): number => {
+        const spriteState = layer.getSpriteState('auto-rot') as
+          | InternalSpriteCurrentState<unknown>
           | undefined;
+        return spriteState?.currentAutoRotateDeg ?? 0;
       };
 
       layer.updateSprite('auto-rot', { location: { lng: 10, lat: 0 } });
       layer.render?.(gl, {} as any);
-      const initialAngle = getPrimaryImage()?.resolvedBaseRotateDeg ?? 0;
+      const initialAngle = getAutoRotationDeg();
 
       fakeDocument.visibilityState = 'hidden';
       fakeDocument.dispatch('visibilitychange');
 
       layer.updateSprite('auto-rot', { location: { lng: 0, lat: 10 } });
       layer.render?.(gl, {} as any);
-      expect(getPrimaryImage()?.resolvedBaseRotateDeg ?? 0).toBeCloseTo(
-        initialAngle,
-        5
-      );
+      expect(getAutoRotationDeg()).toBeCloseTo(initialAngle, 5);
 
       fakeDocument.visibilityState = 'visible';
       fakeDocument.dispatch('visibilitychange');
 
       layer.updateSprite('auto-rot', { location: { lng: 0, lat: 20 } });
       layer.render?.(gl, {} as any);
-      expect(getPrimaryImage()?.resolvedBaseRotateDeg ?? 0).not.toBeCloseTo(
-        initialAngle,
-        5
-      );
+      expect(getAutoRotationDeg()).not.toBeCloseTo(initialAngle, 5);
     } finally {
       layer.onRemove?.(map as unknown as any, gl);
     }
@@ -965,8 +965,9 @@ describe('setInterpolationCalculation', () => {
             imageId: 'marker',
             subLayer: 0,
             order: 0,
+            autoRotation: false,
             interpolation: {
-              rotateDeg: { durationMs: 500, easing: { type: 'linear' } },
+              finalRotateDeg: { durationMs: 500, easing: { type: 'linear' } },
               offsetDeg: { durationMs: 500, easing: { type: 'linear' } },
               offsetMeters: { durationMs: 500, easing: { type: 'linear' } },
             },
@@ -990,18 +991,19 @@ describe('setInterpolationCalculation', () => {
 
       layer.updateSpriteImage('instant', 0, 0, {
         rotateDeg: 45,
-        offset: { offsetMeters: 12, offsetDeg: 30 },
+        offsetMeters: 12,
+        offsetDeg: 30,
         interpolation: {
-          rotateDeg: { durationMs: 1000, easing: { type: 'linear' } },
+          finalRotateDeg: { durationMs: 1000, easing: { type: 'linear' } },
           offsetDeg: { durationMs: 1000, easing: { type: 'linear' } },
           offsetMeters: { durationMs: 1000, easing: { type: 'linear' } },
         },
       });
 
       const imageState = spriteState?.images.get(0)?.get(0);
-      expect(imageState?.rotateDeg.current).toBeCloseTo(45);
-      expect(imageState?.rotateDeg.from).toBeUndefined();
-      expect(imageState?.rotateDeg.to).toBeUndefined();
+      expect(imageState?.finalRotateDeg.current).toBeCloseTo(45);
+      expect(imageState?.finalRotateDeg.from).toBeUndefined();
+      expect(imageState?.finalRotateDeg.to).toBeUndefined();
       expect(imageState?.offset.offsetMeters.current).toBeCloseTo(12);
       expect(imageState?.offset.offsetMeters.from).toBeUndefined();
       expect(imageState?.offset.offsetMeters.to).toBeUndefined();

@@ -25,23 +25,6 @@ export interface SpriteLocation {
 }
 
 /**
- * Offset describing where to place an image relative to its anchor point.
- * Specifies distance and angle from the anchor, not from the sprite's base coordinate.
- */
-export interface SpriteImageOffset {
-  /**
-   * Distance in meters from the image anchor. Zero keeps the image at the anchor point.
-   */
-  offsetMeters: number;
-  /**
-   * Angle describing the offset direction. This is not the image rotation.
-   * Billboard mode: Clockwise degrees relative to the screen, 0 deg points upward.
-   * Surface mode: Clockwise degrees from geographic north.
-   */
-  offsetDeg: number;
-}
-
-/**
  * Line attribute.
  */
 export interface SpriteImageLineAttribute {
@@ -201,14 +184,14 @@ export interface SpriteInterpolationOptions {
  * Interpolation configuration.
  */
 export interface SpriteImageInterpolationOptions {
-  /** Interpolation settings for rotateDeg; `null` will disable interpolation. */
-  rotateDeg?: SpriteInterpolationOptions | null;
+  /** Interpolation settings for finalRotateDeg; `null` will disable interpolation. */
+  finalRotateDeg?: SpriteInterpolationOptions | null;
   /** Interpolation settings for offset.offsetDeg; `null` will disable interpolation. */
   offsetDeg?: SpriteInterpolationOptions | null;
   /** Interpolation settings for offset.offsetMeters; `null` will disable interpolation. */
   offsetMeters?: SpriteInterpolationOptions | null;
-  /** Interpolation settings for opacity; `null` will disable interpolation. */
-  opacity?: SpriteInterpolationOptions | null;
+  /** Interpolation settings for finalOpacity; `null` will disable interpolation. */
+  finalOpacity?: SpriteInterpolationOptions | null;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -234,8 +217,10 @@ export interface SpriteImageDefinitionInit {
   scale?: number;
   /** Anchor within the image. Defaults to [0.0, 0.0]. */
   anchor?: SpriteAnchor;
-  /** Offset from the sprite coordinate. Defaults to no offset. */
-  offset?: SpriteImageOffset;
+  /** Offset distance in meters from the sprite coordinate. Defaults to 0. */
+  offsetMeters?: number;
+  /** Offset angle in degrees. Defaults to 0. */
+  offsetDeg?: number;
   /** Optional border rendered around the image. */
   border?: SpriteImageLineAttribute;
   /** Optional leader line rendered toward the origin image. */
@@ -280,8 +265,10 @@ export interface SpriteImageDefinitionUpdate {
   scale?: number;
   /** Anchor within the image. */
   anchor?: SpriteAnchor;
-  /** Offset from the sprite coordinate. */
-  offset?: SpriteImageOffset;
+  /** Offset distance in meters from the sprite coordinate. */
+  offsetMeters?: number;
+  /** Offset angle in degrees. */
+  offsetDeg?: number;
   /** Border rendered around the image. Specify null to remove. */
   border?: SpriteImageLineAttribute | null;
   /** Leader line rendered toward the origin image. Specify null to remove. */
@@ -417,27 +404,24 @@ export interface SpriteImageState {
   readonly scale: number;
   /** Anchor coordinates resolved for the image. */
   readonly anchor: Readonly<SpriteAnchor>;
-  /** Opacity multiplier applied when rendering. */
-  readonly opacity: SpriteInterpolatedValues<number>;
+  /** User-specified rotation angle. */
+  readonly rotateDeg: number;
+  /** User-specified opacity. */
+  readonly opacity: number;
   /** Offset applied relative to the anchor point. */
   readonly offset: SpriteImageInterpolatedOffset;
   /** Optional border rendered around the image. */
   readonly border: SpriteImageLineAttributeState | undefined;
   /** Optional leader line rendered toward the origin image. */
   readonly leaderLine: SpriteImageLineAttributeState | undefined;
-  /**
-   * Additional rotation in degrees with interpolation metadata.
-   * `from`/`to` are `undefined` when no rotation animation is running.
-   */
-  readonly rotateDeg: SpriteInterpolatedValues<number>;
   /** Indicates whether auto-rotation is active. */
   readonly autoRotation: boolean;
   /** Minimum travel distance before auto-rotation updates. */
   readonly autoRotationMinDistanceMeters: number;
-  /** Internal base rotation resolved for the current frame. */
-  readonly resolvedBaseRotateDeg: number;
-  /** Rotation value actually used for rendering. */
-  readonly displayedRotateDeg: number;
+  /** Rotation angle applied when rendering (includes auto-rotation). */
+  readonly finalRotateDeg: SpriteInterpolatedValues<number>;
+  /** Opacity applied when rendering (includes multipliers). */
+  readonly finalOpacity: SpriteInterpolatedValues<number>;
   /** Optional reference to another image used for anchoring. */
   readonly originLocation: Readonly<SpriteImageOriginLocation> | undefined;
 }
@@ -690,7 +674,7 @@ export type SpriteLayerEventListener<
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Options controlling zoom-to-pixel scaling.
+ * Options controlling distance-aware scaling.
  */
 export interface SpriteScalingOptions {
   /**
@@ -698,18 +682,16 @@ export interface SpriteScalingOptions {
    * We strongly recommend specifying the default value of 1, as this value affects all calculations.
    */
   metersPerPixel?: number;
-  /** Minimum zoom level before scaling adjustments apply. */
-  zoomMin?: number;
-  /** Maximum zoom level before scaling adjustments apply. */
-  zoomMax?: number;
-  /** Lower limit for scale clamping. */
-  scaleMin?: number;
-  /** Upper limit for scale clamping. */
-  scaleMax?: number;
-  /** Minimum on-screen pixel size for sprites (0 disables the lower clamp). */
-  spriteMinPixel?: number;
-  /** Maximum on-screen pixel size for sprites (0 disables the upper clamp). */
-  spriteMaxPixel?: number;
+  /**
+   * Distance (meters) from the camera at which sprites stop growing when getting closer.
+   * Set to 0 or omit to disable the near-distance clamp.
+   */
+  minScaleDistanceMeters?: number;
+  /**
+   * Distance (meters) from the camera at which sprites stop shrinking when moving away.
+   * Set to 0 or omit to disable the far-distance clamp.
+   */
+  maxScaleDistanceMeters?: number;
 }
 
 /**
@@ -954,11 +936,11 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
     spriteId: string
   ) => SpriteCurrentState<TTag> | undefined;
   /**
-   * Enables or disables hit-test maintenance (quad-tree updates).
+   * Returns all sprite IDs currently managed by the layer.
    *
-   * @param {boolean} enabled - When false, hit testing is skipped and the internal data structure is cleared.
+   * @returns {string[]} Array of sprite identifiers.
    */
-  readonly setHitTestEnabled: (enabled: boolean) => void;
+  readonly getAllSpriteIds: () => string[];
 
   ////////////////////////////////////////////////////////////////////////////////
 
@@ -1060,6 +1042,27 @@ export interface SpriteLayerInterface<TTag = any> extends CustomLayerInterface {
    */
   readonly setInterpolationCalculation: (moveable: boolean) => void;
 
+  /**
+   * Enables or disables hit-test.
+   *
+   * @param {boolean} detect - When false, hit testing is skipped.
+   */
+  readonly setHitTestDetection: (detect: boolean) => void;
+  /**
+   * Starts tracking a sprite so the map recenters on it every animation frame.
+   * When `trackRotation` is true (default), the sprite's final rotation follows the map bearing.
+   *
+   * @param {string} spriteId - Identifier of the sprite to track.
+   * @param {boolean} [trackRotation=true] - Whether to align the sprite's rotation to the map bearing.
+   * @returns {void}
+   */
+  readonly trackSprite: (spriteId: string, trackRotation?: boolean) => void;
+  /**
+   * Stops tracking any sprite previously targeted via {@link trackSprite}.
+   *
+   * @returns {void}
+   */
+  readonly untrackSprite: () => void;
   /**
    * Adds an event listener.
    *

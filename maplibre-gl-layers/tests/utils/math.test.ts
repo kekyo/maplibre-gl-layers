@@ -7,35 +7,88 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  applySurfaceDisplacement,
   calculateBillboardAnchorShiftPixels,
+  calculateBillboardCornerScreenPositions,
+  calculateBillboardDepthKey,
   calculateBillboardOffsetPixels,
   calculateBillboardPixelDimensions,
+  calculateBillboardCenterPosition,
+  calculateCartesianDistanceMeters,
   calculateDistanceAndBearingMeters,
+  calculateDistanceScaleFactor,
+  calculateEffectivePixelsPerMeter,
   calculateMetersPerPixelAtLatitude,
   calculateSurfaceAnchorShiftMeters,
-  calculateSurfaceOffsetMeters,
-  calculateSurfaceWorldDimensions,
-  calculateEffectivePixelsPerMeter,
-  calculateBillboardDepthKey,
-  calculateSurfaceDepthKey,
-  applySurfaceDisplacement,
-  screenToClip,
-  calculateZoomScaleFactor,
-  resolveScalingOptions,
-  calculateBillboardCenterPosition,
-  calculateBillboardCornerScreenPositions,
   calculateSurfaceCenterPosition,
   calculateSurfaceCornerDisplacements,
-  computeSurfaceCornerShaderModel,
-  type SurfaceDepthBiasFn,
+  calculateSurfaceDepthKey,
+  calculateSurfaceOffsetMeters,
+  calculateSurfaceWorldDimensions,
   clampOpacity,
+  cloneSpriteLocation,
+  computeSurfaceCornerShaderModel,
+  lerpSpriteLocation,
+  multiplyMatrixAndVector,
+  normalizeAngleDeg,
+  resolveScalingOptions,
+  screenToClip,
+  spriteLocationsEqual,
 } from '../../src/utils/math';
 import type { SpriteAnchor, SpriteScreenPoint } from '../../src/types';
 import { EARTH_RADIUS_METERS, UV_CORNERS } from '../../src/const';
 
 const deg = (value: number) => (value * Math.PI) / 180;
 
-describe('resolveScalingOptions / calculateZoomScaleFactor', () => {
+describe('location helpers', () => {
+  it('clones sprite location', () => {
+    const source = { lng: 10, lat: -5, z: 100 };
+    const cloned = cloneSpriteLocation(source);
+    expect(cloned).toEqual(source);
+    expect(cloned).not.toBe(source);
+  });
+
+  it('linearly interpolates sprite location', () => {
+    const from = { lng: 0, lat: 0, z: 0 };
+    const to = { lng: 10, lat: -20, z: 30 };
+    expect(lerpSpriteLocation(from, to, 0)).toEqual(from);
+    expect(lerpSpriteLocation(from, to, 1)).toEqual(to);
+    const mid = lerpSpriteLocation(from, to, 0.5);
+    expect(mid.lng).toBeCloseTo(5, 6);
+    expect(mid.lat).toBeCloseTo(-10, 6);
+    expect(mid.z).toBeCloseTo(15, 6);
+  });
+
+  it('compares sprite locations', () => {
+    const a = { lng: 1, lat: 2, z: 3 };
+    expect(spriteLocationsEqual(a, { ...a })).toBe(true);
+    expect(spriteLocationsEqual(a, { lng: 1, lat: 2, z: 4 })).toBe(false);
+  });
+});
+
+describe('normalizeAngleDeg', () => {
+  it('wraps angles to [0, 360)', () => {
+    expect(normalizeAngleDeg(0)).toBe(0);
+    expect(normalizeAngleDeg(190)).toBe(190);
+    expect(normalizeAngleDeg(-200)).toBe(160);
+    expect(normalizeAngleDeg(720)).toBe(0);
+  });
+});
+
+describe('multiplyMatrixAndVector', () => {
+  it('multiplies 4x4 matrix and vector', () => {
+    const matrix = new Float64Array([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+    ]);
+    const [x, y, z, w] = multiplyMatrixAndVector(matrix, 1, 0, 0, 1);
+    expect(x).toBeCloseTo(14, 6);
+    expect(y).toBeCloseTo(16, 6);
+    expect(z).toBeCloseTo(18, 6);
+    expect(w).toBeCloseTo(20, 6);
+  });
+});
+
+describe('resolveScalingOptions / calculateDistanceScaleFactor', () => {
   it('fills missing scaling fields with defaults', () => {
     const base = resolveScalingOptions();
     const resolved = resolveScalingOptions({ metersPerPixel: 2 });
@@ -45,34 +98,24 @@ describe('resolveScalingOptions / calculateZoomScaleFactor', () => {
     });
   });
 
-  it('interpolates zoom scale factor between min/max', () => {
+  it('clamps scale when distance crosses thresholds', () => {
     const resolved = resolveScalingOptions({
-      zoomMin: 0,
-      zoomMax: 10,
-      scaleMin: 1,
-      scaleMax: 3,
+      minScaleDistanceMeters: 10,
+      maxScaleDistanceMeters: 100,
     });
-    expect(calculateZoomScaleFactor(-5, resolved)).toBe(1);
-    expect(calculateZoomScaleFactor(15, resolved)).toBe(3);
-    expect(calculateZoomScaleFactor(5, resolved)).toBeCloseTo(2, 6);
+    expect(calculateDistanceScaleFactor(50, resolved)).toBe(1);
+    expect(calculateDistanceScaleFactor(5, resolved)).toBeCloseTo(0.5, 6);
+    expect(calculateDistanceScaleFactor(200, resolved)).toBeCloseTo(2, 6);
   });
 
   it('normalizes descending ranges and emits warning', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const resolved = resolveScalingOptions({
-      zoomMin: 10,
-      zoomMax: 5,
-      scaleMin: 3,
-      scaleMax: 1,
-      spriteMinPixel: 400,
-      spriteMaxPixel: 200,
+      minScaleDistanceMeters: 200,
+      maxScaleDistanceMeters: 100,
     });
-    expect(resolved.zoomMin).toBe(5);
-    expect(resolved.zoomMax).toBe(10);
-    expect(resolved.scaleMin).toBe(1);
-    expect(resolved.scaleMax).toBe(3);
-    expect(resolved.spriteMinPixel).toBe(200);
-    expect(resolved.spriteMaxPixel).toBe(400);
+    expect(resolved.minScaleDistanceMeters).toBe(100);
+    expect(resolved.maxScaleDistanceMeters).toBe(200);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0]?.[0]).toContain('SpriteScalingOptions');
     warnSpy.mockRestore();
@@ -83,16 +126,12 @@ describe('resolveScalingOptions / calculateZoomScaleFactor', () => {
     const base = resolveScalingOptions();
     const resolved = resolveScalingOptions({
       metersPerPixel: -5,
-      scaleMin: -2,
-      scaleMax: Number.NaN,
-      spriteMinPixel: -10,
-      spriteMaxPixel: -20,
+      minScaleDistanceMeters: -10,
+      maxScaleDistanceMeters: Number.NaN,
     });
     expect(resolved.metersPerPixel).toBe(base.metersPerPixel);
-    expect(resolved.scaleMin).toBe(0);
-    expect(resolved.scaleMax).toBe(base.scaleMax);
-    expect(resolved.spriteMinPixel).toBe(0);
-    expect(resolved.spriteMaxPixel).toBe(0);
+    expect(resolved.minScaleDistanceMeters).toBe(0);
+    expect(resolved.maxScaleDistanceMeters).toBe(Number.POSITIVE_INFINITY);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     warnSpy.mockRestore();
   });
@@ -107,7 +146,7 @@ describe('calculateMetersPerPixelAtLatitude', () => {
   });
 });
 
-describe('calculateDistanceAndBearingMeters', () => {
+describe('distance helpers', () => {
   it('returns zero for identical points', () => {
     const result = calculateDistanceAndBearingMeters(
       { lat: 35, lng: 139 },
@@ -128,126 +167,37 @@ describe('calculateDistanceAndBearingMeters', () => {
     expect(bearingDeg).toBeGreaterThan(270);
     expect(bearingDeg).toBeLessThan(310);
   });
+
+  it('calculates cartesian distance', () => {
+    const from = { lng: 0, lat: 0, z: 0 };
+    const to = { lng: 0, lat: 0, z: 1000 };
+    expect(calculateCartesianDistanceMeters(from, to)).toBeCloseTo(1000, 6);
+  });
 });
 
 describe('billboard helpers', () => {
-  it('clamps pixel size to min/max range', () => {
-    const base = calculateBillboardPixelDimensions(
-      100,
-      80,
-      1,
-      1,
-      1,
-      1,
-      200,
-      400
-    );
+  it('scales pixel size with distanceScaleFactor', () => {
+    const base = calculateBillboardPixelDimensions(100, 80, 1, 1, 2, 1);
     expect(base.width).toBeCloseTo(200, 6);
     expect(base.height).toBeCloseTo(160, 6);
-    expect(base.scaleAdjustment).toBeCloseTo(2, 6);
+    expect(base.scaleAdjustment).toBeCloseTo(1, 6);
   });
 
   it('returns zero when resource size invalid', () => {
-    const dims = calculateBillboardPixelDimensions(
-      undefined,
-      80,
-      1,
-      1,
-      1,
-      1,
-      0,
-      0
-    );
+    const dims = calculateBillboardPixelDimensions(undefined, 80, 1, 1, 1, 1);
     expect(dims).toEqual({ width: 0, height: 0, scaleAdjustment: 1 });
   });
 
-  it('computes offset pixels', () => {
+  it('computes offset pixels and respects size adjustment', () => {
     const offset = calculateBillboardOffsetPixels(
       { offsetDeg: 90, offsetMeters: 10 },
       1,
       2,
-      3
+      3,
+      0.5
     );
-    expect(offset.x).toBeCloseTo(60, 6);
+    expect(offset.x).toBeCloseTo(30, 6);
     expect(offset.y).toBeCloseTo(0, 6);
-  });
-
-  it('locks offset distance once spriteMaxPixel clamps size', () => {
-    const offsetDef = { offsetDeg: 0, offsetMeters: 5 } as const;
-    const dimsAtClamp = calculateBillboardPixelDimensions(
-      128,
-      128,
-      1,
-      1,
-      1,
-      1,
-      0,
-      128
-    );
-    const offsetAtClamp = calculateBillboardOffsetPixels(
-      offsetDef,
-      1,
-      1,
-      1,
-      dimsAtClamp.scaleAdjustment
-    );
-    const dimsBeyondClamp = calculateBillboardPixelDimensions(
-      128,
-      128,
-      1,
-      1,
-      2,
-      1,
-      0,
-      128
-    );
-    const offsetBeyondClamp = calculateBillboardOffsetPixels(
-      offsetDef,
-      1,
-      2,
-      1,
-      dimsBeyondClamp.scaleAdjustment
-    );
-    expect(offsetAtClamp.y).toBeCloseTo(offsetBeyondClamp.y, 6);
-  });
-
-  it('locks offset distance when spriteMinPixel inflates size', () => {
-    const offsetDef = { offsetDeg: 0, offsetMeters: 5 } as const;
-    const dimsAtMin = calculateBillboardPixelDimensions(
-      128,
-      128,
-      1,
-      1,
-      1,
-      1,
-      128,
-      0
-    );
-    const offsetAtMin = calculateBillboardOffsetPixels(
-      offsetDef,
-      1,
-      1,
-      1,
-      dimsAtMin.scaleAdjustment
-    );
-    const dimsBelowMin = calculateBillboardPixelDimensions(
-      128,
-      128,
-      1,
-      1,
-      0.5,
-      1,
-      128,
-      0
-    );
-    const offsetBelowMin = calculateBillboardOffsetPixels(
-      offsetDef,
-      1,
-      0.5,
-      1,
-      dimsBelowMin.scaleAdjustment
-    );
-    expect(offsetAtMin.y).toBeCloseTo(offsetBelowMin.y, 6);
   });
 
   const expectBillboardAnchorDisplacement = (
@@ -302,26 +252,6 @@ describe('surface helpers', () => {
     expect(dims.scaleAdjustment).toBeCloseTo(1, 6);
   });
 
-  it('expands world dimensions to satisfy spriteMinPixel', () => {
-    const dims = calculateSurfaceWorldDimensions(64, 32, 1, 1, 1, {
-      effectivePixelsPerMeter: 0.5,
-      spriteMinPixel: 200,
-    });
-    expect(dims.width).toBeCloseTo(400, 6);
-    expect(dims.height).toBeCloseTo(200, 6);
-    expect(dims.scaleAdjustment).toBeCloseTo(6.25, 6);
-  });
-
-  it('shrinks world dimensions to satisfy spriteMaxPixel', () => {
-    const dims = calculateSurfaceWorldDimensions(64, 32, 1, 1, 1, {
-      effectivePixelsPerMeter: 4,
-      spriteMaxPixel: 128,
-    });
-    expect(dims.width).toBeCloseTo(32, 6);
-    expect(dims.height).toBeCloseTo(16, 6);
-    expect(dims.scaleAdjustment).toBeCloseTo(0.5, 6);
-  });
-
   const expectSurfaceAnchorDisplacement = (
     anchor: { x: number; y: number },
     halfEast: number,
@@ -360,74 +290,15 @@ describe('surface helpers', () => {
     }
   );
 
-  it('computes offset meters', () => {
+  it('computes offset meters with scaling', () => {
     const offset = calculateSurfaceOffsetMeters(
       { offsetDeg: 180, offsetMeters: 5 },
       2,
-      1
+      1,
+      0.5
     );
     expect(offset.east).toBeCloseTo(0, 6);
-    expect(offset.north).toBeCloseTo(-10, 6);
-  });
-
-  it('scales offset with zoom factor', () => {
-    const offset = calculateSurfaceOffsetMeters(
-      { offsetDeg: 90, offsetMeters: 4 },
-      0.5,
-      3
-    );
-    expect(offset.east).toBeCloseTo(6, 6);
-    expect(offset.north).toBeCloseTo(0, 6);
-  });
-
-  it('keeps offset constant after spriteMaxPixel clamp', () => {
-    const offsetDef = { offsetDeg: 0, offsetMeters: 10 } as const;
-    const dimsAtClamp = calculateSurfaceWorldDimensions(128, 64, 1, 1, 1, {
-      effectivePixelsPerMeter: 1,
-      spriteMaxPixel: 128,
-    });
-    const offsetAtClamp = calculateSurfaceOffsetMeters(
-      offsetDef,
-      1,
-      1,
-      dimsAtClamp.scaleAdjustment
-    );
-    const dimsBeyondClamp = calculateSurfaceWorldDimensions(128, 64, 1, 1, 2, {
-      effectivePixelsPerMeter: 1,
-      spriteMaxPixel: 128,
-    });
-    const offsetBeyondClamp = calculateSurfaceOffsetMeters(
-      offsetDef,
-      1,
-      2,
-      dimsBeyondClamp.scaleAdjustment
-    );
-    expect(offsetAtClamp.north).toBeCloseTo(offsetBeyondClamp.north, 6);
-  });
-
-  it('keeps offset constant after spriteMinPixel inflation', () => {
-    const offsetDef = { offsetDeg: 0, offsetMeters: 10 } as const;
-    const dimsAtMin = calculateSurfaceWorldDimensions(128, 64, 1, 1, 1, {
-      effectivePixelsPerMeter: 1,
-      spriteMinPixel: 128,
-    });
-    const offsetAtMin = calculateSurfaceOffsetMeters(
-      offsetDef,
-      1,
-      1,
-      dimsAtMin.scaleAdjustment
-    );
-    const dimsBelowMin = calculateSurfaceWorldDimensions(128, 64, 1, 1, 0.5, {
-      effectivePixelsPerMeter: 1,
-      spriteMinPixel: 128,
-    });
-    const offsetBelowMin = calculateSurfaceOffsetMeters(
-      offsetDef,
-      1,
-      0.5,
-      dimsBelowMin.scaleAdjustment
-    );
-    expect(offsetAtMin.north).toBeCloseTo(offsetBelowMin.north, 6);
+    expect(offset.north).toBeCloseTo(-5, 6);
   });
 });
 
@@ -447,6 +318,12 @@ describe('calculateEffectivePixelsPerMeter', () => {
 });
 
 describe('applySurfaceDisplacement', () => {
+  const displacementCases = [
+    { baseLng: 139.0, baseLat: 35.0, east: 100, north: 200 },
+    { baseLng: -73.9857, baseLat: 40.758, east: -250, north: 400 },
+    { baseLng: 12.4924, baseLat: 80.0, east: 50, north: -75 },
+  ] as const;
+
   it.each(displacementCases)(
     'matches analytic displacement %#',
     ({ baseLng, baseLat, east, north }) => {
@@ -499,7 +376,7 @@ const anchorExtremes = [
 ] as const;
 
 const rotationSamples = [0, 90, 180, 270] as const;
-const scaleSamples = [0.01, 1, 10] as const;
+const scaleSamples = [0.01, 0.5, 1, 5, 10] as const;
 const offsetSamples = [
   { offsetMeters: 0, offsetDeg: 0 },
   { offsetMeters: 500, offsetDeg: 0 },
@@ -526,12 +403,6 @@ const buildBillboardCases = () => {
 };
 
 const buildSurfaceCases = buildBillboardCases;
-
-const displacementCases = [
-  { baseLng: 139.0, baseLat: 35.0, east: 100, north: 200 },
-  { baseLng: -73.9857, baseLat: 40.758, east: -250, north: 400 },
-  { baseLng: 12.4924, baseLat: 80.0, east: 50, north: -75 },
-] as const;
 
 const computeBillboardCornersShaderModel = ({
   center,
@@ -580,7 +451,7 @@ describe('calculateBillboardCenterPosition', () => {
   const imageWidth = 200;
   const imageHeight = 100;
   const baseMetersPerPixel = 1;
-  const zoomScaleFactor = 1;
+  const distanceScaleFactor = 1;
   const effectivePixelsPerMeter = 2;
 
   it.each(buildBillboardCases())(
@@ -592,10 +463,8 @@ describe('calculateBillboardCenterPosition', () => {
         imageHeight,
         baseMetersPerPixel,
         imageScale: scale,
-        zoomScaleFactor,
+        distanceScaleFactor,
         effectivePixelsPerMeter,
-        spriteMinPixel: 0,
-        spriteMaxPixel: 0,
         totalRotateDeg: rotation,
         anchor,
         offset,
@@ -604,7 +473,7 @@ describe('calculateBillboardCenterPosition', () => {
       const offsetShift = calculateBillboardOffsetPixels(
         offset,
         scale,
-        zoomScaleFactor,
+        distanceScaleFactor,
         effectivePixelsPerMeter
       );
 
@@ -626,46 +495,6 @@ describe('calculateBillboardCenterPosition', () => {
       expect(anchorNeutralY).toBeCloseTo(0, 6);
     }
   );
-
-  it('clamps to spriteMinPixel when image would be smaller', () => {
-    const placement = calculateBillboardCenterPosition({
-      base,
-      imageWidth,
-      imageHeight,
-      baseMetersPerPixel,
-      imageScale: 1,
-      zoomScaleFactor,
-      effectivePixelsPerMeter,
-      spriteMinPixel: 500,
-      spriteMaxPixel: 600,
-      totalRotateDeg: 0,
-      anchor: { x: 0, y: 0 },
-      offset: { offsetMeters: 0, offsetDeg: 0 },
-    });
-    expect(placement.pixelWidth).toBeCloseTo(500, 6);
-    expect(placement.pixelHeight).toBeCloseTo(250, 6);
-    expect(placement.halfWidth).toBeCloseTo(250, 6);
-    expect(placement.halfHeight).toBeCloseTo(125, 6);
-  });
-
-  it('clamps to spriteMaxPixel when image would exceed limit', () => {
-    const placement = calculateBillboardCenterPosition({
-      base,
-      imageWidth,
-      imageHeight,
-      baseMetersPerPixel,
-      imageScale: 2,
-      zoomScaleFactor,
-      effectivePixelsPerMeter,
-      spriteMinPixel: 0,
-      spriteMaxPixel: 300,
-      totalRotateDeg: 0,
-      anchor: { x: 0, y: 0 },
-      offset: { offsetMeters: 0, offsetDeg: 0 },
-    });
-    expect(placement.pixelWidth).toBeCloseTo(300, 6);
-    expect(placement.pixelHeight).toBeCloseTo(150, 6);
-  });
 });
 
 describe('calculateBillboardDepthKey', () => {
@@ -704,10 +533,8 @@ describe('calculateBillboardCornerScreenPositions', () => {
         imageHeight: 120,
         baseMetersPerPixel: 1,
         imageScale: scale,
-        zoomScaleFactor: 1,
+        distanceScaleFactor: 1,
         effectivePixelsPerMeter: 3,
-        spriteMinPixel: 0,
-        spriteMaxPixel: 0,
         totalRotateDeg: rotation,
         anchor,
         offset,
@@ -756,7 +583,7 @@ describe('calculateSurfaceCenterPosition', () => {
         imageHeight: 64,
         baseMetersPerPixel: 2,
         imageScale: scale,
-        zoomScaleFactor: 1,
+        distanceScaleFactor: 1,
         totalRotateDeg: rotation,
         anchor,
         offset,
@@ -800,23 +627,6 @@ describe('calculateSurfaceCenterPosition', () => {
     }
   );
 
-  it('clamps world dimensions using sprite pixel bounds', () => {
-    const result = calculateSurfaceCenterPosition({
-      baseLngLat,
-      imageWidth: 50,
-      imageHeight: 20,
-      baseMetersPerPixel: 2,
-      imageScale: 1,
-      zoomScaleFactor: 1,
-      totalRotateDeg: 0,
-      effectivePixelsPerMeter: 0.5,
-      spriteMinPixel: 200,
-      project: projectLinear,
-    });
-    expect(result.worldDimensions.width).toBeCloseTo(400, 6);
-    expect(result.worldDimensions.height).toBeCloseTo(160, 6);
-  });
-
   it('provides anchorless placement details when requested', () => {
     const offset = { offsetMeters: 5, offsetDeg: 90 };
     const result = calculateSurfaceCenterPosition({
@@ -825,11 +635,10 @@ describe('calculateSurfaceCenterPosition', () => {
       imageHeight: 64,
       baseMetersPerPixel: 1,
       imageScale: 1,
-      zoomScaleFactor: 1,
+      distanceScaleFactor: 1,
       totalRotateDeg: 0,
       anchor: { x: 1, y: 1 },
       offset,
-      effectivePixelsPerMeter: 1,
       resolveAnchorless: true,
       project: projectLinear,
     });
@@ -875,7 +684,7 @@ describe('calculateSurfaceDepthKey', () => {
       [0, 0, -0.1, 2],
     ];
     let call = 0;
-    const biasFn: SurfaceDepthBiasFn = ({ clipZ, clipW }) => ({
+    const biasFn = ({ clipZ, clipW }: { clipZ: number; clipW: number }) => ({
       clipZ: clipZ + 0.2 * clipW,
       clipW,
     });

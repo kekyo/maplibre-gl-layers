@@ -111,7 +111,7 @@ const MOVEMENT_INTERVAL_MS = 1000;
 /**
  * Interval in milliseconds between selected sprite detail refreshes.
  */
-const SELECTED_SPRITE_REFRESH_INTERVAL_MS = 100;
+const SELECTED_SPRITE_REFRESH_INTERVAL_MS = 200;
 
 /** Opacity waving sequence */
 const PRIMARY_OPACITY_WAVING_SEQUENCE = [0.4, 1.0] as const;
@@ -713,7 +713,7 @@ let isSecondaryLeaderLineEnabled = false;
 let orbitDegEasingKey: EasingOptionKey = 'linear';
 let isOrbitDegInterpolationEnabled = isEasingEnabled(orbitDegEasingKey);
 /** Whether we interpolate the orbital distance of the secondary image. */
-let orbitMetersEasingKey: EasingOptionKey = 'sine';
+let orbitMetersEasingKey: EasingOptionKey = 'ease-out';
 let isOrbitMetersInterpolationEnabled = isEasingEnabled(orbitMetersEasingKey);
 /** Interpolation mode applied to orbital angle changes. */
 let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
@@ -721,6 +721,8 @@ let orbitOffsetDegInterpolationMode: SpriteInterpolationMode = 'feedback';
 let orbitOffsetMetersInterpolationMode: SpriteInterpolationMode = 'feedback';
 /** Whether sprite-layer mouse events are monitored for hover/click feedback. */
 let isMouseEventsMonitoringEnabled = false;
+/** Tracking mode for the selected sprite. */
+let selectedSpriteTrackingMode: 'full' | 'location' | 'off' = 'full';
 /** Timer handle for coordinate updates. */
 let movementUpdateIntervalId: number | undefined;
 /** Timer handle for selected sprite detail updates. */
@@ -743,6 +745,10 @@ let updatePseudoLodButton: (() => void) | undefined;
 let secondaryImageOrbitDegrees = 0;
 /** UI updater for the mouse-events monitoring toggle. */
 let updateMouseEventsButton: (() => void) | undefined;
+/** UI updater for the tracking toggle. */
+let updateTrackingButton: (() => void) | undefined;
+/** Applies the selected sprite tracking preference to the layer. */
+let applySelectedSpriteTracking: () => void = () => {};
 /** UI updater for the sprite border toggle. */
 let updateSpriteBordersButton: (() => void) | undefined;
 /** Clears any selected sprite highlight and resets the detail panel. */
@@ -788,7 +794,6 @@ const createHud = () => {
       <p>
         Each sprite stays clamped to the ground and randomly chooses between screen-aligned and map-aligned orientations. Increase the count to as many as ${MAX_NUMBER_OF_SPRITES} sprites when needed.
       </p>
-      <p>Pan, tilt, or zoom the map to inspect how the sprites respond.</p>
       <div class="control-group" data-testid="group-wasm-mode">
         <div class="status-row">
           <span class="status-label">Calculation method</span>
@@ -941,6 +946,22 @@ const createHud = () => {
             aria-pressed="${isMouseEventsMonitoringEnabled}"
             data-testid="toggle-mouse-events"
           >Mouse Events: ${isMouseEventsMonitoringEnabled ? 'ON' : 'OFF'}</button>
+          <button
+            type="button"
+            class="toggle-button${selectedSpriteTrackingMode !== 'off' ? ' active' : ''}"
+            data-control="tracking-toggle"
+            data-label="Tracking"
+            data-active-text="ON"
+            data-inactive-text="OFF"
+            aria-pressed="${selectedSpriteTrackingMode !== 'off'}"
+            data-testid="toggle-tracking"
+          >Tracking: ${
+            selectedSpriteTrackingMode === 'full'
+              ? 'Full'
+              : selectedSpriteTrackingMode === 'location'
+                ? 'Location'
+                : 'OFF'
+          }</button>
         </div>
         <p
           class="status-placeholder"
@@ -982,38 +1003,6 @@ const createHud = () => {
               data-testid="selected-visible"
             >--</span>
           </div>
-          <div class="status-row" data-testid="selected-row-rotate">
-            <span class="status-label">Rotate Deg</span>
-            <span
-              class="status-value"
-              data-selected-field="rotate"
-              data-testid="selected-rotate"
-            >--</span>
-          </div>
-          <div class="status-row" data-testid="selected-row-rotate-resolved">
-            <span class="status-label">Resolved Base</span>
-            <span
-              class="status-value"
-              data-selected-field="rotateResolved"
-              data-testid="selected-rotate-resolved"
-            >--</span>
-          </div>
-          <div class="status-row" data-testid="selected-row-rotate-displayed">
-            <span class="status-label">Displayed</span>
-            <span
-              class="status-value"
-              data-selected-field="rotateDisplayed"
-              data-testid="selected-rotate-displayed"
-            >--</span>
-          </div>
-          <div class="status-row" data-testid="selected-row-offset">
-            <span class="status-label">Offset</span>
-            <span
-              class="status-value"
-              data-selected-field="offset"
-              data-testid="selected-offset"
-            >--</span>
-          </div>
           <div class="status-row" data-testid="selected-row-opacity">
             <span class="status-label">Opacity</span>
             <span
@@ -1022,12 +1011,100 @@ const createHud = () => {
               data-testid="selected-opacity"
             >--</span>
           </div>
+          <div class="status-row" data-testid="selected-row-rotate">
+            <span class="status-label">Rotate Deg</span>
+            <span
+              class="status-value"
+              data-selected-field="rotate"
+              data-testid="selected-rotate"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-rotate-from">
+            <span class="status-label">Rotate Deg (from)</span>
+            <span
+              class="status-value"
+              data-selected-field="rotateFrom"
+              data-testid="selected-rotate-from"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-rotate-to">
+            <span class="status-label">Rotate Deg (to)</span>
+            <span
+              class="status-value"
+              data-selected-field="rotateTo"
+              data-testid="selected-rotate-to"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset">
+            <span class="status-label">Offset meters</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetMeters"
+              data-testid="selected-offset-meters"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-meters-from">
+            <span class="status-label">Offset meters (from)</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetMetersFrom"
+              data-testid="selected-offset-meters-from"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-meters-to">
+            <span class="status-label">Offset meters (to)</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetMetersTo"
+              data-testid="selected-offset-meters-to"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-deg">
+            <span class="status-label">Offset deg</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetDeg"
+              data-testid="selected-offset-deg"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-deg-from">
+            <span class="status-label">Offset deg (from)</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetDegFrom"
+              data-testid="selected-offset-deg-from"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-offset-deg-to">
+            <span class="status-label">Offset deg (to)</span>
+            <span
+              class="status-value"
+              data-selected-field="offsetDegTo"
+              data-testid="selected-offset-deg-to"
+            >--</span>
+          </div>
           <div class="status-row" data-testid="selected-row-lnglat">
             <span class="status-label">LngLat</span>
             <span
               class="status-value"
               data-selected-field="lnglat"
               data-testid="selected-lnglat"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-lnglat-from">
+            <span class="status-label">LngLat (from)</span>
+            <span
+              class="status-value"
+              data-selected-field="lnglatFrom"
+              data-testid="selected-lnglat-from"
+            >--</span>
+          </div>
+          <div class="status-row" data-testid="selected-row-lnglat-to">
+            <span class="status-label">LngLat (to)</span>
+            <span
+              class="status-value"
+              data-selected-field="lnglatTo"
+              data-testid="selected-lnglat-to"
             >--</span>
           </div>
           <div class="status-row" data-testid="selected-row-screen">
@@ -1707,6 +1784,12 @@ const main = async () => {
     lnglat: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="lnglat"]'
     ),
+    lnglatFrom: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="lnglatFrom"]'
+    ),
+    lnglatTo: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="lnglatTo"]'
+    ),
     screen: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="screen"]'
     ),
@@ -1714,14 +1797,29 @@ const main = async () => {
     rotateDeg: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="rotate"]'
     ),
-    rotateResolved: document.querySelector<HTMLSpanElement>(
-      '[data-selected-field="rotateResolved"]'
+    rotateDegFrom: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotateFrom"]'
     ),
-    rotateDisplayed: document.querySelector<HTMLSpanElement>(
-      '[data-selected-field="rotateDisplayed"]'
+    rotateDegTo: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="rotateTo"]'
     ),
-    offset: document.querySelector<HTMLSpanElement>(
-      '[data-selected-field="offset"]'
+    offsetMeters: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetMeters"]'
+    ),
+    offsetMetersFrom: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetMetersFrom"]'
+    ),
+    offsetMetersTo: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetMetersTo"]'
+    ),
+    offsetDeg: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetDeg"]'
+    ),
+    offsetDegFrom: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetDegFrom"]'
+    ),
+    offsetDegTo: document.querySelector<HTMLSpanElement>(
+      '[data-selected-field="offsetDegTo"]'
     ),
     opacity: document.querySelector<HTMLSpanElement>(
       '[data-selected-field="opacity"]'
@@ -1915,26 +2013,76 @@ const main = async () => {
     if (selectedFieldEls.visible) {
       // Reflect whether the sprite image was visible (non-zero opacity) at the time of the click.
       selectedFieldEls.visible.textContent =
-        imageState.opacity.current !== 0.0 ? 'Visible' : 'Hidden';
+        imageState.finalOpacity.current !== 0.0 ? 'Visible' : 'Hidden';
     }
     if (selectedFieldEls.rotateDeg) {
-      selectedFieldEls.rotateDeg.textContent = `${imageState.rotateDeg.current.toFixed(2)}°`;
+      const { from, current, to } = imageState.finalRotateDeg;
+      const formatRotation = (value: number) => `${value.toFixed(5)}°`;
+      selectedFieldEls.rotateDeg.textContent = formatRotation(current);
+      if (selectedFieldEls.rotateDegFrom) {
+        const hasFrom = typeof from === 'number';
+        selectedFieldEls.rotateDegFrom.textContent = hasFrom
+          ? formatRotation(from)
+          : '';
+        selectedFieldEls.rotateDegFrom.hidden = !hasFrom;
+      }
+      if (selectedFieldEls.rotateDegTo) {
+        const hasTo = typeof to === 'number';
+        selectedFieldEls.rotateDegTo.textContent = hasTo
+          ? formatRotation(to)
+          : '';
+        selectedFieldEls.rotateDegTo.hidden = !hasTo;
+      }
     }
-    if (selectedFieldEls.rotateResolved) {
-      selectedFieldEls.rotateResolved.textContent = `${imageState.resolvedBaseRotateDeg.toFixed(2)}°`;
+    if (selectedFieldEls.offsetMeters) {
+      const meters = imageState.offset.offsetMeters;
+      const formatMeters = (value: number) => value.toFixed(3);
+      selectedFieldEls.offsetMeters.textContent = formatMeters(meters.current);
+      if (selectedFieldEls.offsetMetersFrom) {
+        const hasFrom = typeof meters.from === 'number';
+        selectedFieldEls.offsetMetersFrom.textContent = hasFrom
+          ? formatMeters(meters.from)
+          : '';
+        selectedFieldEls.offsetMetersFrom.hidden = !hasFrom;
+      }
+      if (selectedFieldEls.offsetMetersTo) {
+        const hasTo = typeof meters.to === 'number';
+        selectedFieldEls.offsetMetersTo.textContent = hasTo
+          ? formatMeters(meters.to)
+          : '';
+        selectedFieldEls.offsetMetersTo.hidden = !hasTo;
+      }
     }
-    if (selectedFieldEls.rotateDisplayed) {
-      selectedFieldEls.rotateDisplayed.textContent = `${imageState.displayedRotateDeg.toFixed(2)}°`;
-    }
-    if (selectedFieldEls.offset) {
-      selectedFieldEls.offset.textContent = `meters=${imageState.offset.offsetMeters.current.toFixed(
-        2
-      )}, deg=${imageState.offset.offsetDeg.current.toFixed(2)}`;
+    if (selectedFieldEls.offsetDeg) {
+      const offsetDeg = imageState.offset.offsetDeg;
+      const formatOffsetDeg = (value: number) => `${value.toFixed(5)}°`;
+      selectedFieldEls.offsetDeg.textContent = formatOffsetDeg(
+        offsetDeg.current
+      );
+      if (selectedFieldEls.offsetDegFrom) {
+        const hasFrom = typeof offsetDeg.from === 'number';
+        selectedFieldEls.offsetDegFrom.textContent = hasFrom
+          ? formatOffsetDeg(offsetDeg.from)
+          : '';
+        selectedFieldEls.offsetDegFrom.hidden = !hasFrom;
+      }
+      if (selectedFieldEls.offsetDegTo) {
+        const hasTo = typeof offsetDeg.to === 'number';
+        selectedFieldEls.offsetDegTo.textContent = hasTo
+          ? formatOffsetDeg(offsetDeg.to)
+          : '';
+        selectedFieldEls.offsetDegTo.hidden = !hasTo;
+      }
     }
     if (selectedFieldEls.opacity) {
-      selectedFieldEls.opacity.textContent = `${imageState.opacity.current.toFixed(
-        3
-      )}`;
+      const { from, current, to } = imageState.finalOpacity;
+      const parts = [
+        typeof from === 'number' ? from.toFixed(3) : null,
+        current.toFixed(3),
+        typeof to === 'number' ? to.toFixed(3) : null,
+      ].filter(Boolean);
+      selectedFieldEls.opacity.textContent =
+        parts.length === 1 ? (parts[0] ?? '') : parts.join(' --> ');
     }
     if (selectedFieldEls.lnglat) {
       // Show the geographic coordinates for the sprite's current location.
@@ -1942,6 +2090,22 @@ const main = async () => {
         spriteState.location.current.lng,
         spriteState.location.current.lat
       );
+    }
+    const locationFrom = spriteState.location.from;
+    const locationTo = spriteState.location.to;
+    const hasLocationInterpolation =
+      locationFrom !== undefined && locationTo !== undefined;
+    if (selectedFieldEls.lnglatFrom) {
+      selectedFieldEls.lnglatFrom.textContent = hasLocationInterpolation
+        ? formatLngLat(locationFrom.lng, locationFrom.lat)
+        : '';
+      selectedFieldEls.lnglatFrom.hidden = !hasLocationInterpolation;
+    }
+    if (selectedFieldEls.lnglatTo) {
+      selectedFieldEls.lnglatTo.textContent = hasLocationInterpolation
+        ? formatLngLat(locationTo.lng, locationTo.lat)
+        : '';
+      selectedFieldEls.lnglatTo.hidden = !hasLocationInterpolation;
     }
     if (selectedFieldEls.screen) {
       // Convert the projected screen coordinates to a human-friendly string.
@@ -2028,11 +2192,12 @@ const main = async () => {
   const setMouseEventsEnabled = (enabled: boolean) => {
     if (isMouseEventsMonitoringEnabled === enabled) {
       updateMouseEventsButton?.();
+      updateTrackingButton?.();
       return;
     }
     isMouseEventsMonitoringEnabled = enabled;
     if (spriteLayer) {
-      spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
+      spriteLayer.setHitTestDetection(shouldEnableHitTesting());
     }
     if (enabled) {
       attachSpriteMouseEvents();
@@ -2040,8 +2205,21 @@ const main = async () => {
       detachSpriteMouseEvents();
       clearSpriteSelection();
       clearSpriteDetails();
+      spriteLayer?.untrackSprite();
     }
     updateMouseEventsButton?.();
+    updateTrackingButton?.();
+  };
+
+  const cycleTrackingMode = (): void => {
+    selectedSpriteTrackingMode =
+      selectedSpriteTrackingMode === 'full'
+        ? 'location'
+        : selectedSpriteTrackingMode === 'location'
+          ? 'off'
+          : 'full';
+    applySelectedSpriteTracking();
+    updateTrackingButton?.();
   };
 
   /**
@@ -2312,11 +2490,6 @@ const main = async () => {
       secondaryImageOrbitDegrees =
         (secondaryImageOrbitDegrees + SECONDARY_ORBIT_STEP_DEG) % 360;
 
-      const orbitRadiusMeters =
-        currentSecondaryImageType === 'text'
-          ? SECONDARY_ORBIT_TEXT_RADIUS_METERS
-          : SECONDARY_ORBIT_IMAGE_RADIUS_METERS;
-
       // Iterate over every sprite.
       spriteLayer.updateForEach((sprite, update) => {
         // Traverse every image registered on the sprite.
@@ -2324,18 +2497,21 @@ const main = async () => {
           orderMap.forEach((image) => {
             // Only update the secondary (orbiting satellite) image.
             if (image.subLayer === SECONDARY_SUB_LAYER) {
-              // Update the offset to represent the orbiting motion.
+              // Update only the orbital angle; keep the current radius as-is to avoid restarting its interpolation.
               const imageUpdate: SpriteImageDefinitionUpdate = {
-                offset: {
-                  offsetDeg: secondaryImageOrbitDegrees, // Apply the computed angle.
-                  offsetMeters: orbitRadiusMeters, // Maintain the configured orbit radius.
-                },
+                offsetDeg: secondaryImageOrbitDegrees, // Apply the computed angle.
               };
-              const orbitInterpolation = createOrbitInterpolationOptions();
-              imageUpdate.interpolation = orbitInterpolation ?? {
-                offsetDeg: null,
-                offsetMeters: null,
-              };
+              imageUpdate.interpolation = isOrbitDegInterpolationEnabled
+                ? {
+                    offsetDeg: {
+                      mode: orbitOffsetDegInterpolationMode,
+                      durationMs: MOVEMENT_INTERVAL_MS,
+                      easing: resolveEasingOption(orbitDegEasingKey),
+                    },
+                  }
+                : {
+                    offsetDeg: null,
+                  };
               update.updateImage(image.subLayer, image.order, imageUpdate);
             }
           });
@@ -2489,13 +2665,13 @@ const main = async () => {
             const imageUpdate: SpriteImageDefinitionUpdate = {
               interpolation: enabled
                 ? {
-                    rotateDeg: {
+                    finalRotateDeg: {
                       mode: rotateInterpolationMode,
                       durationMs: MOVEMENT_INTERVAL_MS,
                       easing: resolveEasingOption(rotateEasingKey),
                     },
                   }
-                : { rotateDeg: null },
+                : { finalRotateDeg: null },
             };
             spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -2545,13 +2721,13 @@ const main = async () => {
         return;
       }
       const interpolation: SpriteImageInterpolationOptions = {
-        opacity: {
+        finalOpacity: {
           durationMs: 500,
           easing: resolveEasingOption(opacityEasingKey),
         },
       };
       const clearInterpolation: SpriteImageInterpolationOptions = {
-        opacity: null,
+        finalOpacity: null,
       };
       const targetInterpolation = isOpacityInterpolationEnabled
         ? interpolation
@@ -2583,14 +2759,14 @@ const main = async () => {
             if (isOpacityInterpolationEnabled) {
               imageUpdate.interpolation = shouldInterpolate
                 ? {
-                    opacity: {
+                    finalOpacity: {
                       durationMs: 500,
                       easing: resolveEasingOption(opacityEasingKey),
                     },
                   }
-                : { opacity: null };
+                : { finalOpacity: null };
             } else {
-              imageUpdate.interpolation = { opacity: null };
+              imageUpdate.interpolation = { finalOpacity: null };
             }
             spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -2632,14 +2808,14 @@ const main = async () => {
             if (isOpacityInterpolationEnabled) {
               if (shouldInterpolate) {
                 imageUpdate.interpolation = {
-                  opacity: {
+                  finalOpacity: {
                     durationMs: 500,
                     easing: resolveEasingOption(opacityEasingKey),
                   },
                 };
               }
             } else {
-              imageUpdate.interpolation = { opacity: null };
+              imageUpdate.interpolation = { finalOpacity: null };
             }
             spriteUpdate.updateImage(image.subLayer, image.order, imageUpdate);
           });
@@ -2741,7 +2917,7 @@ const main = async () => {
         });
         return true;
       });
-      spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
+      spriteLayer.setHitTestDetection(shouldEnableHitTesting());
     };
 
     const renderPlaceholderDetails = () => {
@@ -2796,10 +2972,8 @@ const main = async () => {
         return;
       }
       const imageState = resolveSelectedImageState(spriteState);
-      const projected = map.project({
-        lng: spriteState.location.current.lng,
-        lat: spriteState.location.current.lat,
-      });
+      const { lng, lat } = spriteState.location.current;
+      const projected = map.project({ lng, lat });
       renderSpriteDetails({
         type: 'spriteclick',
         sprite: spriteState,
@@ -2807,6 +2981,22 @@ const main = async () => {
         screenPoint: { x: projected.x, y: projected.y },
         originalEvent: new MouseEvent('click'),
       });
+    };
+
+    applySelectedSpriteTracking = (): void => {
+      if (!spriteLayer) {
+        return;
+      }
+      if (
+        !isMouseEventsMonitoringEnabled ||
+        !selectedSpriteId ||
+        selectedSpriteTrackingMode === 'off'
+      ) {
+        spriteLayer.untrackSprite();
+        return;
+      }
+      const trackRotation = selectedSpriteTrackingMode === 'full';
+      spriteLayer.trackSprite(selectedSpriteId, trackRotation);
     };
 
     const startSelectedSpriteDetailsInterval = (): void => {
@@ -2823,6 +3013,9 @@ const main = async () => {
 
     clearSpriteSelection = (): void => {
       stopSelectedSpriteDetailsInterval();
+      if (spriteLayer) {
+        spriteLayer.untrackSprite();
+      }
       selectedSpriteImageRef = null;
       if (!selectedSpriteId) {
         renderPlaceholderDetails();
@@ -2846,6 +3039,7 @@ const main = async () => {
         applySpriteBordersToAll();
       }
       startSelectedSpriteDetailsInterval();
+      applySelectedSpriteTracking();
     };
 
     /**
@@ -3023,6 +3217,10 @@ const main = async () => {
 
         return true;
       });
+
+      // Reapply the current orbit mode so the offset radius matches the selected image type
+      // (text uses a different default distance than the textured box).
+      setSecondaryImageOrbitMode(currentSecondaryImageOrbitMode);
     };
 
     /**
@@ -3030,6 +3228,7 @@ const main = async () => {
      * @param {SecondaryOrbitMode} mode - Mode to activate.
      */
     const setSecondaryImageOrbitMode = (mode: SecondaryOrbitMode) => {
+      const wasOrbit = currentSecondaryImageOrbitMode === 'orbit';
       if (!isSecondaryImageReady) {
         // When assets have not loaded yet, just remember the requested mode for later.
         currentSecondaryImageOrbitMode = mode;
@@ -3067,36 +3266,32 @@ const main = async () => {
               imageUpdate = {
                 opacity: 0.0,
                 autoRotation: false,
+                offsetMeters: 0.0,
+                offsetDeg: 0.0,
               };
             } else if (mode === 'center') {
               // Center mode keeps the image visible but locked to the primary sprite position.
               imageUpdate = {
                 opacity: 1.0,
                 autoRotation: false,
-                offset: {
-                  offsetMeters: 0.0,
-                  offsetDeg: 0.0,
-                },
+                offsetMeters: 0.0,
+                offsetDeg: 0.0,
               };
             } else if (mode === 'shift') {
               // Shift mode keeps a fixed radius and angle without continuous orbiting.
               imageUpdate = {
                 opacity: 1.0,
                 autoRotation: false,
-                offset: {
-                  offsetMeters: orbitRadiusMeters,
-                  offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
-                },
+                offsetMeters: orbitRadiusMeters,
+                offsetDeg: SECONDARY_SHIFT_ANGLE_DEG,
               };
             } else {
               // Orbit mode offsets the sprite by the configured radius and maintains the current angle.
               imageUpdate = {
                 opacity: 1.0,
                 autoRotation: false,
-                offset: {
-                  offsetMeters: orbitRadiusMeters,
-                  offsetDeg: secondaryImageOrbitDegrees,
-                },
+                offsetMeters: orbitRadiusMeters,
+                offsetDeg: secondaryImageOrbitDegrees,
               };
             }
             const orbitInterpolation = createOrbitInterpolationOptions();
@@ -3115,6 +3310,12 @@ const main = async () => {
         return true;
       });
       updateSecondaryImageButtons?.();
+
+      // When entering orbit mode, kick off the first angular step immediately so distance and angle
+      // interpolations start together instead of waiting for the next movement tick.
+      if (mode === 'orbit' && !wasOrbit) {
+        advanceSecondaryOrbitRotation();
+      }
     };
 
     /**
@@ -3221,7 +3422,7 @@ const main = async () => {
         return undefined;
       }
       return {
-        rotateDeg: {
+        finalRotateDeg: {
           mode: rotateInterpolationMode,
           durationMs: MOVEMENT_INTERVAL_MS,
           easing: resolveEasingOption(rotateEasingKey),
@@ -3696,6 +3897,29 @@ const main = async () => {
         updateMouseEventsButton();
         mouseEventsButton.addEventListener('click', () => {
           setMouseEventsEnabled(!isMouseEventsMonitoringEnabled);
+        });
+      }
+
+      const trackingButton = queryFirst<HTMLButtonElement>(
+        '[data-control="tracking-toggle"]'
+      );
+      if (trackingButton) {
+        updateTrackingButton = () => {
+          const label =
+            selectedSpriteTrackingMode === 'full'
+              ? 'Full'
+              : selectedSpriteTrackingMode === 'location'
+                ? 'Location'
+                : 'OFF';
+          trackingButton.textContent = `Tracking: ${label}`;
+          const isActive = selectedSpriteTrackingMode !== 'off';
+          trackingButton.classList.toggle('active', isActive);
+          trackingButton.setAttribute('aria-pressed', String(isActive));
+          trackingButton.disabled = !isMouseEventsMonitoringEnabled;
+        };
+        updateTrackingButton();
+        trackingButton.addEventListener('click', () => {
+          cycleTrackingMode();
         });
       }
 
@@ -4346,6 +4570,10 @@ const main = async () => {
       switch (currentSecondaryImageOrbitMode) {
         case 'hidden':
           secondaryOpacity = 0.0;
+          secondaryOffset = {
+            offsetMeters: 0.0,
+            offsetDeg: 0.0,
+          };
           break;
         case 'center':
           secondaryOffset = {
@@ -4425,7 +4653,8 @@ const main = async () => {
             ...(spriteBorder ?? {}),
             ...(secondaryOffset
               ? {
-                  offset: secondaryOffset,
+                  offsetMeters: secondaryOffset.offsetMeters,
+                  offsetDeg: secondaryOffset.offsetDeg,
                 }
               : {}),
             interpolation: orbitInterpolation,
@@ -4488,7 +4717,7 @@ const main = async () => {
           });
         }
         map.addLayer(spriteLayer);
-        spriteLayer.setHitTestEnabled(shouldEnableHitTesting());
+        spriteLayer.setHitTestDetection(shouldEnableHitTesting());
         if (isMouseEventsMonitoringEnabled) {
           attachSpriteMouseEvents();
         }

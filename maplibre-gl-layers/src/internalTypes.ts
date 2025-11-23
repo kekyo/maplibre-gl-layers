@@ -25,6 +25,7 @@ import type {
   SpriteImageState,
   SpriteInterpolatedValues,
   SpriteImageInterpolatedOffset,
+  SpriteCurrentState,
 } from './types';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
 
@@ -311,8 +312,6 @@ export interface PrepareDrawSpriteImageParamsBase {
   readonly imageResources: ImageResourceTable;
   readonly imageHandleBuffers: Readonly<ImageHandleBuffers>;
   readonly baseMetersPerPixel: number;
-  readonly spriteMinPixel: number;
-  readonly spriteMaxPixel: number;
   readonly drawingBufferWidth: number;
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
@@ -324,7 +323,6 @@ export interface PrepareDrawSpriteImageParamsBefore<TTag>
   readonly bucket: readonly Readonly<RenderTargetEntryLike<TTag>>[];
   readonly bucketBuffers: Readonly<RenderTargetBucketBuffers>;
   readonly resolvedScaling: ResolvedSpriteScalingOptions;
-  readonly zoomScaleFactor: number;
 }
 
 export interface PrepareDrawSpriteImageParamsAfter
@@ -386,8 +384,6 @@ export interface PreparedDrawSpriteImageParams<T> {
  */
 export interface RenderInterpolationFrameContext {
   readonly baseMetersPerPixel: number;
-  readonly spriteMinPixel: number;
-  readonly spriteMaxPixel: number;
 }
 
 /**
@@ -520,35 +516,8 @@ export interface SpriteInterpolationState<TValue> {
   startTimestamp: number;
 }
 
-export interface DistanceInterpolationEvaluationParams {
-  readonly state: SpriteInterpolationState<number>;
-  readonly timestamp: number;
-}
-
-export interface DistanceInterpolationEvaluationResult {
-  readonly value: number;
-  readonly completed: boolean;
-  readonly effectiveStartTimestamp: number;
-}
-
-export interface DegreeInterpolationEvaluationParams {
-  readonly state: SpriteInterpolationState<number>;
-  readonly timestamp: number;
-}
-
-export interface DegreeInterpolationEvaluationResult {
-  readonly value: number;
-  readonly completed: boolean;
-  readonly effectiveStartTimestamp: number;
-}
-
-export interface SpriteInterpolationEvaluationParams {
-  readonly state: SpriteInterpolationState<SpriteLocation>;
-  readonly timestamp: number;
-}
-
-export interface SpriteInterpolationEvaluationResult {
-  readonly location: SpriteLocation;
+export interface SpriteInterpolationEvaluationResult<TValue> {
+  readonly value: TValue;
   readonly completed: boolean;
   readonly effectiveStartTimestamp: number;
 }
@@ -668,7 +637,7 @@ export interface ResolvedSpriteImageLineAttribute
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Base attributes for an image that composes a sprite.
+ * Base mutable attribute view for an image that composes a sprite.
  */
 export interface InternalSpriteImageState extends SpriteImageState {
   subLayer: number;
@@ -676,49 +645,50 @@ export interface InternalSpriteImageState extends SpriteImageState {
   imageId: string;
   imageHandle: number;
   mode: SpriteMode;
-  opacity: MutableSpriteInterpolatedValues<number>;
-  lodOpacity: number;
   scale: number;
   anchor: Readonly<SpriteAnchor>;
   border: ResolvedSpriteImageLineAttribute | undefined;
   borderPixelWidth: number;
   leaderLine: ResolvedSpriteImageLineAttribute | undefined;
   leaderLinePixelWidth: number;
+  rotateDeg: number;
+  opacity: number;
+  lodOpacity: number; // For Pseudo LOD
+  finalOpacity: MutableSpriteInterpolatedValues<number>;
   offset: MutableSpriteImageInterpolatedOffset;
-  rotateDeg: MutableSpriteInterpolatedValues<number>;
-  rotationCommandDeg: number;
-  displayedRotateDeg: number;
+  finalRotateDeg: MutableSpriteInterpolatedValues<number>;
   autoRotation: boolean;
   autoRotationMinDistanceMeters: number;
-  resolvedBaseRotateDeg: number;
   originLocation: Readonly<SpriteImageOriginLocation> | undefined;
   originReferenceKey: SpriteOriginReferenceKey;
   originRenderTargetIndex: SpriteOriginReferenceIndex;
   interpolationDirty: boolean;
-  surfaceShaderInputs?: Readonly<SurfaceShaderInputs>;
-  hitTestCorners?: [
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-    MutableSpriteScreenPoint,
-  ];
+  surfaceShaderInputs: Readonly<SurfaceShaderInputs> | undefined;
+  hitTestCorners:
+    | [
+        MutableSpriteScreenPoint,
+        MutableSpriteScreenPoint,
+        MutableSpriteScreenPoint,
+        MutableSpriteScreenPoint,
+      ]
+    | undefined;
 }
 
 /**
- * Current sprite state tracked internally by the layer.
+ * Current sprite mutable state view tracked internally by the layer.
  */
-export interface InternalSpriteCurrentState<TTag> {
+export interface InternalSpriteCurrentState<TTag>
+  extends SpriteCurrentState<TTag> {
   spriteId: string;
   handle: IdHandle;
   isEnabled: boolean;
-  visibilityDistanceMeters?: number;
+  visibilityDistanceMeters: number | undefined; // For Pseudo LOD
   opacityMultiplier: number;
-  //location: MutableSpriteInterpolatedLocationValues;
   location: MutableSpriteInterpolatedValues<SpriteLocation>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
   tag: TTag | null;
   lastAutoRotationLocation: Readonly<SpriteLocation>;
-  lastAutoRotationAngleDeg: number;
+  currentAutoRotateDeg: number;
   autoRotationInvalidated: boolean;
   interpolationDirty: boolean;
   cachedMercator: Readonly<SpriteMercatorCoordinate>;

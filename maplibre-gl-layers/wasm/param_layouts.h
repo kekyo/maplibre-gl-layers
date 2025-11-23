@@ -120,7 +120,7 @@ struct InputItemEntry {
   double offsetMeters;
   double offsetDeg;
   double displayedRotateDeg;
-  double resolvedBaseRotateDeg;
+  double currentAutoRotateDeg;
   double rotateDeg;
   double order;
   double subLayer;

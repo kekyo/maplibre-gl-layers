@@ -24,21 +24,16 @@ import {
   type SpriteAnchor,
   type SpriteLocation,
   type SpriteCurrentState,
-  type SpriteLayerEventMap,
-  type SpriteLayerEventListener,
   type SpriteUpdateEntry,
   type SpriteUpdaterEntry,
   type SpriteImageDefinitionInit,
   type SpriteImageDefinitionUpdate,
-  type SpriteLayerHoverEvent,
   type SpriteMutateCallbacks,
   type SpriteMutateSourceItem,
-  type SpriteImageOffset,
   type SpriteImageLineAttribute,
   type SpriteInterpolationOptions,
   type SpriteImageOriginLocation,
   type SpriteScreenPoint,
-  type SpriteLayerClickEvent,
   type SpriteImageState,
   type SpriteTextGlyphDimensions,
   type SpriteTextGlyphOptions,
@@ -63,16 +58,15 @@ import {
   SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
 } from './internalTypes';
 import { loadImageBitmap, SvgSizeResolutionError } from './utils/image';
-import { createInterpolationState } from './interpolation/interpolation';
-import { normalizeAngleDeg } from './interpolation/rotationInterpolation';
+import { createLocationInterpolationState } from './interpolation/locationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
-  calculateZoomScaleFactor,
   isFiniteNumber,
   resolveScalingOptions,
   cloneSpriteLocation,
   spriteLocationsEqual,
   clampOpacity,
+  normalizeAngleDeg,
 } from './utils/math';
 import { parseCssColorToRgba } from './utils/color';
 import {
@@ -102,6 +96,14 @@ import {
 } from './host/projectionHost';
 import { createWasmProjectionHost } from './host/wasmProjectionHost';
 import { createWasmCalculationHost } from './host/wasmCalculationHost';
+import {
+  createSpriteTrackingController,
+  type SpriteTrackingController,
+} from './gl/tracking';
+import {
+  createSpriteMouseEventsController,
+  type SpriteMouseEventsController,
+} from './gl/mouseEvents';
 import {
   DEFAULT_ANCHOR,
   DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
@@ -198,11 +200,20 @@ const reapplySpriteOpacityMultiplier = <T>(
   sprite.images.forEach((orderMap) => {
     orderMap.forEach((image) => {
       const baseOpacity =
-        image.opacity.interpolation.baseValue ?? image.opacity.current;
-      const interpolationOption = image.opacity.interpolation.options ?? null;
+        image.finalOpacity.interpolation.baseValue ??
+        image.finalOpacity.current;
+      const interpolationOption =
+        image.finalOpacity.interpolation.options ?? null;
       applyOpacityUpdate(image, baseOpacity, interpolationOption, multiplier);
     });
   });
+};
+
+const resolveImageAutoRotationDeg = <T>(
+  sprite: InternalSpriteCurrentState<T>,
+  image: InternalSpriteImageState
+): number => {
+  return image.autoRotation ? sprite.currentAutoRotateDeg : 0;
 };
 
 /**
@@ -261,8 +272,10 @@ export const applyAutoRotation = <T>(
 
   const resolvedAngleRaw = isFiniteNumber(bearingDeg)
     ? bearingDeg
-    : sprite.lastAutoRotationAngleDeg;
+    : sprite.currentAutoRotateDeg;
   const resolvedAngle = normalizeAngleDeg(resolvedAngleRaw);
+
+  sprite.currentAutoRotateDeg = resolvedAngle;
 
   sprite.images.forEach((orderMap) => {
     orderMap.forEach((image) => {
@@ -270,14 +283,12 @@ export const applyAutoRotation = <T>(
       if (!image.autoRotation) {
         return;
       }
-      image.resolvedBaseRotateDeg = resolvedAngle;
-      syncImageRotationChannel(image);
+      syncImageRotationChannel(image, resolvedAngle);
       updateImageInterpolationDirtyState(sprite, image);
     });
   });
 
   sprite.lastAutoRotationLocation = cloneSpriteLocation(nextLocation);
-  sprite.lastAutoRotationAngleDeg = resolvedAngle;
 
   return true;
 };
@@ -317,28 +328,18 @@ const cloneAnchor = (anchor: SpriteAnchor | undefined): SpriteAnchor => {
   return { x: anchor.x, y: anchor.y };
 };
 
-/**
- * Clones an image offset, applying defaults when missing.
- * @param {SpriteImageOffset | undefined} offset - Offset definition to copy.
- * @returns {SpriteImageOffset} Cloned offset structure.
- */
-const cloneOffset = (
-  offset: SpriteImageOffset | undefined
-): SpriteImageOffset => {
-  if (!offset) {
-    return { ...DEFAULT_IMAGE_OFFSET };
-  }
-  return {
-    offsetMeters: offset.offsetMeters,
-    offsetDeg: offset.offsetDeg,
-  };
-};
+type OffsetInput = { offsetMeters?: number; offsetDeg?: number } | undefined;
+
+const resolveOffsetInput = (offset: OffsetInput) => ({
+  offsetMeters: offset?.offsetMeters ?? DEFAULT_IMAGE_OFFSET.offsetMeters,
+  offsetDeg: offset?.offsetDeg ?? DEFAULT_IMAGE_OFFSET.offsetDeg,
+});
 
 const createInterpolatedOffsetState = (
-  offset: SpriteImageOffset | undefined,
+  offset: OffsetInput,
   invalidated: boolean
 ): MutableSpriteImageInterpolatedOffset => {
-  const base = offset ? cloneOffset(offset) : { ...DEFAULT_IMAGE_OFFSET };
+  const base = resolveOffsetInput(offset);
   return {
     offsetMeters: {
       current: base.offsetMeters,
@@ -453,11 +454,15 @@ export const createImageStateFromInit = (
   subLayer: number,
   order: number,
   originReference: SpriteOriginReference,
-  invalidated: boolean
+  invalidated: boolean,
+  spriteAutoRotationDeg = 0
 ): InternalSpriteImageState => {
   const mode = imageInit.mode ?? 'surface';
   const autoRotationDefault = mode === 'surface';
-  const initialOffset = cloneOffset(imageInit.offset);
+  const initialOffset = resolveOffsetInput({
+    offsetMeters: imageInit.offsetMeters,
+    offsetDeg: imageInit.offsetDeg,
+  });
   const initialOpacity = clampOpacity(imageInit.opacity ?? 1.0);
   const initialRotateDeg = normalizeAngleDeg(imageInit.rotateDeg ?? 0);
   const originLocation = cloneOriginLocation(imageInit.originLocation);
@@ -471,7 +476,9 @@ export const createImageStateFromInit = (
     imageId: imageInit.imageId,
     imageHandle: 0,
     mode,
-    opacity: {
+    rotateDeg: initialRotateDeg,
+    opacity: initialOpacity,
+    finalOpacity: {
       current: initialOpacity,
       from: undefined,
       to: undefined,
@@ -492,7 +499,7 @@ export const createImageStateFromInit = (
     leaderLine: resolveSpriteImageLineAttribute(imageInit.leaderLine),
     leaderLinePixelWidth: 0,
     offset: createInterpolatedOffsetState(initialOffset, invalidated),
-    rotateDeg: {
+    finalRotateDeg: {
       current: initialRotateDeg,
       from: undefined,
       to: undefined,
@@ -505,33 +512,36 @@ export const createImageStateFromInit = (
         targetValue: undefined,
       },
     },
-    rotationCommandDeg: initialRotateDeg,
-    displayedRotateDeg: initialRotateDeg,
     autoRotation: imageInit.autoRotation ?? autoRotationDefault,
     autoRotationMinDistanceMeters:
       imageInit.autoRotationMinDistanceMeters ??
       DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
-    resolvedBaseRotateDeg: 0,
     originLocation,
     originReferenceKey,
     originRenderTargetIndex: SPRITE_ORIGIN_REFERENCE_INDEX_NONE,
     interpolationDirty: false,
+    surfaceShaderInputs: undefined,
+    hitTestCorners: undefined,
   };
 
   // Preload rotation interpolation defaults when supplied on initialization; otherwise treat as absent.
-  const rotateInitOption = imageInit.interpolation?.rotateDeg ?? null;
+  const rotateInitOption = imageInit.interpolation?.finalRotateDeg ?? null;
   if (rotateInitOption) {
-    state.rotateDeg.interpolation.options =
+    state.finalRotateDeg.interpolation.options =
       cloneInterpolationOptions(rotateInitOption);
   }
 
-  const opacityInitOption = imageInit.interpolation?.opacity ?? null;
+  const opacityInitOption = imageInit.interpolation?.finalOpacity ?? null;
   if (opacityInitOption) {
-    state.opacity.interpolation.options =
+    state.finalOpacity.interpolation.options =
       cloneInterpolationOptions(opacityInitOption);
   }
 
-  syncImageRotationChannel(state);
+  syncImageRotationChannel(
+    state,
+    spriteAutoRotationDeg,
+    state.finalRotateDeg.interpolation.options ?? undefined
+  );
 
   return state;
 };
@@ -888,6 +898,11 @@ export const createSpriteLayer = <T = any>(
   });
 
   /**
+   * Sprite tracking controller.
+   */
+  let trackingController: SpriteTrackingController<T> | undefined;
+
+  /**
    * Synchronizes atlas placements from the atlas manager into registered images.
    * Marks atlas textures as dirty when placements change.
    */
@@ -944,37 +959,16 @@ export const createSpriteLayer = <T = any>(
     sprite: InternalSpriteCurrentState<TTag>,
     image: InternalSpriteImageState
   ): void => {
-    image.rotateDeg.interpolation.state = null;
+    image.finalRotateDeg.interpolation.state = null;
     image.offset.offsetDeg.interpolation.state = null;
     image.offset.offsetMeters.interpolation.state = null;
-    image.opacity.interpolation.state = null;
+    image.finalOpacity.interpolation.state = null;
 
-    image.rotateDeg.from = undefined;
-    image.rotateDeg.to = undefined;
-    image.rotateDeg.invalidated = true;
-    image.rotateDeg.interpolation.lastCommandValue = image.rotateDeg.current;
-
-    //image.displayedRotateDeg =
-    //  image.resolvedBaseRotateDeg + image.rotationCommandDeg;
-    //image.lastCommandRotateDeg = image.rotationCommandDeg;
-    //image.lastCommandRotateDeg = image.resolvedBaseRotateDeg;
-
-    //const baseRotation = image.resolvedBaseRotateDeg ?? 0;
-    //const displayedRotation = Number.isFinite(image.displayedRotateDeg)
-    //  ? image.displayedRotateDeg
-    //  : baseRotation + image.rotationCommandDeg;
-    //const manualRotation = normalizeAngleDeg(displayedRotation - baseRotation);
-
-    //image.rotateDeg.from = undefined;
-    //image.rotateDeg.to = undefined;
-    //image.rotateDeg.invalidated = undefined;
-    //image.rotationCommandDeg = image.rotateDeg.current;
-    //image.resolvedBaseRotateDeg = normalizeAngleDeg(
-    //  displayedRotation - manualRotation
-    //);
-    //image.displayedRotateDeg =
-    //  image.resolvedBaseRotateDeg + image.rotationCommandDeg;
-    //image.lastCommandRotateDeg = image.rotationCommandDeg;
+    image.finalRotateDeg.from = undefined;
+    image.finalRotateDeg.to = undefined;
+    image.finalRotateDeg.invalidated = true;
+    image.finalRotateDeg.interpolation.lastCommandValue =
+      image.finalRotateDeg.current;
 
     image.offset.offsetDeg.from = undefined;
     image.offset.offsetDeg.to = undefined;
@@ -988,16 +982,17 @@ export const createSpriteLayer = <T = any>(
     image.offset.offsetMeters.interpolation.lastCommandValue =
       image.offset.offsetMeters.current;
 
-    image.opacity.from = undefined;
-    image.opacity.to = undefined;
-    image.opacity.invalidated = true;
-    image.opacity.interpolation.targetValue = image.opacity.current;
-    image.opacity.interpolation.lastCommandValue = image.opacity.current;
+    image.finalOpacity.from = undefined;
+    image.finalOpacity.to = undefined;
+    image.finalOpacity.invalidated = true;
+    image.finalOpacity.interpolation.targetValue = image.finalOpacity.current;
+    image.finalOpacity.interpolation.lastCommandValue =
+      image.finalOpacity.current;
     const spriteOpacityMultiplier = sprite.opacityMultiplier ?? 1;
     const lodMultiplier = image.lodOpacity || 1;
     if (spriteOpacityMultiplier > 0 && lodMultiplier > 0) {
-      image.opacity.interpolation.baseValue = clampOpacity(
-        image.opacity.current / (spriteOpacityMultiplier * lodMultiplier)
+      image.finalOpacity.interpolation.baseValue = clampOpacity(
+        image.finalOpacity.current / (spriteOpacityMultiplier * lodMultiplier)
       );
     }
 
@@ -1024,8 +1019,8 @@ export const createSpriteLayer = <T = any>(
         invalidateImageInterpolationState(sprite, image);
         // Preserve the prior displayed rotation so manual angles
         // aren't overwritten during visibility transitions.
-        image.displayedRotateDeg =
-          image.resolvedBaseRotateDeg + image.rotationCommandDeg;
+        const autoRotationDeg = resolveImageAutoRotationDeg(sprite, image);
+        image.finalRotateDeg.current = autoRotationDeg + image.rotateDeg;
       });
     });
   };
@@ -1180,61 +1175,7 @@ export const createSpriteLayer = <T = any>(
 
   //////////////////////////////////////////////////////////////////////////
 
-  type SpriteEventKey = keyof SpriteLayerEventMap<T>;
-  type GenericSpriteListener = SpriteLayerEventListener<T, SpriteEventKey>;
-
-  /** Event listener registry. */
-  const eventListeners = new Map<SpriteEventKey, Set<GenericSpriteListener>>();
-
-  /**
-   * Retrieves or lazily creates the listener set for a specific event type.
-   * @param {SpriteEventKey} type - Event type identifier.
-   * @returns {Set<GenericSpriteListener>} Listener set.
-   */
-  const getListenerSet = (type: SpriteEventKey): Set<GenericSpriteListener> => {
-    let set = eventListeners.get(type);
-    if (!set) {
-      set = new Set();
-      eventListeners.set(type, set);
-    }
-    return set;
-  };
-
-  /**
-   * Registers a sprite-layer event listener.
-   * @param {K} type - Event type to subscribe to.
-   * @param {SpriteLayerEventListener<T, K>} listener - Listener callback.
-   */
-  const addEventListener = <K extends SpriteEventKey>(
-    type: K,
-    listener: SpriteLayerEventListener<T, K>
-  ): void => {
-    getListenerSet(type).add(listener as GenericSpriteListener);
-  };
-
-  /**
-   * Removes a previously registered event listener.
-   * @param {K} type - Event type to unsubscribe from.
-   * @param {SpriteLayerEventListener<T, K>} listener - Listener to remove.
-   */
-  const removeEventListener = <K extends SpriteEventKey>(
-    type: K,
-    listener: SpriteLayerEventListener<T, K>
-  ): void => {
-    const listeners = eventListeners.get(type);
-    // No listener set mapped to this type, nothing to remove.
-    if (!listeners) {
-      return;
-    }
-    listeners.delete(listener as GenericSpriteListener);
-    // Drop the set entirely once it becomes empty to free memory.
-    if (listeners.size === 0) {
-      eventListeners.delete(type);
-    }
-  };
-
   let canvasElement: HTMLCanvasElement | undefined;
-  const inputListenerDisposers: Array<() => void> = [];
   let mapVisible =
     typeof document !== 'undefined'
       ? document.visibilityState !== 'hidden'
@@ -1248,29 +1189,6 @@ export const createSpriteLayer = <T = any>(
   };
 
   const isLayerVisible = (): boolean => mapVisible;
-
-  /**
-   * Determines if any listeners are registered for the specified event.
-   * @param {SpriteEventKey} type - Event type identifier.
-   * @returns {boolean} `true` when at least one listener exists.
-   */
-  const hasSpriteListeners = (type: SpriteEventKey): boolean =>
-    // Treat missing listener sets as zero, otherwise check the registered count.
-    (eventListeners.get(type)?.size ?? 0) > 0;
-
-  /**
-   * Indicates whether any `spriteclick` listeners are registered.
-   * @returns {boolean} `true` when at least one click listener exists.
-   */
-  const hasSpriteClickListeners = (): boolean =>
-    hasSpriteListeners('spriteclick');
-
-  /**
-   * Indicates whether any `spritehover` listeners are registered.
-   * @returns {boolean} `true` when at least one hover listener exists.
-   */
-  const hasSpriteHoverListeners = (): boolean =>
-    hasSpriteListeners('spritehover');
 
   /**
    * Resolves sprite and image state for a hit-test entry.
@@ -1302,70 +1220,6 @@ export const createSpriteLayer = <T = any>(
   };
 
   /**
-   * Dispatches a `spriteclick` event to registered listeners.
-   * @param {HitTestEntry} hitEntry - Entry that was hit.
-   * @param {SpriteScreenPoint} screenPoint - Screen-space location of the click.
-   * @param {MouseEvent | PointerEvent | TouchEvent} originalEvent - Native input event.
-   */
-  const dispatchSpriteClick = (
-    hitEntry: HitTestEntry<T>,
-    screenPoint: SpriteScreenPoint,
-    originalEvent: MouseEvent | PointerEvent | TouchEvent
-  ): void => {
-    const listeners = eventListeners.get('spriteclick');
-    // When no listeners are registered, short-circuit without doing extra work.
-    if (!listeners || listeners.size === 0) {
-      return;
-    }
-
-    const payload = resolveSpriteEventPayload(hitEntry);
-
-    const clickEvent: SpriteLayerClickEvent<T> = {
-      type: 'spriteclick',
-      sprite: payload.sprite,
-      image: payload.image,
-      screenPoint,
-      originalEvent,
-    };
-
-    listeners.forEach((listener) => {
-      (listener as SpriteLayerEventListener<T, 'spriteclick'>)(clickEvent);
-    });
-  };
-
-  /**
-   * Dispatches a `spritehover` event to registered listeners.
-   * @param {HitTestEntry} hitEntry - Entry that was hit.
-   * @param {SpriteScreenPoint} screenPoint - Screen-space location of the hover.
-   * @param {MouseEvent | PointerEvent} originalEvent - Native input event.
-   */
-  const dispatchSpriteHover = (
-    hitEntry: HitTestEntry<T> | undefined,
-    screenPoint: SpriteScreenPoint,
-    originalEvent: MouseEvent | PointerEvent
-  ): void => {
-    const listeners = eventListeners.get('spritehover');
-    // When no listeners are registered, short-circuit without doing extra work.
-    if (!listeners || listeners.size === 0) {
-      return;
-    }
-
-    const payload = resolveSpriteEventPayload(hitEntry);
-
-    const hoverEvent: SpriteLayerHoverEvent<T> = {
-      type: 'spritehover',
-      sprite: payload.sprite,
-      image: payload.image,
-      screenPoint,
-      originalEvent,
-    };
-
-    listeners.forEach((listener) => {
-      (listener as SpriteLayerEventListener<T, 'spritehover'>)(hoverEvent);
-    });
-  };
-
-  /**
    * Resolves hit-test information for a native event.
    * @param {MouseEvent | PointerEvent | TouchEvent} nativeEvent - Original browser event.
    * @returns {{ hitEntry: HitTestEntry; screenPoint: SpriteScreenPoint } | undefined} Hit-test result or `undefined`.
@@ -1385,43 +1239,12 @@ export const createSpriteLayer = <T = any>(
     );
   };
 
-  /**
-   * Handles pointer/touch events to trigger sprite click callbacks when matches are found.
-   * @param {MouseEvent | PointerEvent | TouchEvent} nativeEvent - Original browser event.
-   */
-  const processClickEvent = (
-    nativeEvent: MouseEvent | PointerEvent | TouchEvent
-  ): void => {
-    // Skip work entirely when no listeners are interested in click events.
-    if (!hasSpriteClickListeners()) {
-      return;
-    }
-
-    const hitResult = resolveHitTestResult(nativeEvent);
-    if (!hitResult || !hitResult.hitEntry) {
-      return;
-    }
-
-    dispatchSpriteClick(hitResult.hitEntry, hitResult.screenPoint, nativeEvent);
-  };
-
-  /**
-   * Handles pointer/mouse move events to trigger sprite hover callbacks.
-   * @param {MouseEvent | PointerEvent} nativeEvent - Original browser hover event.
-   */
-  const processHoverEvent = (nativeEvent: MouseEvent | PointerEvent): void => {
-    // Skip work entirely when no listeners are interested in hover events.
-    if (!hasSpriteHoverListeners()) {
-      return;
-    }
-
-    const hitResult = resolveHitTestResult(nativeEvent);
-    if (!hitResult) {
-      return;
-    }
-
-    dispatchSpriteHover(hitResult.hitEntry, hitResult.screenPoint, nativeEvent);
-  };
+  const mouseEventsController: SpriteMouseEventsController<T> =
+    createSpriteMouseEventsController<T>({
+      resolveHitTestResult,
+      resolveSpriteEventPayload,
+      updateVisibilityState,
+    });
 
   //////////////////////////////////////////////////////////////////////////
 
@@ -1470,14 +1293,20 @@ export const createSpriteLayer = <T = any>(
       sprite.images.forEach((orderMap) => {
         // Inspect each ordered image entry to update rotation/offset animations.
         orderMap.forEach((image) => {
+          const isOpacityInterpolating =
+            image.finalOpacity.interpolation.state !== null;
           const baseOpacity =
-            image.opacity.interpolation.baseValue ??
-            image.opacity.interpolation.lastCommandValue;
+            image.finalOpacity.interpolation.baseValue ??
+            image.finalOpacity.interpolation.lastCommandValue;
           const shouldForceVisibilityCheck =
             sprite.visibilityDistanceMeters !== undefined &&
             (baseOpacity ?? 0) > OPACITY_VISIBILITY_EPSILON;
           // Fully transparent images contribute nothing and can be ignored unless pseudo LOD controls their visibility.
-          if (image.opacity.current <= 0 && !shouldForceVisibilityCheck) {
+          if (
+            image.finalOpacity.current <= 0 &&
+            !isOpacityInterpolating &&
+            !shouldForceVisibilityCheck
+          ) {
             image.originRenderTargetIndex = SPRITE_ORIGIN_REFERENCE_INDEX_NONE;
             image.originReferenceKey = SPRITE_ORIGIN_REFERENCE_KEY_NONE;
             return;
@@ -1549,6 +1378,22 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
+  // Tracking controller hooks into sprite layout API.
+  const trackSprite = (
+    spriteId: string,
+    trackRotation: boolean | undefined
+  ): void => {
+    const sprite = sprites.get(spriteId);
+    if (!sprite) {
+      trackingController?.untrackSprite();
+      return;
+    }
+    trackingController?.trackSprite(sprite, trackRotation ?? true);
+  };
+  const untrackSprite = (): void => {
+    trackingController?.untrackSprite();
+  };
+
   //////////////////////////////////////////////////////////////////////////
 
   /**
@@ -1563,6 +1408,7 @@ export const createSpriteLayer = <T = any>(
     glContext: WebGLRenderingContext
   ): void => {
     map = mapInstance;
+    trackingController = createSpriteTrackingController(mapInstance);
     gl = glContext;
     anisotropyExtension = resolveAnisotropyExtension(glContext);
     if (anisotropyExtension) {
@@ -1584,102 +1430,8 @@ export const createSpriteLayer = <T = any>(
     }
 
     canvasElement = mapInstance.getCanvas();
-    const registerDisposer = (disposer: () => void) => {
-      inputListenerDisposers.push(disposer);
-    };
-    const supportsPointerEvents =
-      typeof window !== 'undefined' && 'PointerEvent' in window;
-    // Only attach DOM listeners when a canvas is present.
-    if (canvasElement) {
-      if (supportsPointerEvents) {
-        const pointerUpListener = (event: PointerEvent) => {
-          if (event.pointerType === 'mouse' && event.button !== 0) {
-            // Ignore non-primary mouse buttons to match click semantics.
-            return;
-          }
-          processClickEvent(event);
-        };
-        canvasElement.addEventListener('pointerup', pointerUpListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener('pointerup', pointerUpListener);
-        });
-
-        const pointerMoveListener = (event: PointerEvent) => {
-          if (!event.isPrimary) {
-            // Secondary pointers are ignored to reduce duplicate hover dispatch.
-            return;
-          }
-          if (event.pointerType === 'touch') {
-            // Touch pointers do not support hover semantics.
-            return;
-          }
-          processHoverEvent(event);
-        };
-        canvasElement.addEventListener('pointermove', pointerMoveListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener(
-            'pointermove',
-            pointerMoveListener
-          );
-        });
-      } else {
-        const clickListener = (event: MouseEvent) => {
-          if (event.button !== 0) {
-            // Only respond to primary button clicks when pointer events are unavailable.
-            return;
-          }
-          processClickEvent(event);
-        };
-        canvasElement.addEventListener('click', clickListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener('click', clickListener);
-        });
-
-        const touchListener = (event: TouchEvent) => {
-          processClickEvent(event);
-        };
-        canvasElement.addEventListener('touchend', touchListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener('touchend', touchListener);
-        });
-
-        const mouseMoveListener = (event: MouseEvent) => {
-          processHoverEvent(event);
-        };
-        canvasElement.addEventListener('mousemove', mouseMoveListener, {
-          passive: true,
-        });
-        registerDisposer(() => {
-          canvasElement?.removeEventListener('mousemove', mouseMoveListener);
-        });
-      }
-
-      const visibilityTarget =
-        canvasElement.ownerDocument ??
-        (typeof document !== 'undefined' ? document : undefined);
-      if (visibilityTarget) {
-        const visibilityListener = () => updateVisibilityState();
-        visibilityTarget.addEventListener(
-          'visibilitychange',
-          visibilityListener
-        );
-        registerDisposer(() => {
-          visibilityTarget.removeEventListener(
-            'visibilitychange',
-            visibilityListener
-          );
-        });
-        updateVisibilityState();
-      }
-    }
+    mouseEventsController.bindCanvas(canvasElement);
+    canvasElement = mouseEventsController.canvasElement;
 
     spriteDrawProgram = createSpriteDrawProgram<T>(glContext);
 
@@ -1691,8 +1443,9 @@ export const createSpriteLayer = <T = any>(
    * Called when the layer is removed from the map to release WebGL resources.
    */
   const onRemove = (): void => {
-    inputListenerDisposers.forEach((dispose) => dispose());
-    inputListenerDisposers.length = 0;
+    trackingController?.release();
+    trackingController = undefined;
+    mouseEventsController.release();
     canvasElement = undefined;
     hitTestController.clearAll();
 
@@ -1719,9 +1472,6 @@ export const createSpriteLayer = <T = any>(
         leaderLineRenderer = undefined;
       }
     }
-
-    eventListeners.forEach((set) => set.clear());
-    eventListeners.clear();
 
     gl = undefined;
     map = undefined;
@@ -1779,8 +1529,6 @@ export const createSpriteLayer = <T = any>(
             timestamp: interpolationTimestamp,
             frameContext: {
               baseMetersPerPixel: resolvedScaling.metersPerPixel,
-              spriteMinPixel: resolvedScaling.spriteMinPixel,
-              spriteMaxPixel: resolvedScaling.spriteMaxPixel,
             },
           }
         : null;
@@ -1830,8 +1578,6 @@ export const createSpriteLayer = <T = any>(
     const identityOffsetY = 0;
 
     const baseMetersPerPixel = resolvedScaling.metersPerPixel;
-    const spriteMinPixel = resolvedScaling.spriteMinPixel;
-    const spriteMaxPixel = resolvedScaling.spriteMaxPixel;
 
     // Prepare to create projection host
     const projectionHost = createProjectionHostForMap(mapInstance);
@@ -1841,9 +1587,6 @@ export const createSpriteLayer = <T = any>(
       if (!clipContext) {
         return;
       }
-
-      const zoom = projectionHost.getZoom();
-      const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
 
       // Enable blending and avoid depth-buffer interference.
       glContext.enable(glContext.BLEND);
@@ -1906,12 +1649,9 @@ export const createSpriteLayer = <T = any>(
             resolvedScaling,
             clipContext,
             baseMetersPerPixel,
-            spriteMinPixel,
-            spriteMaxPixel,
             drawingBufferWidth,
             drawingBufferHeight,
             pixelRatio,
-            zoomScaleFactor,
             identityScaleX,
             identityScaleY,
             identityOffsetX,
@@ -2095,7 +1835,7 @@ export const createSpriteLayer = <T = any>(
               continue;
             }
             const effectiveAlpha = clampOpacity(
-              border.rgba[3] * entry.image.opacity.current
+              border.rgba[3] * entry.image.finalOpacity.current
             );
             if (effectiveAlpha <= 0) {
               continue;
@@ -2361,6 +2101,12 @@ export const createSpriteLayer = <T = any>(
    */
   const getAllImageIds = (): string[] => Array.from(images.keys());
 
+  /**
+   * Returns the identifiers of every sprite registered in the layer.
+   * @returns {string[]} Array containing all spriteIds.
+   */
+  const getAllSpriteIds = (): string[] => Array.from(sprites.keys());
+
   //////////////////////////////////////////////////////////////////////////
 
   /**
@@ -2488,7 +2234,7 @@ export const createSpriteLayer = <T = any>(
       // Tags default to null to simplify downstream comparisons.
       tag: init.tag ?? null,
       lastAutoRotationLocation: cloneSpriteLocation(currentLocation),
-      lastAutoRotationAngleDeg: 0,
+      currentAutoRotateDeg: 0,
       autoRotationInvalidated: false,
       interpolationDirty: false,
       cachedMercator: initialMercator,
@@ -2741,7 +2487,8 @@ export const createSpriteLayer = <T = any>(
       subLayer,
       order,
       originReference,
-      !isLayerVisible() || sprite.location.invalidated === true
+      !isLayerVisible() || sprite.location.invalidated === true,
+      sprite.currentAutoRotateDeg
     );
     state.imageHandle = resolveImageHandle(state.imageId);
 
@@ -2778,11 +2525,8 @@ export const createSpriteLayer = <T = any>(
       }
     }
 
-    if (state.autoRotation) {
-      state.resolvedBaseRotateDeg = sprite.lastAutoRotationAngleDeg;
-    }
-
-    syncImageRotationChannel(state);
+    const autoRotationDeg = resolveImageAutoRotationDeg(sprite, state);
+    syncImageRotationChannel(state, autoRotationDeg);
     updateImageInterpolationDirtyState(sprite, state);
 
     setImageState(sprite, state);
@@ -2866,6 +2610,8 @@ export const createSpriteLayer = <T = any>(
     const mapCurrentlyVisible = isLayerVisible();
     const interpolationAllowed =
       interpolationCalculationEnabled && mapCurrentlyVisible;
+    const resolveAutoRotationDeg = () =>
+      resolveImageAutoRotationDeg(sprite, state);
 
     // Apply updates for each provided attribute.
     if (imageUpdate.imageId !== undefined) {
@@ -2878,18 +2624,18 @@ export const createSpriteLayer = <T = any>(
       state.mode = imageUpdate.mode;
     }
     const interpolationOptions = imageUpdate.interpolation;
-    const opacityInterpolationOption = interpolationOptions?.opacity;
+    const opacityInterpolationOption = interpolationOptions?.finalOpacity;
     if (opacityInterpolationOption !== undefined) {
-      state.opacity.interpolation.options =
+      state.finalOpacity.interpolation.options =
         opacityInterpolationOption === null
           ? null
           : cloneInterpolationOptions(opacityInterpolationOption);
     }
     const allowOpacityInterpolation =
-      interpolationAllowed && !state.opacity.invalidated;
+      interpolationAllowed && !state.finalOpacity.invalidated;
     const resolvedOpacityInterpolationOption = allowOpacityInterpolation
       ? opacityInterpolationOption === undefined
-        ? (state.opacity.interpolation.options ?? null)
+        ? (state.finalOpacity.interpolation.options ?? null)
         : opacityInterpolationOption
       : null;
     if (imageUpdate.opacity !== undefined) {
@@ -2900,8 +2646,8 @@ export const createSpriteLayer = <T = any>(
         resolvedOpacityInterpolationOption,
         sprite.opacityMultiplier
       );
-      if (mapCurrentlyVisible && state.opacity.invalidated) {
-        state.opacity.invalidated = false;
+      if (mapCurrentlyVisible && state.finalOpacity.invalidated) {
+        state.finalOpacity.invalidated = false;
       }
     } else if (opacityInterpolationOption === null) {
       clearOpacityInterpolation(state);
@@ -2940,17 +2686,23 @@ export const createSpriteLayer = <T = any>(
     const offsetMetersInterpolationOption = allowOffsetMetersInterpolation
       ? interpolationOptions?.offsetMeters
       : null;
-    // Pull out rotateDeg interpolation hints when the payload includes them.
+    // Pull out finalRotateDeg interpolation hints when the payload includes them.
     const allowRotateInterpolation =
-      interpolationAllowed && !state.rotateDeg.invalidated;
+      interpolationAllowed && !state.finalRotateDeg.invalidated;
     const rotateInterpolationOption = allowRotateInterpolation
-      ? interpolationOptions?.rotateDeg
+      ? interpolationOptions?.finalRotateDeg
       : null;
     let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
-    if (imageUpdate.offset !== undefined) {
-      const clonedOffset = cloneOffset(imageUpdate.offset);
-      applyOffsetUpdate(state, clonedOffset, {
+    const hasOffsetMetersUpdate = imageUpdate.offsetMeters !== undefined;
+    const hasOffsetDegUpdate = imageUpdate.offsetDeg !== undefined;
+    if (hasOffsetMetersUpdate || hasOffsetDegUpdate) {
+      const nextOffset = {
+        offsetMeters:
+          imageUpdate.offsetMeters ?? state.offset.offsetMeters.current,
+        offsetDeg: imageUpdate.offsetDeg ?? state.offset.offsetDeg.current,
+      };
+      applyOffsetUpdate(state, nextOffset, {
         deg: allowOffsetDegInterpolation ? offsetDegInterpolationOption : null,
         meters: allowOffsetMetersInterpolation
           ? offsetMetersInterpolationOption
@@ -2977,11 +2729,11 @@ export const createSpriteLayer = <T = any>(
     if (rotateInterpolationOption !== undefined) {
       // Caller supplied new rotation interpolation preferences.
       if (rotateInterpolationOption === null) {
-        state.rotateDeg.interpolation.options = null;
+        state.finalRotateDeg.interpolation.options = null;
         rotationOverride = null;
       } else {
         const cloned = cloneInterpolationOptions(rotateInterpolationOption);
-        state.rotateDeg.interpolation.options = cloned;
+        state.finalRotateDeg.interpolation.options = cloned;
         rotationOverride = cloned;
       }
       hasRotationOverride = true;
@@ -2989,9 +2741,12 @@ export const createSpriteLayer = <T = any>(
     let requireRotationSync = false;
     if (imageUpdate.rotateDeg !== undefined) {
       const nextRotation = normalizeAngleDeg(imageUpdate.rotateDeg);
-      state.rotateDeg.from = state.rotateDeg.current;
-      state.rotateDeg.to = nextRotation;
-      state.rotationCommandDeg = nextRotation;
+      const targetDisplayed = normalizeAngleDeg(
+        resolveAutoRotationDeg() + nextRotation
+      );
+      state.finalRotateDeg.from = state.finalRotateDeg.current;
+      state.finalRotateDeg.to = targetDisplayed;
+      state.rotateDeg = nextRotation;
       requireRotationSync = true;
     } else if (hasRotationOverride) {
       requireRotationSync = true;
@@ -3000,7 +2755,6 @@ export const createSpriteLayer = <T = any>(
       state.autoRotation = imageUpdate.autoRotation;
       if (imageUpdate.autoRotation) {
         if (!prevAutoRotation) {
-          state.resolvedBaseRotateDeg = sprite.lastAutoRotationAngleDeg;
           shouldReapplyAutoRotation = true;
         }
       } else if (prevAutoRotation) {
@@ -3019,22 +2773,22 @@ export const createSpriteLayer = <T = any>(
     }
 
     if (shouldResetResolvedAngle) {
-      state.resolvedBaseRotateDeg = 0;
       requireRotationSync = true;
     }
 
     if (shouldReapplyAutoRotation) {
       const applied = applyAutoRotation(sprite, sprite.location.current, true);
       if (!applied && state.autoRotation) {
-        state.resolvedBaseRotateDeg = sprite.lastAutoRotationAngleDeg;
         requireRotationSync = true;
       }
     }
 
     if (requireRotationSync) {
+      const autoRotationDeg = resolveAutoRotationDeg();
       // Ensure displayed angle reflects the latest base rotation and overrides.
       syncImageRotationChannel(
         state,
+        autoRotationDeg,
         // When a rotation override has been computed, pass it along (null clears interpolation); otherwise leave undefined.
         interpolationAllowed
           ? hasRotationOverride
@@ -3042,8 +2796,8 @@ export const createSpriteLayer = <T = any>(
             : undefined
           : null
       );
-      if (mapCurrentlyVisible && state.rotateDeg.invalidated) {
-        state.rotateDeg.invalidated = false;
+      if (mapCurrentlyVisible && state.finalRotateDeg.invalidated) {
+        state.finalRotateDeg.invalidated = false;
       }
     }
 
@@ -3222,18 +2976,19 @@ export const createSpriteLayer = <T = any>(
           sprite.images.forEach((orderMap) => {
             orderMap.forEach((image) => {
               const baseOpacity =
-                image.opacity.interpolation.baseValue ?? image.opacity.current;
+                image.finalOpacity.interpolation.baseValue ??
+                image.finalOpacity.current;
               if (!(Number.isFinite(baseOpacity) && baseOpacity > 0)) {
                 return;
               }
-              if (image.opacity.current > 0) {
+              if (image.finalOpacity.current > 0) {
                 return;
               }
               image.lodOpacity = 1;
               applyOpacityUpdate(
                 image,
                 baseOpacity,
-                image.opacity.interpolation.options,
+                image.finalOpacity.interpolation.options,
                 sprite.opacityMultiplier
               );
             });
@@ -3323,12 +3078,13 @@ export const createSpriteLayer = <T = any>(
 
       if (effectiveOptions && effectiveOptions.durationMs > 0) {
         // Create a fresh interpolation whenever a timed move is requested.
-        const { state, requiresInterpolation } = createInterpolationState({
-          currentLocation: locationState.current,
-          lastCommandLocation: locationInterpolation.lastCommandValue,
-          nextCommandLocation: newCommandLocation,
-          options: effectiveOptions,
-        });
+        const { state, requiresInterpolation } =
+          createLocationInterpolationState({
+            currentLocation: locationState.current,
+            lastCommandLocation: locationInterpolation.lastCommandValue,
+            nextCommandLocation: newCommandLocation,
+            options: effectiveOptions,
+          });
 
         // Clear any stale state before deciding whether to reuse it.
         locationInterpolation.state = null;
@@ -3738,9 +3494,9 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
-  const setHitTestEnabled = (enabled: boolean): void => {
-    const changed = hitTestController.setHitTestEnabled(enabled);
-    if (!changed || !enabled || !map) {
+  const setHitTestDetection = (detect: boolean): void => {
+    const changed = hitTestController.setHitTestDetection(detect);
+    if (!changed || !detect || !map) {
       return;
     }
 
@@ -3769,6 +3525,7 @@ export const createSpriteLayer = <T = any>(
     unregisterImage,
     unregisterAllImages,
     getAllImageIds,
+    getAllSpriteIds,
     addSprite,
     addSprites,
     removeSprite,
@@ -3783,9 +3540,11 @@ export const createSpriteLayer = <T = any>(
     mutateSprites,
     updateForEach,
     setInterpolationCalculation,
-    setHitTestEnabled,
-    on: addEventListener,
-    off: removeEventListener,
+    setHitTestDetection,
+    trackSprite,
+    untrackSprite,
+    on: mouseEventsController.addEventListener,
+    off: mouseEventsController.removeEventListener,
   };
 
   return spriteLayout;

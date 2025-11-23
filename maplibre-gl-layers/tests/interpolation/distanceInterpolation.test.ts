@@ -55,24 +55,21 @@ describe('evaluateDistanceInterpolation', () => {
       options: { durationMs: 1000 },
     });
 
-    const start = evaluateDistanceInterpolation({
-      state,
-      timestamp: 500,
-    });
+    const start = evaluateDistanceInterpolation(state, 500);
     state.startTimestamp = start.effectiveStartTimestamp;
 
-    const halfway = evaluateDistanceInterpolation({
+    const halfway = evaluateDistanceInterpolation(
       state,
-      timestamp: state.startTimestamp + 500,
-    });
+      state.startTimestamp + 500
+    );
 
     expect(halfway.completed).toBe(false);
     expect(halfway.value).toBeCloseTo(90);
 
-    const end = evaluateDistanceInterpolation({
+    const end = evaluateDistanceInterpolation(
       state,
-      timestamp: state.startTimestamp + 1500,
-    });
+      state.startTimestamp + 1500
+    );
 
     expect(end.completed).toBe(true);
     expect(end.value).toBe(0);
