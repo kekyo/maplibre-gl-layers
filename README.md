@@ -251,7 +251,7 @@ Since the arrows and text labels are placed on different sublayers, the text lab
 
 The `anchor` option controls which point inside the image aligns with the sprite’s base coordinate. Both `anchor.x` and `anchor.y` are normalized between -1 (left or bottom) and 1 (right or top). The default `{ x: 0, y: 0 }` places the image center on the sprite location. Adjusting the anchor lets you fine-tune the placement and the pivot used for rotation. Values should generally be between -1 and 1, but values outside this range may be specified as needed.
 
-The anchor applies in both surface and billboard modes. Other options such as `rotateDeg`, `scale`, `offset`, and `originLocation` are all calculated from the anchor position.
+The anchor applies in both surface and billboard modes. Other options such as `rotateDeg`, `scale`, `offsetMeters`/`offsetDeg`, and `originLocation` are all calculated from the anchor position.
 
 The following example demonstrates how setting an anchor at the arrowhead enables more precise coordinate positioning on the map. For registered images where the arrowhead is drawn pointing upward, this is achieved by specifying the anchor position at the top center:
 
@@ -272,7 +272,7 @@ spriteLayer.addSprite('vehicle-anchor', {
 
 ## Offset
 
-The `offset` option displaces an image from its anchor. `offset.offsetMeters.current` specifies the distance in meters, and `offset.offsetDeg.current` specifies the heading. Surface mode interprets the heading as clockwise degrees from geographic north, while billboard mode uses clockwise degrees from the top of the screen.
+Use `offsetMeters` and `offsetDeg` to displace an image from its anchor. `offsetMeters` specifies the distance in meters, and `offsetDeg` specifies the heading. Surface mode interprets the heading as clockwise degrees from geographic north, while billboard mode uses clockwise degrees from the top of the screen.
 
 Distances are converted to pixels according to the SpriteLayer scaling options, so zooming or pitching the map keeps the relative placement intact. Without an offset, the image renders directly at the anchor.
 
@@ -286,7 +286,8 @@ spriteLayer.addSprite('vehicle-label', {
       order: 0,
       imageId: TEXT_LABEL1_ID, // Text ID (Image ID)
       mode: 'billboard',
-      offset: { offsetMeters: 12, offsetDeg: 90 }, // Shift right to 12 meter
+      offsetMeters: 12, // Shift right to 12 meters
+      offsetDeg: 90,
     },
   ],
 });
@@ -318,7 +319,7 @@ spriteLayer.addSprite('vehicle-rotated', {
 
 ## Image Scale
 
-`scale` multiplies the width and height of the image and also affects `offset.offsetMeters.current`.
+`scale` multiplies the width and height of the image and also affects `offsetMeters`.
 
 First, the `scale` and zoom factor are multiplied by the original image size. Based on this result, the anchor position and rotation center are determined. Furthermore, the offset distance is also scaled by the `scale`, ensuring the overall relative balance of the sprite is maintained.
 
@@ -345,13 +346,14 @@ spriteLayer.addSprite('vehicle-scaled', {
       mode: 'billboard',
       scale: 0.5,  // Scale to reduce to half size
       originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
-      offset: { offsetMeters: 10, offsetDeg: 0 },
+      offsetMeters: 10,
+      offsetDeg: 0,
     },
   ],
 });
 ```
 
-Note: `rotateDeg` and `offset` are interpreted after applying `scale` to the image's actual size and reflecting anchor-based reference point movement. That is:
+Note: `rotateDeg`, `offsetMeters`, and `offsetDeg` are interpreted after applying `scale` to the image's actual size and reflecting anchor-based reference point movement. That is:
 
 1. Scale the image to enlarge or reduce it
 2. Determine the reference coordinate point from the anchor position
@@ -360,7 +362,7 @@ Note: `rotateDeg` and `offset` are interpreted after applying `scale` to the ima
 
 Calculations proceed in the above order.
 
-When the anchor is set outside the center, rotation and offset are always applied relative to the anchor. If the position feels unintended, review the combination of anchor, rotation, and offset. Note that in Billboard mode, the offset angle is relative to the screen, while in Surface mode it is relative to geographic coordinates using magnetic north as the reference.
+When the anchor is set outside the center, rotation and offsets are always applied relative to the anchor. If the position feels unintended, review the combination of anchor, rotation, and offsets. Note that in Billboard mode, the offset angle is relative to the screen, while in Surface mode it is relative to geographic coordinates using magnetic north as the reference.
 
 ## Opacity
 
@@ -386,6 +388,80 @@ spriteLayer.addSprite('vehicle-opacity', {
   ],
 });
 ```
+
+## Pseudo LOD
+
+Pseudo LOD lets you toggle sprite visibility based on the camera distance to the sprite’s anchor point.
+
+Set `visibilityDistanceMeters` member to the desired threshold and every image attached to that sprite disappears when the camera is farther away.
+If you omit the property, pseudo LOD is disabled.
+
+An example of using pseudo LOD:
+
+```typescript
+// Render the sprite only when the camera is within roughly 1.5 km
+spriteLayer.addSprite('vehicle-lod', {
+  location: { lng: 136.8852, lat: 35.17 },
+  visibilityDistanceMeters: 1500, // Hide automatically farther away
+  images: [
+    {
+      subLayer: 0,
+      order: 0,
+      imageId: ARROW_IMAGE_ID,
+      autoRotation: true,
+    },
+  ],
+});
+
+// Adjust at runtime with updateSprite
+spriteLayer.updateSprite('vehicle-lod', {
+  visibilityDistanceMeters: null, // null disables pseudo LOD
+});
+```
+
+## Opacity and Show-up Control
+
+The final opacity used for drawing is determined by multiplying the following three elements:
+
+1. The `opacity` value for each sprite image
+2. The opacity value from pseudo-LOD
+3. The `opacityMultiplier` value for each sprite
+
+The value obtained by multiplying the above is referred to as `finalOpacity`, and this value is used for rendering.
+Therefore, use `opacityMultiplier` if you want to apply a uniform opacity to all images of a sprite.
+
+```typescript
+// Make all sprite images semi-transparent
+spriteLayer.addSprite('vehicle-half', {
+  location: { lng: 136.8852, lat: 35.17 },
+  opacityMultiplier: 0.5,  // Semi-transparent
+  images: [
+    // ...
+  ],
+});
+```
+
+On the demo page, you can test switching between elements 1 and 3 using the `Wave` and `Wave All` buttons.
+
+Additionally, `isEnabled` is another way to toggle the visibility of sprites.
+This switches the sprite's rendering pipeline on or off.
+Therefore, setting `isEnabled` to `false` and having `finalOpacity` comes to 0.0 are not strictly equivalent.
+
+```typescript
+// Disable the sprite
+spriteLayer.addSprite('vehicle-half', {
+  location: { lng: 136.8852, lat: 35.17 },
+  isEnabled: false,  // Disabled
+  images: [
+    // ...
+  ],
+});
+```
+
+Setting `isEnabled` to `false` will cause most calculations for that sprite to be skipped, allowing you to use it to improve performance.
+However, if you change `isEnabled` to `false` to make the sprite invisible, no interpolation processing will be applied until the sprite disappears; the sprite will suddenly become invisible.
+
+Note: When `finalOpacity` is set to 0.0, coordinate calculations cannot be skipped, but rendering requests to WebGL are omitted, which slightly improves performance.
 
 ## Auto Heading Rotation
 
@@ -414,11 +490,11 @@ spriteLayer.addSprite('vehicle-auto', {
 
 ## Sprite Movement Interpolation
 
-SpriteLayer can interpolate sprite positions to produce smooth animations. Consider:
+SpriteLayer can interpolate sprite locations to produce smooth animations. Consider:
 
-- **Start and end locations** - Interpolation travels between these two points automatically.
+- **Start and end locations** - Interpolation travels between these two locations automatically.
 - **Duration** - The amount of time spent moving from start to end.
-- **Mode** - Either feedback or feed-forward.
+- **Mode** - Either feedback or feedforward.
 - **Curve** - Specified as an easing function type (described later).
 
 By default, when you update a sprite’s location it jumps immediately. Supplying interpolation options animates the movement instead.
@@ -456,18 +532,26 @@ Of course, since this is a predicted coordinate, a disadvantage is that if the m
 
 ## Interpolation of Image Rotation Angle, Offset, and Opacity
 
-Similar to sprite position interpolation, you can smoothly change the rotation, offset, and opacity of each image.
-These are independent of sprite position interpolation and are controlled individually via the `interpolation` field in `SpriteImageDefinitionUpdate`.
+Similar to sprite movement interpolation, you can smoothly change the rotation, offset, and opacity for each image.
+These are independent of sprite movement interpolation.
 
-`interpolation` supports the following channels:
+Each interpolation parameter is specified in the sprite image's `interpolation` member:
 
-- `finalRotateDeg`: Additional rotation angle for the image. Interpolated along the shortest path and snaps to the final angle upon completion.
-- `offsetDeg` / `offsetMeters`: Offset direction and distance. Angle and distance can be controlled with separate timing and easing.
-- `finalOpacity`: Fades automatically clipping values between 0.0 and 1.0. As the value approaches 0, rendering is suppressed, making it useful for LOD or highlight effects.
+- `finalRotateDeg`: The final rotation angle of the image.
+  This is the sum of the `rotateDeg` value and the angle from automatic heading rotation.
+  Interpolated using the shortest angle path.
+- `offsetDeg`: The direction of the offset. Interpolated using the shortest angle path.
+- `offsetMeters`: The distance of the offset.
+- `finalOpacity`: The final opacity of the image.
+  This is the value obtained by multiplying the `opacity` value, the pseudo-LOD calculation result, and the `opacityMultiplier` value for the sprite.
+  It is clipped to the range 0.0 to 1.0.
 
-Assign `durationMs` and an interpolation mode (`feedback`/`feedforward`) to each channel, along with an optional easing preset.
+Each interpolation parameter is given an interpolation duration `durationMs`, an interpolation mode (`feedback`/`feedforward`), and an optional easing function type (described later).
 
-Removing the setting or passing `null` immediately stops that channel.
+Interpolation modes are explained in the same way as sprite movement interpolation.
+
+Setting the `interpolation` member itself to `null` stops all interpolation processing.
+Setting any individual interpolation parameter to `null` immediately stops only that specific interpolation process.
 
 Below is an example applying interpolation to rotation, offset, and opacity:
 
@@ -482,10 +566,8 @@ spriteLayer.updateSpriteImage('vehicle-rotated', 0, 0, {
 
 // Smoothly change the offset heading over 600 ms
 spriteLayer.updateSpriteImage('vehicle-label', 1, 0, {
-  offset: {
-    offsetDeg: 45, // Rotate toward 45 degrees
-    offsetMeters: 12,
-  },
+  offsetDeg: 45, // Rotate toward 45 degrees
+  offsetMeters: 12,
   interpolation: {
     offsetDeg: { durationMs: 600, mode: 'feedforward', },
     offsetMeters: { durationMs: 600, },
@@ -495,8 +577,7 @@ spriteLayer.updateSpriteImage('vehicle-label', 1, 0, {
 // To stop interpolation, set the relevant parameter to `null`
 spriteLayer.updateSpriteImage('vehicle-label', 1, 0, {
   interpolation: {
-    offsetDeg: null,
-    offsetMeters: null,
+    offsetDeg: null,  // Stop offset rotation interpolation
   },
 });
 
@@ -537,12 +618,12 @@ spriteLayer.updateSpriteImage('vehicle-easing', 0, 0, {
   // Nearly transparent
   opacity: 0.2,
   interpolation: {
-    rotateDeg: {
+    finalRotateDeg: {
       durationMs: 600,
       // Suddenly slowing down toward the end
       easing: { type: 'bounce', bounces: 4, decay: 0.6 },
     },
-    opacity: {
+    finalOpacity: {
       durationMs: 400,
       mode: 'feedforward',
       // Fade out gradually
@@ -585,7 +666,8 @@ spriteLayer.updateSprite('car-1', {
 });
 spriteLayer.updateSpriteImage('car-1', 0, 0, {
   rotateDeg: 45,  // Immediately applied
-  offset: { offsetMeters: 12, offsetDeg: 30 },  // Immediately applied
+  offsetMeters: 12,  // Immediately applied
+  offsetDeg: 30,  // Immediately applied
   interpolation: {
     finalRotateDeg: { durationMs: 800 },
     offsetDeg: { durationMs: 500 },
@@ -629,7 +711,8 @@ spriteLayer.addSprite('vehicle-group', {
       imageId: TEXT_LABEL1_ID,
       mode: 'billboard',
       originLocation: { subLayer: 0, order: 0, useResolvedAnchor: true },
-      offset: { offsetMeters: 8, offsetDeg: 0 },
+      offsetMeters: 30,  // Keep 30 meters away from the arrow
+      offsetDeg: 0,  // Position upward along the arrow
     },
   ],
 });
@@ -639,82 +722,6 @@ Keep in mind:
 
 - The referenced image must belong to the same sprite.
 - Circular references or references to missing images produce errors, so design chains carefully.
-
-## Pseudo LOD
-
-Pseudo LOD lets you toggle sprite visibility based on the camera distance to the sprite’s anchor point.
-
-Set `visibilityDistanceMeters` to the desired threshold and every image attached to that sprite disappears when the camera is farther away.
-If you omit the property, pseudo LOD is disabled and the usual `opacity` rules apply.
-
-```typescript
-// Render the sprite only when the camera is within roughly 1.5 km
-spriteLayer.addSprite('vehicle-lod', {
-  location: { lng: 136.8852, lat: 35.17 },
-  visibilityDistanceMeters: 1500, // Hide automatically farther away
-  images: [
-    {
-      subLayer: 0,
-      order: 0,
-      imageId: ARROW_IMAGE_ID,
-      autoRotation: true,
-    },
-  ],
-});
-
-// Adjust at runtime with updateSprite
-spriteLayer.updateSprite('vehicle-lod', {
-  visibilityDistanceMeters: null, // null disables pseudo LOD
-});
-```
-
-## Opacity and Show-up Control
-
-The opacity used for drawing is determined by multiplying the following three factors:
-
-1. The `opacity` value for each sprite image
-2. The opacity value from pseudo-LOD
-3. The sprite's `opacityMultiplier` value
-
-After multiplying these values, the result obtained through a dedicated opacity interpolator is used as the rendering opacity.
-Therefore, use `opacityMultiplier` if you want to apply a uniform opacity to all images of a sprite.
-
-```typescript
-// Make all images in the sprite layer semi-transparent
-spriteLayer.addSprite('vehicle-half', {
-  location: { lng: 136.8852, lat: 35.17 },
-  opacityMultiplier: 0.5,  // Semi-transparent
-  images: [
-    // ...
-  ],
-});
-```
-
-On the demo page, you can test switching between elements 1 and 3 using the `Wave` and `Wave All` buttons.
-
-Additionally, `isEnabled` serves as the value for toggling a sprite's visibility.
-This switches the sprite's rendering pipeline on or off.
-Therefore, setting `isEnabled` to `false` is strictly different from the opacity calculation result being 0.0.
-
-```typescript
-// Disable the sprite
-spriteLayer.addSprite('vehicle-half', {
-  location: { lng: 136.8852, lat: 35.17 },
-  isEnabled: false,  // Disabled
-  images: [
-    // ...
-  ],
-});
-```
-
-Setting `isEnabled` to `false` significantly reduces calculations for that sprite, which can be used to improve performance.
-However, if your goal is to hide the sprite, be aware that it will disappear suddenly.
-This means no interpolation processing is applied until the sprite vanishes.
-If interpolation during disappearance is needed for accent effects, you must apply an opacity of 0.0.
-
-Note: When the opacity calculation result is 0.0, the first-step coordinate processing is performed,
-but the data transfer to WebGL and the actual display (by GPU shader) are skipped.
-Therefore, hiding elements using opacity also has some impact on performance.
 
 ## Borders
 
@@ -793,7 +800,7 @@ SpriteLayer exposes interaction events so your application can react to clicks a
 
 If either event fails to detect the target image, it will notify with `sprite`/`image` set to `undefined`.
 
-These event detections can be enabled using `setHitTestDetection`:
+These event detections can be enabled using `setHitTestDetection()`:
 
 ```typescript
 // Enable hit test detection
@@ -846,11 +853,31 @@ spriteLayer.on('spritehover', ({ sprite, image }) => {
 Note: Enabling hit testing incurs additional overhead for coordinate detection.
 This may impact performance, especially when handling large numbers of sprites.
 
+## Sprite Tracking
+
+Use `trackSprite()` to keep the map centered on a sprite every animation frame.
+When `trackRotation` is `true` (default), the map bearing follows the sprite’s current `finalRotateDeg`, making it easy to keep vehicles or markers aligned to the screen.
+
+If the sprite ID cannot be found, tracking is canceled automatically.
+
+```typescript
+// Center the map and align it with the sprite's rotation
+spriteLayer.trackSprite('vehicle-101');
+
+// Center only (do not rotate the map)
+spriteLayer.trackSprite('vehicle-101', false);
+
+// Stop tracking entirely
+spriteLayer.untrackSprite();
+```
+
+Call `untrackSprite()` when you want to hand camera control back to the user or after the sprite is removed.
+
 ## Tags
 
 Each sprite can store arbitrary metadata through the `tag` property.
 
-You assign the tag when calling `addSprite` or `updateSprite`, then read it later from `sprite.tag`. Tags do not affect rendering directly; instead they let your application identify vehicle types, ownership, backend IDs, or drive custom behaviors when a sprite is interacted with.
+You assign the tag when calling `addSprite()` or `updateSprite()`, then read it later from `sprite.tag`. Tags do not affect rendering directly; instead they let your application identify vehicle types, ownership, backend IDs, or drive custom behaviors when a sprite is interacted with.
 
 Because the tag type is generic, you can provide an explicit type parameter when creating the SpriteLayer so that your code remains type-safe in TypeScript. Updating a tag does not trigger a redraw unless other visual properties change.
 
@@ -883,18 +910,19 @@ spriteLayer.on('spriteclick', ({ sprite }) => {
 });
 ```
 
-To change or remove a tag later, call `updateSprite` with a new `tag` value. Passing `null` (or omitting the property) clears the tag.
+To change or remove a tag later, call `updateSprite()` with a new `tag` value.
+Passing `null` (or omitting the property) clears the tag.
 
 ## Bulk Sprite Management
 
-SpriteLayer now offers bulk functions makes faster where many sprites must be placed or removed at once.
+To efficiently place or remove large numbers of sprites at once, use bulk functions like `addSprites()` or `removeSprites()`.
 
-- `addSprites` accepts either a record (`Record<string, SpriteInit<TTag>>`) or an array of [`SpriteInitEntry<TTag>`](./maplibre-gl-layers/src/types.ts) objects. The latter simply extends `SpriteInit` with a `spriteId` field for convenience. The method returns how many sprites were inserted.
-- `removeSprites` removes multiple sprites by ID and returns the number of entries that were present.
-- `removeAllSprites` clears every sprite and reports how many were removed.
+- `addSprites()` accepts either a record (`Record<string, SpriteInit<TTag>>`) or an array of [`SpriteInitEntry<TTag>`](./maplibre-gl-layers/src/types.ts) objects. The latter simply extends `SpriteInit` with a `spriteId` field for convenience. The method returns how many sprites were inserted.
+- `removeSprites()` removes multiple sprites by ID and returns the number of entries that were present.
+- `removeAllSprites()` clears every sprite and reports how many were removed.
 - `removeAllSpriteImages(spriteId)` removes every image assignment from the specified sprite while leaving the sprite shell intact, returning the number of images that were removed.
 
-The following are examples:
+Examples:
 
 ```typescript
 // Array form using SpriteInitEntry
@@ -934,17 +962,16 @@ spriteLayer.addSprites(moreVehicles);
 const removed = spriteLayer.removeSprites(['vehicle-201', 'vehicle-302']);
 console.log(`Sprites removed: ${removed}`);
 
-// Full resets
 spriteLayer.removeAllSpriteImages('vehicle-202'); // Removes all images from a single sprite
 spriteLayer.removeAllSprites(); // Removes every sprite
 ```
 
-When you need to update many sprites at once, SpriteLayer provides two helpers that report how many sprites changed:
+To efficiently update multiple sprites at once, use `mutateSprites()` and `updateForEach()`. Both return the number of sprites that were modified.
 
-- `mutateSprites` synchronises a known set of sprite IDs in one pass. It works well when you have a batch of server-side updates or a diff-like structure.
-- `updateForEach` iterates over every registered sprite so you can adjust them based on client-side context. Returning `false` from the callback stops the iteration early.
+- `mutateSprites()` synchronises a known set of sprite IDs in one pass. It works well when you have a batch of server-side updates or a diff-like structure.
+- `updateForEach()` iterates over every registered sprite so you can adjust them based on client-side context. Returning `false` from the callback stops the iteration early.
 
-The snippet below demonstrates `mutateSprites` in conjunction with server data that may create, update, or remove sprites:
+The snippet below demonstrates `mutateSprites()` in conjunction with server data that may create, update, or remove sprites:
 
 ```typescript
 import type { SpriteLocation, SpriteMutateSourceItem } from 'maplibre-gl-layers';
@@ -982,10 +1009,11 @@ const changed = spriteLayer.mutateSprites(serverUpdates, {
     return 'notremove';
   },
 });
+
 console.log(`Sprites changed: ${changed}`);
 ```
 
-If you only need to mutate existing sprites based on local state, keep using `updateForEach`:
+If you only need to mutate existing sprites based on local state, keep using `updateForEach()`:
 
 ```typescript
 // Dim only sprites tagged as buses by lowering their opacity
@@ -998,29 +1026,26 @@ const dimmed = spriteLayer.updateForEach((sprite, updater) => {
   updater.updateImage(0, 0, { opacity: 0.6 });
   return true; // Continue iterating
 });
+
 console.log(`Sprites with adjusted opacity: ${dimmed}`);
 ```
 
-The updater passed to `updateForEach` is reusable. Avoid storing it outside the callback; apply changes immediately. To inspect the current image layout, call `updater.getImageIndexMap()` and iterate through the available sub-layer and order pairs.
+The updater passed to `updateForEach()` is reusable. Avoid storing it outside the callback; apply changes immediately. To inspect the current image layout, call `updater.getImageIndexMap()` and iterate through the available sub-layer and order pairs.
 
 ---
 
 ## Initialize Options
 
-`createSpriteLayer(options?: SpriteLayerOptions)` accepts a small set of configuration values that govern how sprites are identified and scaled on the map.
+`createSpriteLayer()` accepts a small set of configuration values that govern how sprites are identified and scaled on the map:
 
 ```typescript
 // Create a SpriteLayer with specified initialization options
 const spriteLayer = createSpriteLayer({
   id: 'vehicles',
-  spriteScaling: {  // Apply scaling options
-    zoomMin: 8,
-    zoomMax: 20,
-    scaleMin: 0.1,
-    scaleMax: 1,
-    spriteMinPixel: 24,
-    spriteMaxPixel: 100,
+  spriteScaling: {  // Apply scaling limit options
     metersPerPixel: 1,
+    minScaleDistanceMeters: 500,
+    maxScaleDistanceMeters: 10000,
   },
   textureFiltering: {  // Apply texture quality options
     minFilter: 'linear-mipmap-linear',
@@ -1031,47 +1056,51 @@ const spriteLayer = createSpriteLayer({
 ```
 
 - `id` - Optional MapLibre layer identifier. If omitted the layer registers itself as `sprite-layer`.
-- `spriteScaling.zoomMin` / `zoomMax` - Zoom bounds that drive interpolation between `scaleMin` and `scaleMax`.
-  When the current map zoom is below `zoomMin`, sprites use `scaleMin`; when above `zoomMax`, they use `scaleMax`; anything in between is linearly interpolated.
-  Supplying reversed values is allowed—`resolveScalingOptions` swaps them internally and reports the correction through `console.warn`.
-- `spriteScaling.scaleMin` / `scaleMax` - Scale multipliers applied at `zoomMin` and `zoomMax`.
-  Values lower than zero are clamped to zero before interpolation.
-- `spriteScaling.spriteMinPixel` / `spriteMaxPixel` - Lower and upper clamps for the rendered size of each sprite (evaluated against the longest side in pixels).
-  Setting either value to `0` disables that clamp.
-  The clamping logic applies to both billboard and surface imagery so icons remain legible without blowing up at extreme zoom levels.
-- `spriteScaling.metersPerPixel` - Baseline conversion between texture pixels and world meters when zoom-dependent scaling is 1.0.
-  Larger values make every sprite appear bigger at the same zoom level.
-  The resolver clamps non-positive values back to the default (1 meter per pixel) and logs a warning.
-  We strongly recommend specifying the default value of 1, as this value affects all calculations.
-  To adjust the size of sprite images, you can use the `scale` property specified for each image.
-- `textureFiltering.minFilter` / `magFilter` - Override the WebGL texture filters used when sprites shrink or expand. The defaults match `linear` filtering in both directions. Setting `minFilter` to a mipmap variant (for example `linear-mipmap-linear`) automatically enables mipmap generation for newly registered images.
-- `textureFiltering.generateMipmaps` - Forces mipmap generation even when the chosen filter does not require it, improving quality for aggressively downscaled sprites on WebGL2 or power-of-two images. When the context cannot build mipmaps (for example WebGL1 with non power-of-two textures) the layer falls back to linear filtering automatically.
-- `textureFiltering.maxAnisotropy` - Requests anisotropic filtering (>= 1) when the runtime exposes `EXT_texture_filter_anisotropic`, helping surface-aligned sprites remain sharp at shallow viewing angles. The requested value is clamped to the GPU limit and only applied when mipmaps are available.
+- `spriteScaling.metersPerPixel` - This value defines how many meters each pixel of the texture represents on the map.
+  A larger value will display the image larger at the same zoom level.
+  Since this value affects all calculations, it is generally recommended to use the default value of 1 and adjust the size per sprite image using the `scale` parameter.
+- `spriteScaling.minScaleDistanceMeters` - Camera-to-sprite distance (meters) where sprites stop getting larger as the camera moves closer. Set to `0` or omit to disable near clamping.
+- `spriteScaling.maxScaleDistanceMeters` - Camera-to-sprite distance (meters) where sprites stop shrinking as the camera moves away. Set to `0` or omit to disable far clamping.
+- `textureFiltering.minFilter` / `magFilter` - Override the WebGL texture filters used when sprites shrink or expand.
+  The defaults match `linear` filtering in both directions.
+  Setting `minFilter` to a mipmap variant (for example `linear-mipmap-linear`) automatically enables mipmap generation for newly registered images.
+- `textureFiltering.generateMipmaps` - Forces mipmap generation even when the chosen filter does not require it, improving quality for aggressively downscaled sprites on WebGL2 or power-of-two images.
+  When the context cannot build mipmaps (for example WebGL1 with non power-of-two textures) the layer falls back to linear filtering automatically.
+- `textureFiltering.maxAnisotropy` - Requests anisotropic filtering (>= 1) when the runtime exposes `EXT_texture_filter_anisotropic`, helping surface-aligned sprites remain sharp at shallow viewing angles.
+  The requested value is clamped to the GPU limit and only applied when mipmaps are available.
 
 All scaling values and texture filtering values are resolved once when `createSpriteLayer` is called. To change them later, remove the layer and recreate it with new options.
 Invalid inputs are normalized and reported via `console.warn` to help catch configuration mistakes during development.
 
-### Scaling Options
+### Scaling Limit Options
 
-The motivation for fine-tuning scaling options is to improve rendering results when zooming in or out to extreme levels. The example below shows the result of zooming out without specifying scaling options. Most sprites appear extremely small, making it difficult to even discern their presence:
+The motivation for fine-tuning scaling limit options is to keep sprites readable at extreme camera distances.
+When no restrictions are applied (unspecified or `UNLIMITED_SPRITE_SCALING_OPTIONS`), zooming in significantly causes sprites to render extremely large, while zooming out makes them appear very small, making their presence difficult to see:
 
 ![Unlimited](images/scaling1.png)
 
-As a standard option for applying moderate scaling restrictions, you can use `STANDARD_SPRITE_SCALING_OPTIONS`. This option applies scaling restrictions to sprite images during zoom-in and zoom-out operations, ensuring that even when zoomed out, you can still discern what exists there:
+As a standard option for moderate scaling limitations, you can use `STANDARD_SPRITE_SCALING_OPTIONS`.
+This prevents further enlargement when the camera approaches closer than approximately 500m, and further reduction when it moves farther than approximately 10km.
+
+For example, using this option allows you to see that something exists there even when zooming out:
 
 ![Standard](images/scaling2.png)
 
 ```typescript
-// Create using standard scaling options
+// Create using standard scaling limit options
 const spriteLayer = createSpriteLayer({
   id: 'vehicles',
   spriteScaling: STANDARD_SPRITE_SCALING_OPTIONS,
 });
 ```
 
-The [demo page](https://kekyo.github.io/maplibre-gl-layers/) features a button to switch between `Standard` and `Unlimited`. You may want to check what happens when you zoom in and out.
+Of course, you can explicitly specify the value of `spriteScaling` to freely determine the restriction distance.
 
-Note: The default scaling option is set to “Unlimited” because introducing restrictions causes loss of precise size rendering. We strongly recommend disabling the scaling option, especially when experimenting with image and text placement.
+The [demo page](https://kekyo.github.io/maplibre-gl-layers/) features a button to switch between `Standard` and `Unlimited`.
+You may want to check what happens when you zoom in and out.
+
+Note: The default scaling limit option is set to `Unlimited` because introducing restrictions causes loss of accurate size rendering.
+It is best to keep it unlimited when adjusting image or text placement, and enable restrictions only when prioritizing readability.
 
 ---
 
@@ -1183,6 +1212,7 @@ const desiredVariant = available ? 'simd-mt' : 'simd';
 const effectiveVariant = await initializeRuntimeHost({
   variant: desiredVariant,
 });
+
 console.log(`Actual variant used: ${effectiveVariant}`);
 ```
 
