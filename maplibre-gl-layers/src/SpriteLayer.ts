@@ -102,6 +102,10 @@ import {
 import { createWasmProjectionHost } from './host/wasmProjectionHost';
 import { createWasmCalculationHost } from './host/wasmCalculationHost';
 import {
+  createSpriteTrackingController,
+  type SpriteTrackingController,
+} from './gl/tracking';
+import {
   DEFAULT_ANCHOR,
   DEFAULT_AUTO_ROTATION_MIN_DISTANCE_METERS,
   DEFAULT_BORDER_COLOR,
@@ -596,12 +600,6 @@ export const createSpriteLayer = <T = any>(
   let gl: WebGLRenderingContext | undefined;
   /** MapLibre map instance provided to the custom layer. */
   let map: MapLibreMap | undefined;
-  /** Active sprite ID tracked for viewport centering. */
-  let trackedSpriteId: string | null = null;
-  /** Whether rotation tracking is enabled for the tracked sprite. */
-  let trackedSpriteTrackRotation = true;
-  /** Animation frame handle for sprite tracking. */
-  let trackedSpriteFrameId: number | null = null;
   /** Sprite drawing helper encapsulating shader state. */
   let spriteDrawProgram: SpriteDrawProgram<T> | undefined;
   /** Cached anisotropic filtering extension instance (when available). */
@@ -901,6 +899,11 @@ export const createSpriteLayer = <T = any>(
   });
 
   /**
+   * Sprite tracking controller.
+   */
+  let trackingController: SpriteTrackingController<T> | undefined;
+
+  /**
    * Synchronizes atlas placements from the atlas manager into registered images.
    * Marks atlas textures as dirty when placements change.
    */
@@ -967,8 +970,6 @@ export const createSpriteLayer = <T = any>(
     image.finalRotateDeg.invalidated = true;
     image.finalRotateDeg.interpolation.lastCommandValue =
       image.finalRotateDeg.current;
-
-    //image.lastCommandRotateDeg = image.rotateDeg;
 
     image.offset.offsetDeg.from = undefined;
     image.offset.offsetDeg.to = undefined;
@@ -1550,115 +1551,20 @@ export const createSpriteLayer = <T = any>(
     }
   };
 
-  /**
-   * Cancels any pending animation frame used for sprite tracking.
-   */
-  const cancelTrackedSpriteFrame = (): void => {
-    if (trackedSpriteFrameId === null) {
-      return;
-    }
-    if (typeof window !== 'undefined') {
-      window.cancelAnimationFrame(trackedSpriteFrameId);
-    }
-    trackedSpriteFrameId = null;
-  };
-
-  /**
-   * Stops tracking the current sprite.
-   */
-  const untrackSpriteInternal = (): void => {
-    cancelTrackedSpriteFrame();
-    trackedSpriteId = null;
-  };
-
-  /**
-   * Syncs the tracked sprite's rotation to the current map bearing.
-   *
-   * @param {InternalSpriteCurrentState<T>} sprite - Sprite to update.
-   * @returns {boolean} `true` when rotation changed.
-   */
-  const applyTrackedSpriteRotation = (
-    sprite: InternalSpriteCurrentState<T>
-  ): boolean => {
-    const mapInstance = map;
-    if (!mapInstance) {
-      return false;
-    }
-    let targetBearing: number | null = null;
-    // Use the first available image as the bearing source.
-    for (const orderMap of sprite.images.values()) {
-      const iterator = orderMap.values().next();
-      if (!iterator.done) {
-        targetBearing = normalizeAngleDeg(
-          iterator.value.finalRotateDeg.current
-        );
-        break;
-      }
-    }
-    if (targetBearing === null) {
-      return false;
-    }
-    const currentBearing = normalizeAngleDeg(mapInstance.getBearing());
-    if (currentBearing === targetBearing) {
-      return false;
-    }
-    mapInstance.setBearing(targetBearing);
-    return true;
-  };
-
-  /**
-   * Animation loop that keeps the tracked sprite centered (and optionally aligned) with the map.
-   */
-  const stepTrackedSprite = (): void => {
-    trackedSpriteFrameId = null;
-    const mapInstance = map;
-    if (!mapInstance || !trackedSpriteId || typeof window === 'undefined') {
-      untrackSpriteInternal();
-      return;
-    }
-    const sprite = sprites.get(trackedSpriteId);
+  // Tracking controller hooks into sprite layout API.
+  const trackSprite = (
+    spriteId: string,
+    trackRotation: boolean | undefined
+  ): void => {
+    const sprite = sprites.get(spriteId);
     if (!sprite) {
-      untrackSpriteInternal();
+      trackingController?.untrackSprite();
       return;
     }
-
-    const { lng, lat } = sprite.location.current;
-    mapInstance.setCenter({ lng, lat });
-
-    if (trackedSpriteTrackRotation) {
-      const rotationChanged = applyTrackedSpriteRotation(sprite);
-      if (rotationChanged) {
-        // Map bearing already changed; MapLibre will trigger a repaint.
-      }
-    }
-
-    trackedSpriteFrameId = window.requestAnimationFrame(stepTrackedSprite);
+    trackingController?.trackSprite(sprite, trackRotation ?? true);
   };
-
-  /**
-   * Starts tracking a sprite. When trackRotation is true, final rotation follows the map bearing.
-   */
-  const trackSprite = (spriteId: string, trackRotation = true): void => {
-    const mapInstance = map;
-    if (!mapInstance || typeof window === 'undefined') {
-      return;
-    }
-    if (!sprites.has(spriteId)) {
-      untrackSpriteInternal();
-      return;
-    }
-    trackedSpriteTrackRotation = trackRotation !== false;
-    trackedSpriteId = spriteId;
-    cancelTrackedSpriteFrame();
-    trackedSpriteFrameId = window.requestAnimationFrame(stepTrackedSprite);
-  };
-
-  /**
-   * Stops tracking any sprite.
-   */
   const untrackSprite = (): void => {
-    trackedSpriteTrackRotation = true;
-    untrackSpriteInternal();
+    trackingController?.untrackSprite();
   };
 
   //////////////////////////////////////////////////////////////////////////
@@ -1675,6 +1581,7 @@ export const createSpriteLayer = <T = any>(
     glContext: WebGLRenderingContext
   ): void => {
     map = mapInstance;
+    trackingController = createSpriteTrackingController(mapInstance);
     gl = glContext;
     anisotropyExtension = resolveAnisotropyExtension(glContext);
     if (anisotropyExtension) {
@@ -1803,7 +1710,8 @@ export const createSpriteLayer = <T = any>(
    * Called when the layer is removed from the map to release WebGL resources.
    */
   const onRemove = (): void => {
-    untrackSprite();
+    trackingController?.release();
+    trackingController = undefined;
     inputListenerDisposers.forEach((dispose) => dispose());
     inputListenerDisposers.length = 0;
     canvasElement = undefined;

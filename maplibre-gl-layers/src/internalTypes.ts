@@ -25,6 +25,7 @@ import type {
   SpriteImageState,
   SpriteInterpolatedValues,
   SpriteImageInterpolatedOffset,
+  SpriteCurrentState,
 } from './types';
 import type { ResolvedSpriteScalingOptions, SurfaceCorner } from './utils/math';
 
@@ -641,7 +642,7 @@ export interface ResolvedSpriteImageLineAttribute
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Base attributes for an image that composes a sprite.
+ * Base mutable attribute view for an image that composes a sprite.
  */
 export interface InternalSpriteImageState extends SpriteImageState {
   subLayer: number;
@@ -679,13 +680,14 @@ export interface InternalSpriteImageState extends SpriteImageState {
 }
 
 /**
- * Current sprite state tracked internally by the layer.
+ * Current sprite mutable state view tracked internally by the layer.
  */
-export interface InternalSpriteCurrentState<TTag> {
+export interface InternalSpriteCurrentState<TTag>
+  extends SpriteCurrentState<TTag> {
   spriteId: string;
   handle: IdHandle;
   isEnabled: boolean;
-  visibilityDistanceMeters?: number; // For Pseudo LOD
+  visibilityDistanceMeters: number | undefined; // For Pseudo LOD
   opacityMultiplier: number;
   location: MutableSpriteInterpolatedValues<SpriteLocation>;
   images: Map<number, Map<number, InternalSpriteImageState>>;
