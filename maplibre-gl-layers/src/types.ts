@@ -674,7 +674,7 @@ export type SpriteLayerEventListener<
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Options controlling zoom-to-pixel scaling.
+ * Options controlling distance-aware scaling.
  */
 export interface SpriteScalingOptions {
   /**
@@ -682,18 +682,16 @@ export interface SpriteScalingOptions {
    * We strongly recommend specifying the default value of 1, as this value affects all calculations.
    */
   metersPerPixel?: number;
-  /** Minimum zoom level before scaling adjustments apply. */
-  zoomMin?: number;
-  /** Maximum zoom level before scaling adjustments apply. */
-  zoomMax?: number;
-  /** Lower limit for scale clamping. */
-  scaleMin?: number;
-  /** Upper limit for scale clamping. */
-  scaleMax?: number;
-  /** Minimum on-screen pixel size for sprites (0 disables the lower clamp). */
-  spriteMinPixel?: number;
-  /** Maximum on-screen pixel size for sprites (0 disables the upper clamp). */
-  spriteMaxPixel?: number;
+  /**
+   * Distance (meters) from the camera at which sprites stop growing when getting closer.
+   * Set to 0 or omit to disable the near-distance clamp.
+   */
+  minScaleDistanceMeters?: number;
+  /**
+   * Distance (meters) from the camera at which sprites stop shrinking when moving away.
+   * Set to 0 or omit to disable the far-distance clamp.
+   */
+  maxScaleDistanceMeters?: number;
 }
 
 /**

@@ -28,7 +28,6 @@ import {
 import { createDegreeInterpolationState } from '../../src/interpolation/degreeInterpolation';
 import {
   calculateBillboardAnchorShiftPixels,
-  calculateZoomScaleFactor,
   resolveScalingOptions,
   type ResolvedSpriteScalingOptions,
 } from '../../src/utils/math';
@@ -539,7 +538,6 @@ interface CollectContext {
   readonly paramsBefore: PrepareDrawSpriteImageParamsBefore<null>;
   readonly originCenterCache: ImageCenterCacheLike;
   readonly zoom: number;
-  readonly zoomScaleFactor: number;
 }
 
 interface CollectContextOverrides {
@@ -551,14 +549,11 @@ interface CollectContextOverrides {
   readonly images?: ReadonlyMap<string, Readonly<RegisteredImage>>;
   readonly clipContext?: Readonly<ClipContext> | null;
   readonly baseMetersPerPixel?: number;
-  readonly spriteMinPixel?: number;
-  readonly spriteMaxPixel?: number;
   readonly drawingBufferWidth?: number;
   readonly drawingBufferHeight?: number;
   readonly pixelRatio?: number;
   readonly resolvedScaling?: ResolvedSpriteScalingOptions;
   readonly zoom?: number;
-  readonly zoomScaleFactor?: number;
   readonly originCenterCache?: ImageCenterCacheLike;
 }
 
@@ -572,14 +567,11 @@ const createCollectContext = (
     images = new Map<string, RegisteredImage>(),
     clipContext: clipOverride,
     baseMetersPerPixel = 1,
-    spriteMinPixel = 0,
-    spriteMaxPixel = 4096,
     drawingBufferWidth = 1024,
     drawingBufferHeight = 768,
     pixelRatio = 1,
     resolvedScaling: resolvedScalingOverride,
     zoom: zoomOverride,
-    zoomScaleFactor: zoomScaleFactorOverride,
     originCenterCache: originCacheOverride,
   } = overrides;
 
@@ -595,13 +587,7 @@ const createCollectContext = (
     resolvedScalingOverride ??
     resolveScalingOptions({
       metersPerPixel: baseMetersPerPixel,
-      spriteMinPixel,
-      spriteMaxPixel,
-      zoomMin: zoom,
-      zoomMax: zoom,
     });
-  const zoomScaleFactor =
-    zoomScaleFactorOverride ?? calculateZoomScaleFactor(zoom, resolvedScaling);
 
   const originIndexBySprite = new Map<string, Map<number, number>>();
 
@@ -652,13 +638,10 @@ const createCollectContext = (
     imageHandleBuffers,
     clipContext,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
     resolvedScaling,
-    zoomScaleFactor,
   };
 
   return {
@@ -667,7 +650,6 @@ const createCollectContext = (
     originCenterCache:
       originCacheOverride ?? (new Map() as ImageCenterCacheLike),
     zoom,
-    zoomScaleFactor,
   };
 };
 
@@ -676,10 +658,7 @@ const createAfterParams = (
   overrides: Partial<
     Omit<
       PrepareDrawSpriteImageParamsAfter,
-      | 'images'
       | 'baseMetersPerPixel'
-      | 'spriteMinPixel'
-      | 'spriteMaxPixel'
       | 'clipContext'
       | 'drawingBufferWidth'
       | 'drawingBufferHeight'
@@ -691,8 +670,6 @@ const createAfterParams = (
     imageResources: before.imageResources,
     imageHandleBuffers: before.imageHandleBuffers,
     baseMetersPerPixel: before.baseMetersPerPixel,
-    spriteMinPixel: before.spriteMinPixel,
-    spriteMaxPixel: before.spriteMaxPixel,
     drawingBufferWidth: before.drawingBufferWidth,
     drawingBufferHeight: before.drawingBufferHeight,
     pixelRatio: before.pixelRatio,
@@ -726,7 +703,6 @@ const prepareItems = (
       context.projectionHost,
       item,
       context.zoom,
-      context.zoomScaleFactor,
       originCenterCache,
       paramsAfter
     );
@@ -829,7 +805,6 @@ describe('collectDepthSortedItems', () => {
     const result = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -866,7 +841,6 @@ describe('collectDepthSortedItems', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -891,7 +865,6 @@ describe('collectDepthSortedItems', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -929,7 +902,6 @@ describe('collectDepthSortedItems', () => {
     const biased = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -964,7 +936,6 @@ describe('collectDepthSortedItems', () => {
     const result = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -985,7 +956,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1029,7 +999,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1060,7 +1029,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1092,7 +1060,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1140,7 +1107,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1210,7 +1176,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1249,7 +1214,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1278,7 +1242,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1314,7 +1277,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1386,7 +1348,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1440,7 +1401,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1574,7 +1534,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1614,7 +1573,6 @@ describe('prepareDrawSpriteImages', () => {
     const items = collectDepthSortedItemsInternal(
       context.projectionHost,
       context.zoom,
-      context.zoomScaleFactor,
       context.originCenterCache,
       context.paramsBefore
     ) as DepthItem<null>[];
@@ -1660,8 +1618,6 @@ describe('prepareDrawSpriteImages', () => {
       imageResources,
       imageHandleBuffers,
       baseMetersPerPixel: 1,
-      spriteMinPixel: 0,
-      spriteMaxPixel: 4096,
       drawingBufferWidth: 1024,
       drawingBufferHeight: 768,
       pixelRatio: 1,
@@ -1680,7 +1636,6 @@ describe('prepareDrawSpriteImages', () => {
       projectionHost,
       depthItem,
       projectionHost.getZoom(),
-      1,
       new Map() as ImageCenterCacheLike,
       paramsAfter
     );

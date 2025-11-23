@@ -180,18 +180,10 @@ export const multiplyMatrixAndVector = (
 export interface ResolvedSpriteScalingOptions {
   /** Effective number of meters represented by each rendered pixel. */
   metersPerPixel: number;
-  /** Lowest zoom level at which scaling interpolation begins. */
-  zoomMin: number;
-  /** Highest zoom level at which scaling interpolation ends. */
-  zoomMax: number;
-  /** Scale multiplier applied at {@link ResolvedSpriteScalingOptions.zoomMin}. */
-  scaleMin: number;
-  /** Scale multiplier applied at {@link ResolvedSpriteScalingOptions.zoomMax}. */
-  scaleMax: number;
-  /** Lower clamp for sprite size in pixels. */
-  spriteMinPixel: number;
-  /** Upper clamp for sprite size in pixels. */
-  spriteMaxPixel: number;
+  /** Distance at or below which sprites stop growing further. */
+  minScaleDistanceMeters: number;
+  /** Distance at or above which sprites stop shrinking further. */
+  maxScaleDistanceMeters: number;
 }
 
 /**
@@ -222,136 +214,72 @@ export const resolveScalingOptions = (
     metersPerPixel = fallbackMetersPerPixel;
   }
 
-  const fallbackZoomMin = Number.isFinite(base.zoomMin) ? base.zoomMin! : 0;
-  let zoomMin =
-    options?.zoomMin !== undefined ? options.zoomMin : fallbackZoomMin;
-  if (!Number.isFinite(zoomMin)) {
-    if (options?.zoomMin !== undefined) {
-      warnings.push(
-        `zoomMin(${String(options.zoomMin)}) is not finite; using ${fallbackZoomMin}`
-      );
-    }
-    zoomMin = fallbackZoomMin;
-  }
-
-  const fallbackZoomMax =
-    Number.isFinite(base.zoomMax) && base.zoomMax! > fallbackZoomMin
-      ? base.zoomMax!
-      : fallbackZoomMin;
-  let zoomMax =
-    options?.zoomMax !== undefined ? options.zoomMax : fallbackZoomMax;
-  if (!Number.isFinite(zoomMax)) {
-    if (options?.zoomMax !== undefined) {
-      warnings.push(
-        `zoomMax(${String(options.zoomMax)}) is not finite; using ${fallbackZoomMax}`
-      );
-    }
-    zoomMax = fallbackZoomMax;
-  }
-
-  if (zoomMax < zoomMin) {
-    warnings.push(
-      `zoomMax(${zoomMax}) < zoomMin(${zoomMin}); swapped values to maintain ascending order`
-    );
-    [zoomMin, zoomMax] = [zoomMax, zoomMin];
-  }
-
-  const fallbackScaleMin = Number.isFinite(base.scaleMin) ? base.scaleMin! : 1;
-  let scaleMin =
-    options?.scaleMin !== undefined ? options.scaleMin : fallbackScaleMin;
-  if (!Number.isFinite(scaleMin)) {
-    if (options?.scaleMin !== undefined) {
-      warnings.push(
-        `scaleMin(${String(options.scaleMin)}) is not finite; using ${fallbackScaleMin}`
-      );
-    }
-    scaleMin = fallbackScaleMin;
-  }
-  if (scaleMin < 0) {
-    warnings.push(`scaleMin(${scaleMin}) is negative; clamped to 0`);
-    scaleMin = 0;
-  }
-
-  const fallbackScaleMax = Number.isFinite(base.scaleMax) ? base.scaleMax! : 1;
-  let scaleMax =
-    options?.scaleMax !== undefined ? options.scaleMax : fallbackScaleMax;
-  if (!Number.isFinite(scaleMax)) {
-    if (options?.scaleMax !== undefined) {
-      warnings.push(
-        `scaleMax(${String(options.scaleMax)}) is not finite; using ${fallbackScaleMax}`
-      );
-    }
-    scaleMax = fallbackScaleMax;
-  }
-  if (scaleMax < 0) {
-    warnings.push(`scaleMax(${scaleMax}) is negative; clamped to 0`);
-    scaleMax = 0;
-  }
-
-  if (scaleMax < scaleMin) {
-    warnings.push(
-      `scaleMax(${scaleMax}) < scaleMin(${scaleMin}); swapped values to maintain ascending order`
-    );
-    [scaleMin, scaleMax] = [scaleMax, scaleMin];
-  }
-
-  const fallbackSpriteMin =
-    Number.isFinite(base.spriteMinPixel) && base.spriteMinPixel! >= 0
-      ? base.spriteMinPixel!
+  const fallbackMinDistance =
+    base.minScaleDistanceMeters !== undefined &&
+    Number.isFinite(base.minScaleDistanceMeters) &&
+    base.minScaleDistanceMeters! > 0
+      ? base.minScaleDistanceMeters!
       : 0;
-  let spriteMinPixel =
-    options?.spriteMinPixel !== undefined
-      ? options.spriteMinPixel
-      : fallbackSpriteMin;
-  if (!Number.isFinite(spriteMinPixel)) {
-    if (options?.spriteMinPixel !== undefined) {
+  let minScaleDistanceMeters =
+    options?.minScaleDistanceMeters !== undefined
+      ? options.minScaleDistanceMeters
+      : fallbackMinDistance;
+  if (!Number.isFinite(minScaleDistanceMeters) || minScaleDistanceMeters < 0) {
+    if (options?.minScaleDistanceMeters !== undefined) {
       warnings.push(
-        `spriteMinPixel(${String(
-          options.spriteMinPixel
-        )}) is not finite; using ${fallbackSpriteMin}`
+        `minScaleDistanceMeters(${String(
+          options.minScaleDistanceMeters
+        )}) is invalid; using ${fallbackMinDistance}`
       );
     }
-    spriteMinPixel = fallbackSpriteMin;
-  } else if (spriteMinPixel < 0) {
-    warnings.push(
-      `spriteMinPixel(${spriteMinPixel}) is negative; clamped to 0`
-    );
-    spriteMinPixel = 0;
+    minScaleDistanceMeters = fallbackMinDistance;
   }
 
-  const fallbackSpriteMax =
-    Number.isFinite(base.spriteMaxPixel) && base.spriteMaxPixel! >= 0
-      ? base.spriteMaxPixel!
-      : 0;
-  let spriteMaxPixel =
-    options?.spriteMaxPixel !== undefined
-      ? options.spriteMaxPixel
-      : fallbackSpriteMax;
-  if (!Number.isFinite(spriteMaxPixel)) {
-    if (options?.spriteMaxPixel !== undefined) {
+  const baseMaxDistance =
+    base.maxScaleDistanceMeters !== undefined &&
+    base.maxScaleDistanceMeters! > 0
+      ? base.maxScaleDistanceMeters!
+      : Number.POSITIVE_INFINITY;
+  const fallbackMaxDistance = Number.isFinite(baseMaxDistance)
+    ? baseMaxDistance
+    : Number.POSITIVE_INFINITY;
+  let maxScaleDistanceMeters =
+    options?.maxScaleDistanceMeters !== undefined
+      ? options.maxScaleDistanceMeters
+      : fallbackMaxDistance;
+  const maxIsInfinite =
+    maxScaleDistanceMeters === Number.POSITIVE_INFINITY &&
+    options?.maxScaleDistanceMeters !== 0;
+  if (!Number.isFinite(maxScaleDistanceMeters) && !maxIsInfinite) {
+    if (options?.maxScaleDistanceMeters !== undefined) {
       warnings.push(
-        `spriteMaxPixel(${String(
-          options.spriteMaxPixel
-        )}) is not finite; using ${fallbackSpriteMax}`
+        `maxScaleDistanceMeters(${String(
+          options.maxScaleDistanceMeters
+        )}) is not finite; using ${fallbackMaxDistance}`
       );
     }
-    spriteMaxPixel = fallbackSpriteMax;
-  } else if (spriteMaxPixel < 0) {
+    maxScaleDistanceMeters = fallbackMaxDistance;
+  } else if (
+    Number.isFinite(maxScaleDistanceMeters) &&
+    maxScaleDistanceMeters <= 0
+  ) {
     warnings.push(
-      `spriteMaxPixel(${spriteMaxPixel}) is negative; clamped to 0`
+      `maxScaleDistanceMeters(${maxScaleDistanceMeters}) is non-positive; treated as unlimited`
     );
-    spriteMaxPixel = 0;
+    maxScaleDistanceMeters = fallbackMaxDistance;
   }
 
   if (
-    spriteMinPixel > 0 &&
-    spriteMaxPixel > 0 &&
-    spriteMaxPixel < spriteMinPixel
+    Number.isFinite(maxScaleDistanceMeters) &&
+    maxScaleDistanceMeters < minScaleDistanceMeters
   ) {
     warnings.push(
-      `spriteMaxPixel(${spriteMaxPixel}) < spriteMinPixel(${spriteMinPixel}); swapped values to maintain ascending order`
+      `maxScaleDistanceMeters(${maxScaleDistanceMeters}) < minScaleDistanceMeters(${minScaleDistanceMeters}); swapped values to maintain ascending order`
     );
-    [spriteMinPixel, spriteMaxPixel] = [spriteMaxPixel, spriteMinPixel];
+    [minScaleDistanceMeters, maxScaleDistanceMeters] = [
+      maxScaleDistanceMeters,
+      minScaleDistanceMeters,
+    ];
   }
 
   if (warnings.length > 0 && typeof console !== 'undefined') {
@@ -363,42 +291,40 @@ export const resolveScalingOptions = (
 
   return {
     metersPerPixel,
-    zoomMin,
-    zoomMax,
-    scaleMin,
-    scaleMax,
-    spriteMinPixel,
-    spriteMaxPixel,
+    minScaleDistanceMeters,
+    maxScaleDistanceMeters,
   };
 };
 
 //////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Computes a linear scale factor based on zoom level.
- * @param {number} zoom - Current zoom level from MapLibre's camera.
+ * Computes a scale factor based on camera-to-sprite distance.
+ * @param {number} distanceMeters - Calculated distance from camera to sprite.
  * @param {ResolvedSpriteScalingOptions} scaling - Resolved scaling options.
- * @returns {number} Scale value interpolated between {@link ResolvedSpriteScalingOptions.scaleMin} and {@link ResolvedSpriteScalingOptions.scaleMax}.
+ * @returns {number} Scale multiplier that clamps near/far distances to maintain consistent sizing.
  */
-export const calculateZoomScaleFactor = (
-  zoom: number,
+export const calculateDistanceScaleFactor = (
+  distanceMeters: number,
   scaling: ResolvedSpriteScalingOptions
 ): number => {
-  const { zoomMin, zoomMax, scaleMin, scaleMax } = scaling;
-  // When the configured range collapses (max <= min), treat scale as constant to avoid division by zero.
-  if (zoomMax <= zoomMin) {
-    return scaleMax;
+  if (!Number.isFinite(distanceMeters) || distanceMeters <= 0) {
+    return 1;
   }
-  // Clamp low zooms to the minimum scale so sprites do not grow further when zooming out.
-  if (zoom <= zoomMin) {
-    return scaleMin;
+  const minDistance = Math.max(0, scaling.minScaleDistanceMeters);
+  const hasMax =
+    Number.isFinite(scaling.maxScaleDistanceMeters) &&
+    scaling.maxScaleDistanceMeters > 0;
+  let clamped = distanceMeters;
+  if (minDistance > 0 && distanceMeters < minDistance) {
+    clamped = minDistance;
+  } else if (hasMax && distanceMeters > scaling.maxScaleDistanceMeters) {
+    clamped = scaling.maxScaleDistanceMeters;
   }
-  // Clamp zooms beyond the upper bound to the maximum scale for stability when zooming in.
-  if (zoom >= zoomMax) {
-    return scaleMax;
+  if (clamped === distanceMeters || clamped === 0) {
+    return 1;
   }
-  const t = (zoom - zoomMin) / (zoomMax - zoomMin);
-  return scaleMin + (scaleMax - scaleMin) * t;
+  return distanceMeters / clamped;
 };
 
 /**
@@ -494,67 +420,22 @@ export const calculateDistanceAndBearingMeters = (
 };
 
 /**
- * Clamps sprite dimensions so they stay within the configured pixel bounds while preserving aspect ratio.
- * @param {number} width - Calculated sprite width in pixels.
- * @param {number} height - Calculated sprite height in pixels.
- * @param {number} spriteMinPixel - Minimum allowed pixel extent for the sprite's largest side.
- * @param {number} spriteMaxPixel - Maximum allowed pixel extent for the sprite's largest side.
- * @returns {{ width: number; height: number }} Dimensions adjusted to satisfy min/max constraints.
- */
-const clampSpritePixelSize = (
-  width: number,
-  height: number,
-  spriteMinPixel: number,
-  spriteMaxPixel: number
-): { width: number; height: number; scaleAdjustment: number } => {
-  const largest = Math.max(width, height);
-  // If the measured size is invalid or zero, skip clamping to avoid divisions.
-  if (!Number.isFinite(largest) || largest <= 0) {
-    return { width, height, scaleAdjustment: 1 };
-  }
-  let nextWidth = width;
-  let nextHeight = height;
-  let scaleAdjustment = 1;
-  let adjustedLargest = largest;
-  // Expand sprites that would render too small so visibility constraints are respected.
-  if (spriteMinPixel > 0 && largest < spriteMinPixel) {
-    const factor = spriteMinPixel / largest;
-    nextWidth *= factor;
-    nextHeight *= factor;
-    scaleAdjustment *= factor;
-    adjustedLargest *= factor;
-  }
-  // Shrink sprites that would exceed the configured maximum to protect layer.
-  if (spriteMaxPixel > 0 && adjustedLargest > spriteMaxPixel) {
-    const factor = spriteMaxPixel / adjustedLargest;
-    nextWidth *= factor;
-    nextHeight *= factor;
-    scaleAdjustment *= factor;
-  }
-  return { width: nextWidth, height: nextHeight, scaleAdjustment };
-};
-
-/**
- * Calculates billboard image dimensions in pixels and clamps them to display limits.
+ * Calculates billboard image dimensions in pixels.
  * @param {number | undefined} imageWidth - Source bitmap width in pixels.
  * @param {number | undefined} imageHeight - Source bitmap height in pixels.
  * @param {number} baseMetersPerPixel - Base scale derived from map zoom and latitude.
  * @param {number} imageScale - User-provided scale multiplier.
- * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier derived from {@link calculateZoomScaleFactor}.
+ * @param {number} distanceScaleFactor - Distance-dependent scale multiplier.
  * @param {number} effectivePixelsPerMeter - Conversion between world meters and screen pixels.
- * @param {number} spriteMinPixel - Lower pixel clamp for the sprite's largest side.
- * @param {number} spriteMaxPixel - Upper pixel clamp for the sprite's largest side.
- * @returns {{ width: number; height: number; scaleAdjustment: number }} Pixel dimensions alongside the scale factor applied during clamping.
+ * @returns {{ width: number; height: number; scaleAdjustment: number }} Pixel dimensions alongside the scale factor (always 1 without clamping).
  */
 export const calculateBillboardPixelDimensions = (
   imageWidth: number | undefined,
   imageHeight: number | undefined,
   baseMetersPerPixel: number,
   imageScale: number,
-  zoomScaleFactor: number,
-  effectivePixelsPerMeter: number,
-  spriteMinPixel: number,
-  spriteMaxPixel: number
+  distanceScaleFactor: number,
+  effectivePixelsPerMeter: number
 ): { width: number; height: number; scaleAdjustment: number } => {
   // Reject invalid inputs so the renderer can skip drawing without crashing downstream matrices.
   if (
@@ -568,22 +449,20 @@ export const calculateBillboardPixelDimensions = (
     return { width: 0, height: 0, scaleAdjustment: 1 };
   }
   const scaleFactor =
-    baseMetersPerPixel * imageScale * zoomScaleFactor * effectivePixelsPerMeter;
-  const rawWidth = ensureFinite(imageWidth * scaleFactor);
-  const rawHeight = ensureFinite(imageHeight * scaleFactor);
-  return clampSpritePixelSize(
-    rawWidth,
-    rawHeight,
-    spriteMinPixel,
-    spriteMaxPixel
-  );
+    baseMetersPerPixel *
+    imageScale *
+    distanceScaleFactor *
+    effectivePixelsPerMeter;
+  const width = ensureFinite(imageWidth * scaleFactor);
+  const height = ensureFinite(imageHeight * scaleFactor);
+  return { width, height, scaleAdjustment: 1 };
 };
 
 /**
  * Computes the billboard offset in screen-space pixels.
  * @param {OffsetInput} offset - Offset configuration describing length (meters) and heading (degrees).
  * @param {number} imageScale - User-provided scale multiplier applied to the offset distance.
- * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
+ * @param {number} distanceScaleFactor - Distance-dependent scale multiplier.
  * @param {number} effectivePixelsPerMeter - Conversion factor from meters to pixels.
  * @param {number} [sizeScaleAdjustment=1] - Additional scale factor applied when sprite size is clamped.
  * @returns {SpriteScreenPoint} Screen-space offset relative to the billboard center.
@@ -591,12 +470,12 @@ export const calculateBillboardPixelDimensions = (
 export const calculateBillboardOffsetPixels = (
   offset: OffsetInput,
   imageScale: number,
-  zoomScaleFactor: number,
+  distanceScaleFactor: number,
   effectivePixelsPerMeter: number,
   sizeScaleAdjustment = 1
 ): SpriteScreenPoint => {
   const resolved = resolveOffsetInput(offset);
-  const offsetMeters = resolved.offsetMeters * imageScale * zoomScaleFactor;
+  const offsetMeters = resolved.offsetMeters * imageScale * distanceScaleFactor;
   const offsetPixels =
     offsetMeters * effectivePixelsPerMeter * sizeScaleAdjustment;
   const offsetRad = resolved.offsetDeg * DEG2RAD;
@@ -644,20 +523,15 @@ export const calculateBillboardAnchorShiftPixels = (
  * @param {number | undefined} imageHeight - Source bitmap height in pixels.
  * @param {number} baseMetersPerPixel - World meters represented by a pixel at the current zoom.
  * @param {number} imageScale - User-provided scale multiplier.
- * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
- * @returns {{ width: number; height: number; scaleAdjustment: number }} World dimensions in meters and the applied clamp scale factor.
+ * @param {number} distanceScaleFactor - Distance-dependent scale multiplier.
+ * @returns {{ width: number; height: number; scaleAdjustment: number }} World dimensions in meters and the applied clamp scale factor (always 1 without clamping).
  */
 export const calculateSurfaceWorldDimensions = (
   imageWidth: number | undefined,
   imageHeight: number | undefined,
   baseMetersPerPixel: number,
   imageScale: number,
-  zoomScaleFactor: number,
-  options?: {
-    effectivePixelsPerMeter?: number;
-    spriteMinPixel?: number;
-    spriteMaxPixel?: number;
-  }
+  distanceScaleFactor: number
 ): { width: number; height: number; scaleAdjustment: number } => {
   // Reject invalid inputs to keep downstream displacement math finite.
   if (
@@ -669,45 +543,10 @@ export const calculateSurfaceWorldDimensions = (
   ) {
     return { width: 0, height: 0, scaleAdjustment: 1 };
   }
-  const scaleFactor = baseMetersPerPixel * imageScale * zoomScaleFactor;
-  let width = ensureFinite(imageWidth * scaleFactor);
-  let height = ensureFinite(imageHeight * scaleFactor);
-  let scaleAdjustment = 1;
-
-  const effectivePixelsPerMeter =
-    options?.effectivePixelsPerMeter !== undefined
-      ? options.effectivePixelsPerMeter
-      : 0;
-  const spriteMinPixel = options?.spriteMinPixel ?? 0;
-  const spriteMaxPixel = options?.spriteMaxPixel ?? 0;
-
-  if (
-    effectivePixelsPerMeter > 0 &&
-    Number.isFinite(effectivePixelsPerMeter) &&
-    (spriteMinPixel > 0 || spriteMaxPixel > 0)
-  ) {
-    const largestMeters = Math.max(width, height);
-    if (largestMeters > 0 && Number.isFinite(largestMeters)) {
-      const largestPixels = largestMeters * effectivePixelsPerMeter;
-      if (Number.isFinite(largestPixels) && largestPixels > 0) {
-        let scale = 1;
-        if (spriteMinPixel > 0 && largestPixels < spriteMinPixel) {
-          scale = spriteMinPixel / largestPixels;
-        }
-        const scaledLargest = largestPixels * scale;
-        if (spriteMaxPixel > 0 && scaledLargest > spriteMaxPixel) {
-          scale = spriteMaxPixel / largestPixels;
-        }
-        if (scale !== 1) {
-          width *= scale;
-          height *= scale;
-          scaleAdjustment *= scale;
-        }
-      }
-    }
-  }
-
-  return { width, height, scaleAdjustment };
+  const scaleFactor = baseMetersPerPixel * imageScale * distanceScaleFactor;
+  const width = ensureFinite(imageWidth * scaleFactor);
+  const height = ensureFinite(imageHeight * scaleFactor);
+  return { width, height, scaleAdjustment: 1 };
 };
 
 /**
@@ -746,18 +585,18 @@ export const calculateSurfaceAnchorShiftMeters = (
  * Calculates surface image offsets in meters.
  * @param {OffsetInput} offset - Offset configuration for the surface sprite.
  * @param {number} imageScale - User-provided scale multiplier applied to the offset distance.
- * @param {number} zoomScaleFactor - Zoom-dependent scale multiplier.
+ * @param {number} distanceScaleFactor - Distance-dependent scale multiplier.
  * @param {number} [sizeScaleAdjustment=1] - Additional scale factor applied when sprite size is clamped.
  * @returns {SurfaceCorner} Offset vector in meters.
  */
 export const calculateSurfaceOffsetMeters = (
   offset: OffsetInput,
   imageScale: number,
-  zoomScaleFactor: number,
+  distanceScaleFactor: number,
   sizeScaleAdjustment = 1
 ): SurfaceCorner => {
   const resolved = resolveOffsetInput(offset);
-  const offsetMeters = resolved.offsetMeters * imageScale * zoomScaleFactor;
+  const offsetMeters = resolved.offsetMeters * imageScale * distanceScaleFactor;
   // Short-circuit when no displacement is requested to avoid redundant trig.
   if (offsetMeters === 0) {
     return { east: 0, north: 0 };
@@ -1020,14 +859,10 @@ export interface BillboardCenterParams {
   baseMetersPerPixel: number;
   /** User-provided scaling multiplier. */
   imageScale: number;
-  /** Zoom-dependent scale multiplier. */
-  zoomScaleFactor: number;
+  /** Distance-dependent scale multiplier. */
+  distanceScaleFactor: number;
   /** Pixels per meter after perspective adjustments. */
   effectivePixelsPerMeter: number;
-  /** Lower clamp for the sprite's largest pixel dimension. */
-  spriteMinPixel: number;
-  /** Upper clamp for the sprite's largest pixel dimension. */
-  spriteMaxPixel: number;
   /** Aggregate rotation applied to the sprite in degrees. */
   totalRotateDeg: number;
   /** Anchor definition normalized between -1 and 1. */
@@ -1042,13 +877,13 @@ export interface BillboardCenterParams {
 export interface BillboardCenterResult {
   /** Screen-space coordinate after offset adjustments. */
   center: SpriteScreenPoint;
-  /** Half of the clamped pixel width. */
+  /** Half of the pixel width. */
   halfWidth: number;
-  /** Half of the clamped pixel height. */
+  /** Half of the pixel height. */
   halfHeight: number;
-  /** Full pixel width after scaling and clamping. */
+  /** Full pixel width after scaling. */
   pixelWidth: number;
-  /** Full pixel height after scaling and clamping. */
+  /** Full pixel height after scaling. */
   pixelHeight: number;
   /** Pixel delta caused by anchor rotation. */
   anchorShift: SpritePoint;
@@ -1072,10 +907,8 @@ export const calculateBillboardCenterPosition = (
     imageHeight,
     baseMetersPerPixel,
     imageScale,
-    zoomScaleFactor,
+    distanceScaleFactor,
     effectivePixelsPerMeter,
-    spriteMinPixel,
-    spriteMaxPixel,
     totalRotateDeg,
     anchor,
     offset,
@@ -1086,10 +919,8 @@ export const calculateBillboardCenterPosition = (
     imageHeight,
     baseMetersPerPixel,
     imageScale,
-    zoomScaleFactor,
-    effectivePixelsPerMeter,
-    spriteMinPixel,
-    spriteMaxPixel
+    distanceScaleFactor,
+    effectivePixelsPerMeter
   );
   const halfWidth = pixelDims.width / 2;
   const halfHeight = pixelDims.height / 2;
@@ -1103,7 +934,7 @@ export const calculateBillboardCenterPosition = (
   const offsetShift = calculateBillboardOffsetPixels(
     offset,
     imageScale,
-    zoomScaleFactor,
+    distanceScaleFactor,
     effectivePixelsPerMeter,
     pixelDims.scaleAdjustment
   );
@@ -1296,20 +1127,14 @@ export interface SurfaceCenterParams {
   baseMetersPerPixel: number;
   /** User-provided scaling multiplier. */
   imageScale: number;
-  /** Zoom-dependent scale multiplier. */
-  zoomScaleFactor: number;
+  /** Distance-dependent scale multiplier. */
+  distanceScaleFactor: number;
   /** Rotation applied to the sprite in degrees. */
   totalRotateDeg: number;
   /** Anchor definition normalized between -1 and 1. */
   anchor?: Readonly<SpriteAnchor>;
   /** Offset definition applied in meters/deg. */
   offset?: OffsetInput;
-  /** Conversion rate from meters to on-screen pixels. */
-  effectivePixelsPerMeter?: number;
-  /** Lower clamp for the sprite's largest pixel dimension. */
-  spriteMinPixel?: number;
-  /** Upper clamp for the sprite's largest pixel dimension. */
-  spriteMaxPixel?: number;
   /** Projection function mapping longitude/latitude to screen space. */
   project?: ProjectLngLatFn;
   /** Projection into clip space when available. */
@@ -1362,13 +1187,10 @@ export const calculateSurfaceCenterPosition = (
     imageHeight,
     baseMetersPerPixel,
     imageScale,
-    zoomScaleFactor,
+    distanceScaleFactor,
     totalRotateDeg,
     anchor,
     offset,
-    effectivePixelsPerMeter = 0,
-    spriteMinPixel = 0,
-    spriteMaxPixel = 0,
     project,
     projectToClipSpace,
     drawingBufferWidth,
@@ -1412,12 +1234,7 @@ export const calculateSurfaceCenterPosition = (
     imageHeight,
     baseMetersPerPixel,
     imageScale,
-    zoomScaleFactor,
-    {
-      effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel,
-    }
+    distanceScaleFactor
   );
   const halfWidthMeters = worldDims.width / 2;
   const halfHeightMeters = worldDims.height / 2;
@@ -1431,7 +1248,7 @@ export const calculateSurfaceCenterPosition = (
   const offsetMeters = calculateSurfaceOffsetMeters(
     offset,
     imageScale,
-    zoomScaleFactor,
+    distanceScaleFactor,
     worldDims.scaleAdjustment
   );
 

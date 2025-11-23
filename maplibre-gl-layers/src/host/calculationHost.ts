@@ -25,7 +25,7 @@ import {
   computeSurfaceCornerShaderModel,
   type SurfaceCorner,
   type QuadCorner,
-  calculateZoomScaleFactor,
+  calculateDistanceScaleFactor,
   resolveScalingOptions,
   resolveSpriteMercator,
   calculateCartesianDistanceMeters,
@@ -141,7 +141,7 @@ const resolveAutoRotationDeg = <T>(
 const calculateBorderWidthPixels = (
   widthMeters: number | undefined,
   imageScale: number,
-  zoomScaleFactor: number,
+  distanceScaleFactor: number,
   effectivePixelsPerMeter: number,
   sizeScaleAdjustment: number
 ): number => {
@@ -159,7 +159,7 @@ const calculateBorderWidthPixels = (
     return 0;
   }
   const scaledWidthMeters =
-    widthMeters * imageScale * zoomScaleFactor * sizeScaleAdjustment;
+    widthMeters * imageScale * distanceScaleFactor * sizeScaleAdjustment;
   if (!Number.isFinite(scaledWidthMeters) || scaledWidthMeters <= 0) {
     return 0;
   }
@@ -205,6 +205,8 @@ interface DepthSortedItem<T> {
   readonly image: InternalSpriteImageState;
   readonly resource: Readonly<RegisteredImage>;
   readonly depthKey: number;
+  readonly cameraDistanceMeters: number;
+  readonly distanceScaleFactor: number;
   readonly resolveOrigin: OriginImageResolver<T>;
 }
 
@@ -276,16 +278,14 @@ const ensureHitTestCorners = (
 export const collectDepthSortedItemsInternal = <T>(
   projectionHost: ProjectionHost,
   zoom: number,
-  zoomScaleFactor: number,
   originCenterCache: ImageCenterCache,
   {
     bucket,
     bucketBuffers,
     imageResources,
+    resolvedScaling,
     clipContext,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
@@ -309,6 +309,8 @@ export const collectDepthSortedItemsInternal = <T>(
   }
 
   const resolveOrigin = createBucketOriginResolver(bucket);
+
+  const cameraLocation = projectionHost.getCameraLocation();
 
   for (const [spriteEntry, imageEntry] of bucket) {
     const imageResource = imageResources[imageEntry.imageHandle];
@@ -342,16 +344,33 @@ export const collectDepthSortedItemsInternal = <T>(
       continue;
     }
 
+    const spriteBaseLocation = spriteEntry.location.current;
+    const spriteDistanceLocation: SpriteLocation = {
+      lng: spriteBaseLocation.lng,
+      lat: spriteBaseLocation.lat,
+      z: spriteBaseLocation.z ?? 0,
+    };
+    const cameraDistanceMeters =
+      cameraLocation !== undefined
+        ? calculateCartesianDistanceMeters(
+            cameraLocation,
+            spriteDistanceLocation
+          )
+        : Number.POSITIVE_INFINITY;
+
+    const distanceScaleFactor = calculateDistanceScaleFactor(
+      cameraDistanceMeters,
+      resolvedScaling
+    );
+
     const centerParams: ComputeImageCenterParams<T> = {
       projectionHost,
       imageResources,
       originCenterCache,
       projected,
       baseMetersPerPixel,
-      spriteMinPixel,
-      spriteMaxPixel,
       effectivePixelsPerMeter,
-      zoomScaleFactor,
+      distanceScaleFactor,
       drawingBufferWidth,
       drawingBufferHeight,
       pixelRatio,
@@ -378,12 +397,7 @@ export const collectDepthSortedItemsInternal = <T>(
         imageResource.height,
         baseMetersPerPixel,
         imageScale,
-        zoomScaleFactor,
-        {
-          effectivePixelsPerMeter,
-          spriteMinPixel,
-          spriteMaxPixel,
-        }
+        distanceScaleFactor
       );
       const autoRotationDeg = resolveAutoRotationDeg(spriteEntry, imageEntry);
       const totalRotateDeg = normalizeAngleDeg(
@@ -394,7 +408,7 @@ export const collectDepthSortedItemsInternal = <T>(
       const offsetMeters = calculateSurfaceOffsetMeters(
         offsetResolved,
         imageScale,
-        zoomScaleFactor,
+        distanceScaleFactor,
         worldDims.scaleAdjustment
       );
       const cornerDisplacements = calculateSurfaceCornerDisplacements({
@@ -467,6 +481,8 @@ export const collectDepthSortedItemsInternal = <T>(
       image: imageEntry,
       resource: imageResource,
       depthKey,
+      cameraDistanceMeters,
+      distanceScaleFactor,
       resolveOrigin,
     });
   }
@@ -530,10 +546,8 @@ interface ComputeImageCenterParams<T> {
   readonly originCenterCache: ImageCenterCache;
   readonly projected: Readonly<SpriteScreenPoint>;
   readonly baseMetersPerPixel: number;
-  readonly spriteMinPixel: number;
-  readonly spriteMaxPixel: number;
   readonly effectivePixelsPerMeter: number;
-  readonly zoomScaleFactor: number;
+  readonly distanceScaleFactor: number;
   readonly drawingBufferWidth: number;
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
@@ -560,10 +574,8 @@ const computeImageCenterXY = <T>(
     originCenterCache,
     projected,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     effectivePixelsPerMeter,
-    zoomScaleFactor,
+    distanceScaleFactor,
     imageResources,
     projectionHost,
     drawingBufferWidth,
@@ -622,10 +634,8 @@ const computeImageCenterXY = <T>(
       imageHeight: imageResourceRef?.height,
       baseMetersPerPixel,
       imageScale: imageScaleLocal,
-      zoomScaleFactor,
+      distanceScaleFactor,
       effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel,
       totalRotateDeg: totalRotDeg,
       anchor: image.anchor,
       offset: resolveImageOffset(image),
@@ -661,13 +671,10 @@ const computeImageCenterXY = <T>(
     imageHeight: imageResourceRef?.height,
     baseMetersPerPixel,
     imageScale: imageScaleLocal,
-    zoomScaleFactor,
+    distanceScaleFactor,
     totalRotateDeg: totalRotDeg,
     anchor: image.anchor,
     offset: resolveImageOffset(image),
-    effectivePixelsPerMeter,
-    spriteMinPixel,
-    spriteMaxPixel,
     projectToClipSpace,
     drawingBufferWidth,
     drawingBufferHeight,
@@ -812,13 +819,10 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   projectionHost: ProjectionHost,
   item: DepthSortedItem<TTag>,
   zoom: number,
-  zoomScaleFactor: number,
   originCenterCache: ImageCenterCache,
   {
     imageResources,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
@@ -853,6 +857,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   const atlasVSpan = atlasV1 - atlasV0;
 
   const spriteMercator = resolveSpriteMercator(projectionHost, item.sprite);
+  const distanceScaleFactor = item.distanceScaleFactor;
+  const cameraDistanceMeters = item.cameraDistanceMeters;
 
   // Reset previous frame state so skipped images do not leak stale uniforms.
   imageEntry.surfaceShaderInputs = undefined;
@@ -937,10 +943,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     originCenterCache,
     projected,
     baseMetersPerPixel,
-    spriteMinPixel,
-    spriteMaxPixel,
     effectivePixelsPerMeter,
-    zoomScaleFactor,
+    distanceScaleFactor,
     drawingBufferWidth,
     drawingBufferHeight,
     pixelRatio,
@@ -982,17 +986,6 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   };
 
   const baseLocation = resolveBaseLocation();
-  const cameraLocation = projectionHost.getCameraLocation();
-  const spriteBaseLocation = spriteEntry.location.current;
-  const spriteDistanceLocation: SpriteLocation = {
-    lng: spriteBaseLocation.lng,
-    lat: spriteBaseLocation.lat,
-    z: spriteBaseLocation.z ?? 0,
-  };
-  const cameraDistanceMeters =
-    cameraLocation !== undefined
-      ? calculateCartesianDistanceMeters(cameraLocation, spriteDistanceLocation)
-      : Number.POSITIVE_INFINITY;
 
   if (imageEntry.mode === 'surface') {
     screenToClipUniforms = {
@@ -1009,13 +1002,10 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       imageHeight: imageResource.height,
       baseMetersPerPixel,
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       totalRotateDeg,
       anchor,
       offset: offsetDef,
-      effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel,
       projectToClipSpace: (location) =>
         projectLngLatToClipSpace(projectionHost, location, clipContext),
       drawingBufferWidth,
@@ -1034,7 +1024,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
     const offsetMeters = calculateSurfaceOffsetMeters(
       offsetDef,
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       surfaceCenter.worldDimensions.scaleAdjustment
     );
     const cornerDisplacements = calculateSurfaceCornerDisplacements({
@@ -1275,7 +1265,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
         drawingBufferHeight,
         pixelRatio,
         zoom,
-        zoomScaleFactor,
+        distanceScaleFactor,
         baseMetersPerPixel,
         projected,
         metersPerPixelAtLat,
@@ -1310,10 +1300,8 @@ export const prepareDrawSpriteImageInternal = <TTag>(
       imageHeight: imageResource.height,
       baseMetersPerPixel,
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel,
       totalRotateDeg,
       anchor,
       offset: offsetDef,
@@ -1425,7 +1413,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
         drawingBufferHeight,
         pixelRatio,
         zoom,
-        zoomScaleFactor,
+        distanceScaleFactor,
         baseMetersPerPixel,
         projected,
         metersPerPixelAtLat,
@@ -1451,7 +1439,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   imageEntry.borderPixelWidth = calculateBorderWidthPixels(
     borderWidthMeters,
     imageScale,
-    zoomScaleFactor,
+    distanceScaleFactor,
     effectivePixelsPerMeter,
     borderSizeScaleAdjustment
   );
@@ -1459,7 +1447,7 @@ export const prepareDrawSpriteImageInternal = <TTag>(
   imageEntry.leaderLinePixelWidth = calculateBorderWidthPixels(
     leaderLineWidthMeters,
     imageScale,
-    zoomScaleFactor,
+    distanceScaleFactor,
     effectivePixelsPerMeter,
     borderSizeScaleAdjustment
   );
@@ -1501,20 +1489,18 @@ const prepareDrawSpriteImages = <TTag>(
     params.resolvedScaling ??
     resolveScalingOptions({
       metersPerPixel: params.baseMetersPerPixel,
-      spriteMinPixel: params.spriteMinPixel,
-      spriteMaxPixel: params.spriteMaxPixel,
-      zoomMin: zoom,
-      zoomMax: zoom,
     });
-  const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
+  const preparedParams: PrepareDrawSpriteImageParams<TTag> = {
+    ...params,
+    resolvedScaling,
+  };
 
   // Step 1
   const itemsWithDepth = collectDepthSortedItemsInternal(
     projectionHost,
     zoom,
-    zoomScaleFactor,
     originCenterCache,
-    params
+    preparedParams
   );
 
   // Step 2
@@ -1524,9 +1510,8 @@ const prepareDrawSpriteImages = <TTag>(
       projectionHost,
       item,
       zoom,
-      zoomScaleFactor,
       originCenterCache,
-      params
+      preparedParams
     );
     if (prepared) {
       preparedItems.push(prepared);

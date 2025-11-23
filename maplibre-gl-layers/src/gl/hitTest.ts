@@ -23,7 +23,8 @@ import {
   calculateSurfaceCornerDisplacements,
   calculateSurfaceOffsetMeters,
   calculateSurfaceWorldDimensions,
-  calculateZoomScaleFactor,
+  calculateDistanceScaleFactor,
+  calculateCartesianDistanceMeters,
   normalizeAngleDeg,
   resolveSpriteMercator,
   type ResolvedSpriteScalingOptions,
@@ -245,7 +246,6 @@ export const createHitTestController = <T>({
     const scaling = getResolvedScaling();
     const baseLocation = sprite.location.current;
     const zoom = projectionHost.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, scaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
       baseLocation.lat
@@ -270,22 +270,29 @@ export const createHitTestController = <T>({
       return null;
     }
 
+    const cameraLocation = projectionHost.getCameraLocation();
+    const cameraDistanceMeters =
+      cameraLocation !== undefined
+        ? calculateCartesianDistanceMeters(cameraLocation, {
+            lng: baseLocation.lng,
+            lat: baseLocation.lat,
+            z: baseLocation.z ?? 0,
+          })
+        : Number.POSITIVE_INFINITY;
+    const distanceScaleFactor = calculateDistanceScaleFactor(
+      cameraDistanceMeters,
+      scaling
+    );
+
     const imageScale = image.scale ?? 1;
     const baseMetersPerPixel = scaling.metersPerPixel;
-    const spriteMinPixel = scaling.spriteMinPixel;
-    const spriteMaxPixel = scaling.spriteMaxPixel;
 
     const worldDims = calculateSurfaceWorldDimensions(
       imageResource.width,
       imageResource.height,
       baseMetersPerPixel,
       imageScale,
-      zoomScaleFactor,
-      {
-        effectivePixelsPerMeter,
-        spriteMinPixel,
-        spriteMaxPixel,
-      }
+      distanceScaleFactor
     );
     if (worldDims.width <= 0 || worldDims.height <= 0) {
       return null;
@@ -296,7 +303,7 @@ export const createHitTestController = <T>({
     const offsetMetersVec = calculateSurfaceOffsetMeters(
       offsetDef,
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       worldDims.scaleAdjustment
     );
 
@@ -334,7 +341,6 @@ export const createHitTestController = <T>({
     const scaling = getResolvedScaling();
     const baseLocation = sprite.location.current;
     const zoom = projectionHost.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, scaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
       baseLocation.lat
@@ -359,9 +365,21 @@ export const createHitTestController = <T>({
       return null;
     }
 
+    const cameraLocation = projectionHost.getCameraLocation();
+    const cameraDistanceMeters =
+      cameraLocation !== undefined
+        ? calculateCartesianDistanceMeters(cameraLocation, {
+            lng: baseLocation.lng,
+            lat: baseLocation.lat,
+            z: baseLocation.z ?? 0,
+          })
+        : Number.POSITIVE_INFINITY;
+    const distanceScaleFactor = calculateDistanceScaleFactor(
+      cameraDistanceMeters,
+      scaling
+    );
+
     const baseMetersPerPixel = scaling.metersPerPixel;
-    const spriteMinPixel = scaling.spriteMinPixel;
-    const spriteMaxPixel = scaling.spriteMaxPixel;
     const imageScale = image.scale ?? 1;
     const autoRotationDeg = resolveImageAutoRotationDeg(sprite, image);
     const totalRotateDeg = normalizeAngleDeg(
@@ -375,10 +393,8 @@ export const createHitTestController = <T>({
       imageResource.height,
       baseMetersPerPixel,
       imageScale,
-      zoomScaleFactor,
-      effectivePixelsPerMeter,
-      spriteMinPixel,
-      spriteMaxPixel
+      distanceScaleFactor,
+      effectivePixelsPerMeter
     );
 
     const halfWidthMeters = pixelDims.width / 2 / effectivePixelsPerMeter;
@@ -394,7 +410,7 @@ export const createHitTestController = <T>({
     const offsetShift = calculateBillboardOffsetPixels(
       resolveImageOffset(image),
       imageScale,
-      zoomScaleFactor,
+      distanceScaleFactor,
       effectivePixelsPerMeter
     );
 

@@ -29,6 +29,8 @@ import {
   SURFACE_CORNER_DISPLACEMENT_COUNT,
   calculateMetersPerPixelAtLatitude,
   calculateEffectivePixelsPerMeter,
+  calculateDistanceScaleFactor,
+  calculateCartesianDistanceMeters,
   multiplyMatrixAndVector,
   type SurfaceCorner,
   normalizeAngleDeg,
@@ -1508,6 +1510,10 @@ const convertToWasmProjectionState = <TTag>(
     parameterBuffer[InputHeaderIndex.ITEM_OFFSET] = itemOffset;
     parameterBuffer[InputHeaderIndex.FLAGS] = inputFlags;
 
+    const zoomScaleFactor = 1;
+    const spriteMinPixel = 0;
+    const spriteMaxPixel = 0;
+
     const frameConstView = parameterBuffer.subarray(
       frameConstOffset,
       frameConstOffset + INPUT_FRAME_CONSTANT_LENGTH
@@ -1524,12 +1530,12 @@ const convertToWasmProjectionState = <TTag>(
       0
     );
     frameConstView[fcCursor++] = callParams.baseMetersPerPixel;
-    frameConstView[fcCursor++] = callParams.spriteMinPixel;
-    frameConstView[fcCursor++] = callParams.spriteMaxPixel;
+    frameConstView[fcCursor++] = spriteMinPixel;
+    frameConstView[fcCursor++] = spriteMaxPixel;
     frameConstView[fcCursor++] = callParams.drawingBufferWidth;
     frameConstView[fcCursor++] = callParams.drawingBufferHeight;
     frameConstView[fcCursor++] = callParams.pixelRatio;
-    frameConstView[fcCursor++] = toFiniteOr(callParams.zoomScaleFactor, 1);
+    frameConstView[fcCursor++] = zoomScaleFactor;
     frameConstView[fcCursor++] = callParams.identityScaleX;
     frameConstView[fcCursor++] = callParams.identityScaleY;
     frameConstView[fcCursor++] = callParams.identityOffsetX;
@@ -1550,7 +1556,7 @@ const convertToWasmProjectionState = <TTag>(
 
     state.lastFrameParams = {
       baseMetersPerPixel: callParams.baseMetersPerPixel,
-      zoomScaleFactor: toFiniteOr(callParams.zoomScaleFactor, 1),
+      zoomScaleFactor,
     };
 
     writeMatrix(
@@ -1637,6 +1643,20 @@ const convertToWasmProjectionState = <TTag>(
         originTargetIndices?.[index] ?? image.originRenderTargetIndex;
       const originLocation = image.originLocation;
       const currentLocation = sprite.location.current;
+      const cameraLocation = preparedProjection.cameraLocation;
+      const cameraDistanceMeters =
+        cameraLocation !== undefined
+          ? calculateCartesianDistanceMeters(cameraLocation, {
+              lng: currentLocation.lng,
+              lat: currentLocation.lat,
+              z: currentLocation.z ?? 0,
+            })
+          : Number.POSITIVE_INFINITY;
+      const distanceScaleFactor = calculateDistanceScaleFactor(
+        cameraDistanceMeters,
+        callParams.resolvedScaling
+      );
+      const scaledImageScale = (image.scale ?? 1) * distanceScaleFactor;
       parameterBuffer[cursor++] = spriteHandle;
       parameterBuffer[cursor++] = imageHandle;
       parameterBuffer[cursor++] =
@@ -1645,7 +1665,7 @@ const convertToWasmProjectionState = <TTag>(
         originLocation?.useResolvedAnchor ?? false
       );
       parameterBuffer[cursor++] = modeToNumber(image.mode);
-      parameterBuffer[cursor++] = image.scale ?? 1;
+      parameterBuffer[cursor++] = scaledImageScale;
       parameterBuffer[cursor++] = image.finalOpacity.current;
       const anchor = image.anchor ?? { x: 0, y: 0 };
       parameterBuffer[cursor++] = anchor.x;

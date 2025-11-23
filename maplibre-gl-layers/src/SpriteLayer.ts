@@ -61,7 +61,6 @@ import { loadImageBitmap, SvgSizeResolutionError } from './utils/image';
 import { createLocationInterpolationState } from './interpolation/locationInterpolation';
 import {
   calculateDistanceAndBearingMeters,
-  calculateZoomScaleFactor,
   isFiniteNumber,
   resolveScalingOptions,
   cloneSpriteLocation,
@@ -1530,8 +1529,6 @@ export const createSpriteLayer = <T = any>(
             timestamp: interpolationTimestamp,
             frameContext: {
               baseMetersPerPixel: resolvedScaling.metersPerPixel,
-              spriteMinPixel: resolvedScaling.spriteMinPixel,
-              spriteMaxPixel: resolvedScaling.spriteMaxPixel,
             },
           }
         : null;
@@ -1581,8 +1578,6 @@ export const createSpriteLayer = <T = any>(
     const identityOffsetY = 0;
 
     const baseMetersPerPixel = resolvedScaling.metersPerPixel;
-    const spriteMinPixel = resolvedScaling.spriteMinPixel;
-    const spriteMaxPixel = resolvedScaling.spriteMaxPixel;
 
     // Prepare to create projection host
     const projectionHost = createProjectionHostForMap(mapInstance);
@@ -1592,9 +1587,6 @@ export const createSpriteLayer = <T = any>(
       if (!clipContext) {
         return;
       }
-
-      const zoom = projectionHost.getZoom();
-      const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
 
       // Enable blending and avoid depth-buffer interference.
       glContext.enable(glContext.BLEND);
@@ -1657,12 +1649,9 @@ export const createSpriteLayer = <T = any>(
             resolvedScaling,
             clipContext,
             baseMetersPerPixel,
-            spriteMinPixel,
-            spriteMaxPixel,
             drawingBufferWidth,
             drawingBufferHeight,
             pixelRatio,
-            zoomScaleFactor,
             identityScaleX,
             identityScaleY,
             identityOffsetX,

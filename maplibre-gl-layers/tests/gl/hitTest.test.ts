@@ -10,7 +10,8 @@ import {
   calculateBillboardPixelDimensions,
   calculateEffectivePixelsPerMeter,
   calculateMetersPerPixelAtLatitude,
-  calculateZoomScaleFactor,
+  calculateDistanceScaleFactor,
+  calculateCartesianDistanceMeters,
   resolveScalingOptions,
 } from '../../src/utils/math';
 import type { ProjectionHostParams } from '../../src/host/projectionHost';
@@ -738,7 +739,6 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
     const { color, width } = call!;
     const resolvedScaling = resolveScalingOptions();
     const zoom = map.getZoom();
-    const zoomScaleFactor = calculateZoomScaleFactor(zoom, resolvedScaling);
     const metersPerPixelAtLat = calculateMetersPerPixelAtLatitude(
       zoom,
       location.lat
@@ -747,21 +747,27 @@ describe('SpriteLayer hit testing with LooseQuadTree', () => {
       metersPerPixelAtLat,
       map.transform.cameraToCenterDistance
     );
+    const cameraDistanceMeters = calculateCartesianDistanceMeters(
+      { ...map.getCenter(), z: map.transform?.cameraToCenterDistance ?? 0 },
+      { ...location, z: 0 }
+    );
+    const distanceScaleFactor = calculateDistanceScaleFactor(
+      cameraDistanceMeters,
+      resolvedScaling
+    );
     const imageScale = spriteImage.scale ?? 1;
     const pixelDims = calculateBillboardPixelDimensions(
       fakeBitmap.width,
       fakeBitmap.height,
       resolvedScaling.metersPerPixel,
       imageScale,
-      zoomScaleFactor,
-      effectivePixelsPerMeter,
-      resolvedScaling.spriteMinPixel,
-      resolvedScaling.spriteMaxPixel
+      distanceScaleFactor,
+      effectivePixelsPerMeter
     );
     const expectedWidth =
       widthMeters *
       imageScale *
-      zoomScaleFactor *
+      distanceScaleFactor *
       effectivePixelsPerMeter *
       pixelDims.scaleAdjustment;
     expect(width).toBeCloseTo(expectedWidth);

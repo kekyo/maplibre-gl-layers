@@ -345,12 +345,8 @@ const createRegisteredImage = (): RegisteredImage => ({
 
 const createResolvedScaling = (): ResolvedSpriteScalingOptions => ({
   metersPerPixel: 1,
-  zoomMin: 0,
-  zoomMax: 24,
-  scaleMin: 1,
-  scaleMax: 1,
-  spriteMinPixel: 0,
-  spriteMaxPixel: 1024,
+  minScaleDistanceMeters: 0,
+  maxScaleDistanceMeters: Number.POSITIVE_INFINITY,
 });
 
 const createPrepareParams = (
@@ -372,14 +368,11 @@ const createPrepareParams = (
       textureReady: new Uint8Array([1]),
     },
     baseMetersPerPixel: 1,
-    spriteMinPixel: 1,
-    spriteMaxPixel: 512,
     drawingBufferWidth: 800,
     drawingBufferHeight: 600,
     pixelRatio: 1,
-    clipContext: null,
+    clipContext: undefined,
     resolvedScaling: createResolvedScaling(),
-    zoomScaleFactor: 1,
     identityScaleX: 1,
     identityScaleY: 1,
     identityOffsetX: 0,
@@ -388,7 +381,7 @@ const createPrepareParams = (
     screenToClipScaleY: 1,
     screenToClipOffsetX: 0,
     screenToClipOffsetY: 0,
-  } as unknown as PrepareDrawSpriteImageParams<null>;
+  };
 };
 
 const PROJECTION_PARAMS: ProjectionHostParams = {

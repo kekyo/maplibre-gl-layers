@@ -312,8 +312,6 @@ export interface PrepareDrawSpriteImageParamsBase {
   readonly imageResources: ImageResourceTable;
   readonly imageHandleBuffers: Readonly<ImageHandleBuffers>;
   readonly baseMetersPerPixel: number;
-  readonly spriteMinPixel: number;
-  readonly spriteMaxPixel: number;
   readonly drawingBufferWidth: number;
   readonly drawingBufferHeight: number;
   readonly pixelRatio: number;
@@ -325,7 +323,6 @@ export interface PrepareDrawSpriteImageParamsBefore<TTag>
   readonly bucket: readonly Readonly<RenderTargetEntryLike<TTag>>[];
   readonly bucketBuffers: Readonly<RenderTargetBucketBuffers>;
   readonly resolvedScaling: ResolvedSpriteScalingOptions;
-  readonly zoomScaleFactor: number;
 }
 
 export interface PrepareDrawSpriteImageParamsAfter
@@ -387,8 +384,6 @@ export interface PreparedDrawSpriteImageParams<T> {
  */
 export interface RenderInterpolationFrameContext {
   readonly baseMetersPerPixel: number;
-  readonly spriteMinPixel: number;
-  readonly spriteMaxPixel: number;
 }
 
 /**
