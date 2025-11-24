@@ -499,6 +499,12 @@ const processInterpolationsWithWasm = <TTag>(
 
         const hasOffsetMetersInterpolation =
           image.offset.offsetMeters.interpolation.state !== null;
+        const hasOpacityInterpolation =
+          image.finalOpacity.interpolation.state !== null;
+        const hasDegreeInterpolation =
+          image.finalRotateDeg.interpolation.state !== null ||
+          image.offset.offsetDeg.interpolation.state !== null;
+
         if (hasOffsetMetersInterpolation) {
           collectDistanceInterpolationWorkItems(
             image,
@@ -508,12 +514,6 @@ const processInterpolationsWithWasm = <TTag>(
           );
         }
 
-        const hasOpacityInterpolation =
-          image.finalOpacity.interpolation.state !== null;
-
-        const hasDegreeInterpolation =
-          image.finalRotateDeg.interpolation.state !== null ||
-          image.offset.offsetDeg.interpolation.state !== null;
         if (hasDegreeInterpolation) {
           collectDegreeInterpolationWorkItems(
             image,
@@ -546,11 +546,12 @@ const processInterpolationsWithWasm = <TTag>(
             }
           : { autoRotationDeg: resolveAutoRotationDeg(sprite, image) };
 
-        if (
-          stepSpriteImageInterpolations(image, timestamp, interpolationOptions)
-        ) {
-          hasActiveInterpolation = true;
-        }
+        const activeInterpolation = stepSpriteImageInterpolations(
+          image,
+          timestamp,
+          interpolationOptions
+        );
+        hasActiveInterpolation ||= activeInterpolation;
       });
     });
 
@@ -562,73 +563,43 @@ const processInterpolationsWithWasm = <TTag>(
     processedSprites.push({ sprite, touchedImages });
   }
 
-  const hasPresetRequests =
-    distanceInterpolationWorkItems.length > 0 ||
-    degreeInterpolationWorkItems.length > 0 ||
-    locationInterpolationWorkItems.length > 0;
+  const wasmResults = processInterpolationsViaWasm(
+    wasm,
+    {
+      distance: distanceInterpolationWorkItems,
+      degree: degreeInterpolationWorkItems,
+      sprite: locationInterpolationWorkItems,
+    },
+    timestamp
+  );
 
-  const wasmResults: WasmProcessInterpolationResults = hasPresetRequests
-    ? processInterpolationsViaWasm(
-        wasm,
-        {
-          distance: distanceInterpolationWorkItems,
-          degree: degreeInterpolationWorkItems,
-          sprite: locationInterpolationWorkItems,
-        },
-        timestamp
-      )
-    : {
-        distance: [],
-        degree: [],
-        sprite: [],
-      };
+  const activeDistanceInterpolation = applyDistanceInterpolationEvaluations(
+    distanceInterpolationWorkItems,
+    wasmResults.distance,
+    timestamp
+  );
+  hasActiveInterpolation ||= activeDistanceInterpolation;
 
-  if (distanceInterpolationWorkItems.length > 0) {
-    if (
-      applyDistanceInterpolationEvaluations(
-        distanceInterpolationWorkItems,
-        wasmResults.distance,
-        timestamp
-      )
-    ) {
-      hasActiveInterpolation = true;
-    }
-  }
+  const activeDegreeInterpolation = applyDegreeInterpolationEvaluations(
+    degreeInterpolationWorkItems,
+    wasmResults.degree,
+    timestamp
+  );
+  hasActiveInterpolation ||= activeDegreeInterpolation;
 
-  if (degreeInterpolationWorkItems.length > 0) {
-    if (
-      applyDegreeInterpolationEvaluations(
-        degreeInterpolationWorkItems,
-        wasmResults.degree,
-        timestamp
-      )
-    ) {
-      hasActiveInterpolation = true;
-    }
-  }
+  const activeLocationInterpolation = applyLocationInterpolationEvaluations(
+    locationInterpolationWorkItems,
+    wasmResults.sprite,
+    timestamp
+  );
+  hasActiveInterpolation ||= activeLocationInterpolation;
 
-  if (locationInterpolationWorkItems.length > 0) {
-    if (
-      applyLocationInterpolationEvaluations(
-        locationInterpolationWorkItems,
-        wasmResults.sprite,
-        timestamp
-      )
-    ) {
-      hasActiveInterpolation = true;
-    }
-  }
-
-  for (const { sprite, touchedImages } of processedSprites) {
-    let spriteHasDirtyImages = false;
-    for (const image of touchedImages) {
+  for (const entry of processedSprites) {
+    for (const image of entry.touchedImages) {
       const dirty = hasActiveImageInterpolations(image);
-      image.interpolationDirty = dirty;
-      if (dirty) {
-        spriteHasDirtyImages = true;
-      }
+      image.interpolationDirty ||= dirty;
+      entry.sprite.interpolationDirty ||= dirty;
     }
-    sprite.interpolationDirty = spriteHasDirtyImages;
   }
 
   return {
