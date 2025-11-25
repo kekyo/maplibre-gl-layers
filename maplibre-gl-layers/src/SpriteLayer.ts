@@ -2680,18 +2680,12 @@ export const createSpriteLayer = <T = any>(
       interpolationAllowed && !state.offset.offsetDeg.invalidated;
     const allowOffsetMetersInterpolation =
       interpolationAllowed && !state.offset.offsetMeters.invalidated;
-    const offsetDegInterpolationOption = allowOffsetDegInterpolation
-      ? interpolationOptions?.offsetDeg
-      : null;
-    const offsetMetersInterpolationOption = allowOffsetMetersInterpolation
-      ? interpolationOptions?.offsetMeters
-      : null;
+    const offsetDegInterpolationOption = interpolationOptions?.offsetDeg;
+    const offsetMetersInterpolationOption = interpolationOptions?.offsetMeters;
     // Pull out finalRotateDeg interpolation hints when the payload includes them.
     const allowRotateInterpolation =
       interpolationAllowed && !state.finalRotateDeg.invalidated;
-    const rotateInterpolationOption = allowRotateInterpolation
-      ? interpolationOptions?.finalRotateDeg
-      : null;
+    const rotateInterpolationOption = interpolationOptions?.finalRotateDeg;
     let rotationOverride: SpriteInterpolationOptions | null | undefined;
     let hasRotationOverride = false;
     const hasOffsetMetersUpdate = imageUpdate.offsetMeters !== undefined;
@@ -2736,7 +2730,7 @@ export const createSpriteLayer = <T = any>(
         state.finalRotateDeg.interpolation.options = cloned;
         rotationOverride = cloned;
       }
-      hasRotationOverride = true;
+      hasRotationOverride = allowRotateInterpolation;
     }
     let requireRotationSync = false;
     if (imageUpdate.rotateDeg !== undefined) {
