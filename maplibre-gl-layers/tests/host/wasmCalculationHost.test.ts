@@ -49,15 +49,19 @@ const RESULT_ITEM_STRIDE =
   RESULT_VERTEX_COMPONENT_LENGTH +
   RESULT_HIT_TEST_COMPONENT_LENGTH +
   RESULT_SURFACE_BLOCK_LENGTH;
-const DISTANCE_INTERPOLATION_ITEM_LENGTH = 10;
-const DEGREE_INTERPOLATION_ITEM_LENGTH = 10;
+const DISTANCE_INTERPOLATION_ITEM_LENGTH = 11;
+const DEGREE_INTERPOLATION_ITEM_LENGTH = 11;
 const SPRITE_INTERPOLATION_ITEM_LENGTH = 14;
 const PROCESS_INTERPOLATIONS_HEADER_LENGTH = 3;
 
 interface WasmProcessInterpolationResults {
-  distance: SpriteInterpolationEvaluationResult<number>[];
-  degree: SpriteInterpolationEvaluationResult<number>[];
-  sprite: SpriteInterpolationEvaluationResult<SpriteLocation>[];
+  distance: (SpriteInterpolationEvaluationResult<number> & {
+    finalValue: number;
+  })[];
+  degree: (SpriteInterpolationEvaluationResult<number> & {
+    finalValue: number;
+  })[];
+  location: SpriteInterpolationEvaluationResult<SpriteLocation>[];
 }
 
 class MockWasmHost implements WasmHost {
@@ -66,7 +70,7 @@ class MockWasmHost implements WasmHost {
   nextProcessResponse: WasmProcessInterpolationResults = {
     distance: [],
     degree: [],
-    sprite: [],
+    location: [],
   };
   lastProcessRequestCounts: {
     distance: number;
@@ -180,7 +184,7 @@ class MockWasmHost implements WasmHost {
     if (
       response.distance.length !== distanceCount ||
       response.degree.length !== degreeCount ||
-      response.sprite.length !== spriteCount
+      response.location.length !== spriteCount
     ) {
       throw new Error(
         'Unexpected process interpolation response configuration'
@@ -194,15 +198,17 @@ class MockWasmHost implements WasmHost {
 
     for (const entry of response.distance) {
       view[writeCursor++] = entry.value;
+      view[writeCursor++] = entry.finalValue;
       view[writeCursor++] = entry.completed ? 1 : 0;
       view[writeCursor++] = entry.effectiveStartTimestamp;
     }
     for (const entry of response.degree) {
       view[writeCursor++] = entry.value;
+      view[writeCursor++] = entry.finalValue;
       view[writeCursor++] = entry.completed ? 1 : 0;
       view[writeCursor++] = entry.effectiveStartTimestamp;
     }
-    for (const entry of response.sprite) {
+    for (const entry of response.location) {
       view[writeCursor++] = entry.value.lng;
       view[writeCursor++] = entry.value.lat;
       view[writeCursor++] = entry.value.z ?? 0;
@@ -214,7 +220,7 @@ class MockWasmHost implements WasmHost {
     this.nextProcessResponse = {
       distance: [],
       degree: [],
-      sprite: [],
+      location: [],
     };
 
     return true;
@@ -622,7 +628,7 @@ describe('converToDrawImageParams', () => {
   });
 });
 
-describe('processInterpolationsViaWasm', () => {
+describe('internalProcessInterpolationsCore', () => {
   it('encodes requests and decodes wasm responses', () => {
     const wasm = new MockWasmHost();
     const linear = (value: number): number => value;
@@ -657,13 +663,27 @@ describe('processInterpolationsViaWasm', () => {
     const requests = {
       distance: [distanceState],
       degree: [degreeState],
-      sprite: [spriteState],
+      location: [spriteState],
     };
 
     wasm.setNextProcessResponse({
-      distance: [{ value: 3, completed: false, effectiveStartTimestamp: 10 }],
-      degree: [{ value: 30, completed: true, effectiveStartTimestamp: 20 }],
-      sprite: [
+      distance: [
+        {
+          value: 3,
+          finalValue: 10,
+          completed: false,
+          effectiveStartTimestamp: 10,
+        },
+      ],
+      degree: [
+        {
+          value: 30,
+          finalValue: 90,
+          completed: true,
+          effectiveStartTimestamp: 20,
+        },
+      ],
+      location: [
         {
           value: { lng: 1, lat: 2 },
           completed: false,
@@ -672,16 +692,19 @@ describe('processInterpolationsViaWasm', () => {
       ],
     });
 
-    const result = __wasmCalculationTestInternals.processInterpolationsViaWasm(
-      wasm,
-      requests,
-      50
-    );
+    const result =
+      __wasmCalculationTestInternals.internalProcessInterpolationsCore(
+        wasm,
+        requests,
+        50
+      );
 
     expect(result.distance).toHaveLength(1);
     expect(result.distance[0]?.value).toBe(3);
+    expect(result.distance[0]?.finalValue).toBe(10);
     expect(result.degree[0]?.completed).toBe(true);
-    expect(result.sprite[0]?.value.lng).toBeCloseTo(1);
+    expect(result.degree[0]?.finalValue).toBe(90);
+    expect(result.location[0]?.value.lng).toBeCloseTo(1);
     expect(wasm.lastProcessRequestCounts).toEqual({
       distance: 1,
       degree: 1,

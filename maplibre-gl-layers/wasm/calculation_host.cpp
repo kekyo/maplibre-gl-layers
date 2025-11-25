@@ -29,268 +29,11 @@
 #endif
 
 #include "projection_host.h"
-#include "param_layouts.h"
-
-#if defined(__EMSCRIPTEN_PTHREADS__)
-static std::size_t g_threadPoolLimit = 0;
-
-extern "C" {
-EMSCRIPTEN_KEEPALIVE void setThreadPoolSize(double value) {
-  if (std::isnan(value) || value <= 0.0) {
-    g_threadPoolLimit = 0;
-    return;
-  }
-  const double floored = std::floor(value + 0.5);
-  if (!std::isfinite(floored)) {
-    return;
-  }
-  const auto converted = static_cast<std::size_t>(floored);
-  g_threadPoolLimit = converted > 0 ? converted : 0;
-}
-}
-
-static inline std::size_t clampToAvailableThreads(std::size_t requested) {
-  if (g_threadPoolLimit > 0) {
-    return std::min<std::size_t>(requested, g_threadPoolLimit);
-  }
-  unsigned int hw = std::thread::hardware_concurrency();
-  if (hw == 0u) {
-    hw = 4u;
-  }
-  return std::min<std::size_t>(requested, static_cast<std::size_t>(hw));
-}
-#else
-extern "C" {
-EMSCRIPTEN_KEEPALIVE void setThreadPoolSize(double value) {
-  (void)value;
-}
-}
-
-static inline std::size_t clampToAvailableThreads(std::size_t requested) {
-  return requested;
-}
-#endif
-
-static inline double normalizeAngleDeg(double angle) {
-  if (!std::isfinite(angle)) {
-    return 0.0;
-  }
-  const double wrapped = std::fmod(angle, 360.0);
-  double normalized = wrapped < 0.0 ? wrapped + 360.0 : wrapped;
-  if (normalized == -0.0) {
-    normalized = 0.0;
-  }
-  return normalized;
-}
-
-constexpr double DISTANCE_EPSILON = 1e-6;
-constexpr double DEGREE_EPSILON = 1e-6;
-
-static inline double clamp01(double value) {
-  if (!std::isfinite(value)) {
-    return 1.0;
-  }
-  if (value <= 0.0) {
-    return 0.0;
-  }
-  if (value >= 1.0) {
-    return 1.0;
-  }
-  return value;
-}
-
-static inline int decodeMode(double modeCode) {
-  if (modeCode == 1.0) {
-    return 1;  // in
-  }
-  if (modeCode == 2.0) {
-    return 2;  // out
-  }
-  return 0;  // in-out
-}
-
-static inline double applyEasingPreset(double progress,
-                                       int32_t presetId,
-                                       double param0,
-                                       double param1,
-                                       double param2) {
-  (void)param2;
-  constexpr double PI = 3.14159265358979323846;
-  const double t = clamp01(progress);
-  switch (presetId) {
-    case 0:  // linear
-    default:
-      return t;
-    case 1: {  // ease (power param0, mode param1)
-      const double power = param0 > 0.0 ? param0 : 3.0;
-      const int mode = decodeMode(param1);
-      if (mode == 1) {
-        return std::pow(t, power);
-      }
-      if (mode == 2) {
-        return 1.0 - std::pow(1.0 - t, power);
-      }
-      if (t < 0.5) {
-        const double x = t * 2.0;
-        return 0.5 * std::pow(x, power);
-      }
-      const double x = 2.0 - t * 2.0;
-      return 1.0 - 0.5 * std::pow(x, power);
-    }
-    case 4: {  // exponential (exponent param0, mode param1)
-      const double exponent = param0 > 0.0 ? param0 : 5.0;
-      const int mode = decodeMode(param1);
-      const double denom = std::expm1(exponent);
-      auto expIn = [&](double v) -> double {
-        if (v == 0.0) {
-          return 0.0;
-        }
-        if (v == 1.0) {
-          return 1.0;
-        }
-        return std::expm1(exponent * v) / denom;
-      };
-      auto expOut = [&](double v) -> double {
-        if (v == 0.0) {
-          return 0.0;
-        }
-        if (v == 1.0) {
-          return 1.0;
-        }
-        return 1.0 - std::expm1(exponent * (1.0 - v)) / denom;
-      };
-      switch (mode) {
-        case 1:  // in
-          return expIn(t);
-        case 2:  // out
-          return expOut(t);
-        default:  // in-out
-          if (t < 0.5) {
-            return 0.5 * expIn(t * 2.0);
-          }
-          return 0.5 + 0.5 * expOut(t * 2.0 - 1.0);
-      }
-    }
-    case 5: {  // quadratic (mode param0)
-      const int mode = decodeMode(param0);
-      if (mode == 1) {
-        return t * t;
-      }
-      if (mode == 2) {
-        return 1.0 - (1.0 - t) * (1.0 - t);
-      }
-      if (t < 0.5) {
-        const double x = t * 2.0;
-        return 0.5 * x * x;
-      }
-      const double x = 2.0 - t * 2.0;
-      return 1.0 - 0.5 * x * x;
-    }
-    case 6: {  // cubic (mode param0)
-      const int mode = decodeMode(param0);
-      if (mode == 1) {
-        return t * t * t;
-      }
-      if (mode == 2) {
-        const double inv = 1.0 - t;
-        return 1.0 - inv * inv * inv;
-      }
-      if (t < 0.5) {
-        const double x = t * 2.0;
-        return 0.5 * x * x * x;
-      }
-      const double x = 2.0 - t * 2.0;
-      return 1.0 - 0.5 * x * x * x;
-    }
-    case 7: {  // sine (mode param0, amplitude param1)
-      const int mode = decodeMode(param0);
-      const double amplitude = param1 > 0.0 ? param1 : 1.0;
-      if (mode == 1) {  // in
-        return amplitude * (1.0 - std::cos((PI / 2.0) * t));
-      }
-      if (mode == 2) {  // out
-        return amplitude * std::sin((PI / 2.0) * t);
-      }
-      return amplitude * 0.5 * (1.0 - std::cos(PI * t));
-    }
-    case 8: {  // bounce (bounces param0, decay param1)
-      const double bounces = std::max(1.0, std::round(param0 > 0.0 ? param0 : 3.0));
-      const double decay =
-          param1 <= 0.0 ? 0.5 : (param1 > 1.0 ? 1.0 : param1);
-      const double oscillation = std::cos(PI * (bounces + 0.5) * t);
-      const double dampening = std::pow(decay, t * bounces);
-      return 1.0 - std::abs(oscillation) * dampening;
-    }
-    case 9: {  // back (overshoot param0)
-      const double overshoot =
-          (std::isfinite(param0) && param0 != 0.0) ? param0 : 1.70158;
-      const double c3 = overshoot + 1.0;
-      const double p = t - 1.0;
-      return 1.0 + c3 * p * p * p + overshoot * p * p;
-    }
-  }
-}
-
-static inline double resolveTimestamp(double timestamp) {
-  if (std::isfinite(timestamp)) {
-    return timestamp;
-  }
-  return emscripten_get_now();
-}
-
-static inline double resolveEffectiveStart(double startTimestamp,
-                                           double timestamp) {
-  return startTimestamp >= 0.0 ? startTimestamp : timestamp;
-}
-
-static inline double lerp(double from, double to, double ratio) {
-  return from + (to - from) * ratio;
-}
-
-static inline void writeNumericInterpolationResult(double* target,
-                                                   double value,
-                                                   bool completed,
-                                                   double effectiveStart) {
-  target[0] = value;
-  target[1] = completed ? 1.0 : 0.0;
-  target[2] = effectiveStart;
-}
-
-static inline void writeSpriteInterpolationResult(double* target,
-                                                  double lng,
-                                                  double lat,
-                                                  double z,
-                                                  bool hasZ,
-                                                  bool completed,
-                                                  double effectiveStart) {
-  target[0] = lng;
-  target[1] = lat;
-  target[2] = hasZ ? z : 0.0;
-  target[3] = hasZ ? 1.0 : 0.0;
-  target[4] = completed ? 1.0 : 0.0;
-  target[5] = effectiveStart;
-}
+#include "calculation_host_layouts.h"
+#include "calculation_host_common.h"
+#include "worker_jobs.h"
 
 constexpr std::size_t SURFACE_CLIP_CORNER_COUNT = 4;
-
-static inline bool convertToSizeT(double value, std::size_t& out) {
-  if (!std::isfinite(value)) {
-    return false;
-  }
-  if (value < 0.0) {
-    return false;
-  }
-  const double truncated = std::floor(value + 0.5);
-  if (!std::isfinite(truncated)) {
-    return false;
-  }
-  const auto candidate = static_cast<std::size_t>(truncated);
-  if (static_cast<double>(candidate) != truncated) {
-    return false;
-  }
-  out = candidate;
-  return true;
-}
 
 static inline bool convertToInt64(double value, int64_t& out) {
   if (!std::isfinite(value)) {
@@ -1562,29 +1305,12 @@ struct DepthWorkerContext {
   bool enableSurfaceBias = false;
 };
 
-#if defined(__EMSCRIPTEN_PTHREADS__)
 constexpr std::size_t DEPTH_PARALLEL_MIN_ITEMS = 512;
 constexpr std::size_t DEPTH_PARALLEL_SLICE = 256;
-#endif
 
 static inline std::size_t determineDepthWorkerCount(std::size_t totalItems) {
-#if defined(__EMSCRIPTEN_PTHREADS__)
-  if (totalItems < DEPTH_PARALLEL_MIN_ITEMS) {
-    return 1;
-  }
-  unsigned int hw = std::thread::hardware_concurrency();
-  if (hw == 0u) {
-    hw = 4u;
-  }
-  const std::size_t maxWorkers = static_cast<std::size_t>(hw);
-  const std::size_t bySize =
-      std::max<std::size_t>(1, totalItems / DEPTH_PARALLEL_SLICE);
-  return clampToAvailableThreads(
-      std::min<std::size_t>(maxWorkers, bySize));
-#else
-  (void)totalItems;
-  return 1;
-#endif
+  return determineWorkerCount(
+      totalItems, DEPTH_PARALLEL_MIN_ITEMS, DEPTH_PARALLEL_SLICE);
 }
 
 static void processDepthRange(const DepthWorkerContext& ctx,
@@ -1749,29 +1475,12 @@ static void processDepthRange(const DepthWorkerContext& ctx,
   }
 }
 
-#if defined(__EMSCRIPTEN_PTHREADS__)
 constexpr std::size_t PREPARE_PARALLEL_MIN_ITEMS = 256;
 constexpr std::size_t PREPARE_PARALLEL_SLICE = 128;
-#endif
 
 static inline std::size_t determinePrepareWorkerCount(std::size_t totalItems) {
-#if defined(__EMSCRIPTEN_PTHREADS__)
-  if (totalItems < PREPARE_PARALLEL_MIN_ITEMS) {
-    return 1;
-  }
-  unsigned int hw = std::thread::hardware_concurrency();
-  if (hw == 0u) {
-    hw = 4u;
-  }
-  const std::size_t maxWorkers = static_cast<std::size_t>(hw);
-  const std::size_t bySize =
-      std::max<std::size_t>(1, totalItems / PREPARE_PARALLEL_SLICE);
-  return clampToAvailableThreads(
-      std::min<std::size_t>(maxWorkers, bySize));
-#else
-  (void)totalItems;
-  return 1;
-#endif
+  return determineWorkerCount(
+      totalItems, PREPARE_PARALLEL_MIN_ITEMS, PREPARE_PARALLEL_SLICE);
 }
 
 static DepthCollectionResult collectDepthSortedItemsInternal(
@@ -1794,35 +1503,17 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
   const std::size_t workerCount =
       determineDepthWorkerCount(bucketItems.size());
 
-  if (workerCount <= 1) {
+  if (workerCount <= 1 || bucketItems.empty()) {
     processDepthRange(ctx, 0, bucketItems.size(), depthItems);
   } else {
-#if defined(__EMSCRIPTEN_PTHREADS__)
     std::vector<std::vector<DepthItem>> workerOutputs(workerCount);
-    std::vector<std::thread> workers;
-    workers.reserve(workerCount);
-
-    const std::size_t sliceSize =
-        (bucketItems.size() + workerCount - 1) / workerCount;
-
-    for (std::size_t workerIndex = 0; workerIndex < workerCount; ++workerIndex) {
-      const std::size_t start = workerIndex * sliceSize;
-      if (start >= bucketItems.size()) {
-        break;
-      }
-      const std::size_t end = std::min(bucketItems.size(), start + sliceSize);
-      workers.emplace_back(
-          [ctx, start, end, &workerOutputs, workerIndex]() {
-            processDepthRange(ctx, start, end, workerOutputs[workerIndex]);
-          });
-    }
-
-    for (std::thread& worker : workers) {
-      if (worker.joinable()) {
-        worker.join();
-      }
-    }
-
+    runWorkerJobs(workerCount, bucketItems.size(),
+                  [ctx, &workerOutputs](std::size_t start,
+                                        std::size_t end,
+                                        std::size_t workerIndex) {
+                    processDepthRange(
+                        ctx, start, end, workerOutputs[workerIndex]);
+                  });
     depthItems.clear();
     depthItems.reserve(bucketItems.size());
     for (auto& workerVector : workerOutputs) {
@@ -1830,9 +1521,6 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
         depthItems.push_back(std::move(item));
       }
     }
-#else
-    processDepthRange(ctx, 0, bucketItems.size(), depthItems);
-#endif
   }
 
   std::sort(depthItems.begin(), depthItems.end(),
@@ -3085,28 +2773,10 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
   if (prepareWorkerCount <= 1 || depthCount == 0) {
     prepareRange(0, depthCount);
   } else {
-#if defined(__EMSCRIPTEN_PTHREADS__)
-    std::vector<std::thread> workers;
-    workers.reserve(prepareWorkerCount);
-    const std::size_t sliceSize =
-        (depthCount + prepareWorkerCount - 1) / prepareWorkerCount;
-    for (std::size_t workerIndex = 0; workerIndex < prepareWorkerCount;
-         ++workerIndex) {
-      const std::size_t start = workerIndex * sliceSize;
-      if (start >= depthCount) {
-        break;
-      }
-      const std::size_t end = std::min(depthCount, start + sliceSize);
-      workers.emplace_back([&, start, end]() { prepareRange(start, end); });
-    }
-    for (std::thread& worker : workers) {
-      if (worker.joinable()) {
-        worker.join();
-      }
-    }
-#else
-    prepareRange(0, depthCount);
-#endif
+    runWorkerJobs(prepareWorkerCount, depthCount,
+                  [&](std::size_t start, std::size_t end, std::size_t) {
+                    prepareRange(start, end);
+                  });
   }
 
   double* writePtr = resultPtr + RESULT_HEADER_LENGTH;
@@ -3138,239 +2808,4 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
 
   return true;
 }
-
-static inline bool evaluateDistanceInterpolationsImpl(
-    std::size_t count,
-    const double* cursor,
-    double* write) {
-  const double* readCursor = cursor;
-  double* writeCursor = write;
-  for (std::size_t i = 0; i < count; ++i) {
-    const double duration = readCursor[0];
-    const double from = readCursor[1];
-    const double to = readCursor[2];
-    const double finalValue = readCursor[3];
-    const double startTimestamp = readCursor[4];
-    const double timestampRaw = readCursor[5];
-    const int32_t easingPresetId = static_cast<int32_t>(readCursor[6]);
-    const double easingParam0 = readCursor[7];
-    const double easingParam1 = readCursor[8];
-    const double easingParam2 = readCursor[9];
-    readCursor += DISTANCE_INTERPOLATION_ITEM_LENGTH;
-
-    const double timestamp = resolveTimestamp(timestampRaw);
-    const double effectiveStart =
-        resolveEffectiveStart(startTimestamp, timestamp);
-
-    double resultValue = finalValue;
-    bool completed = true;
-    if (duration > 0.0 && std::fabs(to - from) > DISTANCE_EPSILON) {
-      const double elapsed = timestamp - effectiveStart;
-      const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
-      const double eased = applyEasingPreset(
-          rawProgress, easingPresetId, easingParam0, easingParam1,
-          easingParam2);
-      const double interpolated = lerp(from, to, eased);
-      completed = rawProgress >= 1.0;
-      resultValue = completed ? finalValue : interpolated;
-    }
-
-    writeNumericInterpolationResult(
-        writeCursor, resultValue, completed, effectiveStart);
-    writeCursor += DISTANCE_INTERPOLATION_RESULT_LENGTH;
-  }
-  return true;
-}
-
-EMSCRIPTEN_KEEPALIVE bool evaluateDistanceInterpolations(const double* paramsPtr,
-                                                         double* resultPtr) {
-  if (paramsPtr == nullptr || resultPtr == nullptr) {
-    return false;
-  }
-  std::size_t count = 0;
-  if (!convertToSizeT(paramsPtr[0], count)) {
-    return false;
-  }
-  const double* cursor = paramsPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
-  double* write = resultPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
-  resultPtr[0] = static_cast<double>(count);
-  return evaluateDistanceInterpolationsImpl(count, cursor, write);
-}
-
-static inline bool evaluateDegreeInterpolationsImpl(
-    std::size_t count,
-    const double* cursor,
-    double* write) {
-  const double* readCursor = cursor;
-  double* writeCursor = write;
-  for (std::size_t i = 0; i < count; ++i) {
-    const double duration = readCursor[0];
-    const double from = readCursor[1];
-    const double to = readCursor[2];
-    const double finalValue = readCursor[3];
-    const double startTimestamp = readCursor[4];
-    const double timestampRaw = readCursor[5];
-    const int32_t easingPresetId = static_cast<int32_t>(readCursor[6]);
-    const double easingParam0 = readCursor[7];
-    const double easingParam1 = readCursor[8];
-    const double easingParam2 = readCursor[9];
-    readCursor += DEGREE_INTERPOLATION_ITEM_LENGTH;
-
-    const double timestamp = resolveTimestamp(timestampRaw);
-    const double effectiveStart =
-        resolveEffectiveStart(startTimestamp, timestamp);
-
-    double resultValue = finalValue;
-    bool completed = true;
-    if (duration > 0.0 && std::fabs(to - from) > DEGREE_EPSILON) {
-      const double elapsed = timestamp - effectiveStart;
-      const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
-      const double eased = applyEasingPreset(
-          rawProgress, easingPresetId, easingParam0, easingParam1,
-          easingParam2);
-      const double interpolated = lerp(from, to, eased);
-      completed = rawProgress >= 1.0;
-      resultValue = completed ? finalValue : interpolated;
-    }
-
-    writeNumericInterpolationResult(writeCursor,
-                                    normalizeAngleDeg(resultValue), completed,
-                                    effectiveStart);
-    writeCursor += DEGREE_INTERPOLATION_RESULT_LENGTH;
-  }
-  return true;
-}
-
-EMSCRIPTEN_KEEPALIVE bool evaluateDegreeInterpolations(const double* paramsPtr,
-                                                       double* resultPtr) {
-  if (paramsPtr == nullptr || resultPtr == nullptr) {
-    return false;
-  }
-  std::size_t count = 0;
-  if (!convertToSizeT(paramsPtr[0], count)) {
-    return false;
-  }
-  const double* cursor = paramsPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
-  double* write = resultPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
-  resultPtr[0] = static_cast<double>(count);
-  return evaluateDegreeInterpolationsImpl(count, cursor, write);
-}
-
-static inline bool evaluateSpriteInterpolationsImpl(
-    std::size_t count,
-    const double* cursor,
-    double* write) {
-  const double* readCursor = cursor;
-  double* writeCursor = write;
-  for (std::size_t i = 0; i < count; ++i) {
-    const double duration = readCursor[0];
-    const double fromLng = readCursor[1];
-    const double fromLat = readCursor[2];
-    const double fromZ = readCursor[3];
-    const double toLng = readCursor[4];
-    const double toLat = readCursor[5];
-    const double toZ = readCursor[6];
-    const bool hasZ = readCursor[7] != 0.0;
-    const double startTimestamp = readCursor[8];
-    const double timestampRaw = readCursor[9];
-    const int32_t easingPresetId = static_cast<int32_t>(readCursor[10]);
-    const double easingParam0 = readCursor[11];
-    const double easingParam1 = readCursor[12];
-    const double easingParam2 = readCursor[13];
-    readCursor += SPRITE_INTERPOLATION_ITEM_LENGTH;
-
-    const double timestamp = resolveTimestamp(timestampRaw);
-    const double effectiveStart =
-        resolveEffectiveStart(startTimestamp, timestamp);
-
-    double resultLng = toLng;
-    double resultLat = toLat;
-    double resultZ = toZ;
-    bool completed = true;
-
-    const bool requiresInterpolation =
-        duration > 0.0 &&
-        (std::fabs(toLng - fromLng) > DISTANCE_EPSILON ||
-         std::fabs(toLat - fromLat) > DISTANCE_EPSILON ||
-         (hasZ && std::fabs(toZ - fromZ) > DISTANCE_EPSILON));
-
-    if (requiresInterpolation) {
-      const double elapsed = timestamp - effectiveStart;
-      const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
-      const double eased = applyEasingPreset(
-          rawProgress, easingPresetId, easingParam0, easingParam1,
-          easingParam2);
-      completed = rawProgress >= 1.0;
-      if (!completed) {
-        resultLng = lerp(fromLng, toLng, eased);
-        resultLat = lerp(fromLat, toLat, eased);
-        if (hasZ) {
-          resultZ = lerp(fromZ, toZ, eased);
-        }
-      }
-    }
-
-    writeSpriteInterpolationResult(writeCursor, resultLng, resultLat, resultZ,
-                                   hasZ, completed, effectiveStart);
-    writeCursor += SPRITE_INTERPOLATION_RESULT_LENGTH;
-  }
-  return true;
-}
-
-EMSCRIPTEN_KEEPALIVE bool evaluateSpriteInterpolations(const double* paramsPtr,
-                                                       double* resultPtr) {
-  if (paramsPtr == nullptr || resultPtr == nullptr) {
-    return false;
-  }
-  std::size_t count = 0;
-  if (!convertToSizeT(paramsPtr[0], count)) {
-    return false;
-  }
-  const double* cursor = paramsPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
-  double* write = resultPtr + INTERPOLATION_BATCH_HEADER_LENGTH;
-  resultPtr[0] = static_cast<double>(count);
-  return evaluateSpriteInterpolationsImpl(count, cursor, write);
-}
-
-EMSCRIPTEN_KEEPALIVE bool processInterpolations(const double* paramsPtr,
-                                                double* resultPtr) {
-  if (paramsPtr == nullptr || resultPtr == nullptr) {
-    return false;
-  }
-  const auto* paramHeader = AsProcessInterpolationsHeader(paramsPtr);
-  auto* resultHeader = AsProcessInterpolationsHeader(resultPtr);
-  std::size_t distanceCount = 0;
-  std::size_t degreeCount = 0;
-  std::size_t spriteCount = 0;
-  if (!convertToSizeT(paramHeader->distanceCount, distanceCount) ||
-      !convertToSizeT(paramHeader->degreeCount, degreeCount) ||
-      !convertToSizeT(paramHeader->spriteCount, spriteCount)) {
-    return false;
-  }
-
-  const double* cursor = paramsPtr + PROCESS_INTERPOLATIONS_HEADER_LENGTH;
-  double* write = resultPtr + PROCESS_INTERPOLATIONS_HEADER_LENGTH;
-  resultHeader->distanceCount = static_cast<double>(distanceCount);
-  resultHeader->degreeCount = static_cast<double>(degreeCount);
-  resultHeader->spriteCount = static_cast<double>(spriteCount);
-
-  if (!evaluateDistanceInterpolationsImpl(distanceCount, cursor, write)) {
-    return false;
-  }
-  cursor += distanceCount * DISTANCE_INTERPOLATION_ITEM_LENGTH;
-  write += distanceCount * DISTANCE_INTERPOLATION_RESULT_LENGTH;
-
-  if (!evaluateDegreeInterpolationsImpl(degreeCount, cursor, write)) {
-    return false;
-  }
-  cursor += degreeCount * DEGREE_INTERPOLATION_ITEM_LENGTH;
-  write += degreeCount * DEGREE_INTERPOLATION_RESULT_LENGTH;
-
-  if (!evaluateSpriteInterpolationsImpl(spriteCount, cursor, write)) {
-    return false;
-  }
-
-  return true;
-}
-
 } // extern "C"

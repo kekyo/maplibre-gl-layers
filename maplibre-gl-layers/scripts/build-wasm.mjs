@@ -22,6 +22,7 @@ const wasmConfigFile = resolve(wasmOutputDir, 'config.json');
 const sourceFiles = [
   resolve(wasmSourceDir, 'projection_host.cpp'),
   resolve(wasmSourceDir, 'calculation_host.cpp'),
+  resolve(wasmSourceDir, 'interpolation.cpp'),
 ];
 const parsePositiveInteger = (value, fallback) => {
   if (value === undefined) {
