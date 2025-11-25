@@ -31,46 +31,7 @@
 #include "projection_host.h"
 #include "calculation_host_layouts.h"
 #include "calculation_host_common.h"
-
-#if defined(__EMSCRIPTEN_PTHREADS__)
-static std::size_t g_threadPoolLimit = 0;
-
-extern "C" {
-EMSCRIPTEN_KEEPALIVE void setThreadPoolSize(double value) {
-  if (std::isnan(value) || value <= 0.0) {
-    g_threadPoolLimit = 0;
-    return;
-  }
-  const double floored = std::floor(value + 0.5);
-  if (!std::isfinite(floored)) {
-    return;
-  }
-  const auto converted = static_cast<std::size_t>(floored);
-  g_threadPoolLimit = converted > 0 ? converted : 0;
-}
-}
-
-static inline std::size_t clampToAvailableThreads(std::size_t requested) {
-  if (g_threadPoolLimit > 0) {
-    return std::min<std::size_t>(requested, g_threadPoolLimit);
-  }
-  unsigned int hw = std::thread::hardware_concurrency();
-  if (hw == 0u) {
-    hw = 4u;
-  }
-  return std::min<std::size_t>(requested, static_cast<std::size_t>(hw));
-}
-#else
-extern "C" {
-EMSCRIPTEN_KEEPALIVE void setThreadPoolSize(double value) {
-  (void)value;
-}
-}
-
-static inline std::size_t clampToAvailableThreads(std::size_t requested) {
-  return requested;
-}
-#endif
+#include "worker_jobs.h"
 
 constexpr std::size_t SURFACE_CLIP_CORNER_COUNT = 4;
 
@@ -1344,29 +1305,12 @@ struct DepthWorkerContext {
   bool enableSurfaceBias = false;
 };
 
-#if defined(__EMSCRIPTEN_PTHREADS__)
 constexpr std::size_t DEPTH_PARALLEL_MIN_ITEMS = 512;
 constexpr std::size_t DEPTH_PARALLEL_SLICE = 256;
-#endif
 
 static inline std::size_t determineDepthWorkerCount(std::size_t totalItems) {
-#if defined(__EMSCRIPTEN_PTHREADS__)
-  if (totalItems < DEPTH_PARALLEL_MIN_ITEMS) {
-    return 1;
-  }
-  unsigned int hw = std::thread::hardware_concurrency();
-  if (hw == 0u) {
-    hw = 4u;
-  }
-  const std::size_t maxWorkers = static_cast<std::size_t>(hw);
-  const std::size_t bySize =
-      std::max<std::size_t>(1, totalItems / DEPTH_PARALLEL_SLICE);
-  return clampToAvailableThreads(
-      std::min<std::size_t>(maxWorkers, bySize));
-#else
-  (void)totalItems;
-  return 1;
-#endif
+  return determineWorkerCount(
+      totalItems, DEPTH_PARALLEL_MIN_ITEMS, DEPTH_PARALLEL_SLICE);
 }
 
 static void processDepthRange(const DepthWorkerContext& ctx,
@@ -1531,29 +1475,12 @@ static void processDepthRange(const DepthWorkerContext& ctx,
   }
 }
 
-#if defined(__EMSCRIPTEN_PTHREADS__)
 constexpr std::size_t PREPARE_PARALLEL_MIN_ITEMS = 256;
 constexpr std::size_t PREPARE_PARALLEL_SLICE = 128;
-#endif
 
 static inline std::size_t determinePrepareWorkerCount(std::size_t totalItems) {
-#if defined(__EMSCRIPTEN_PTHREADS__)
-  if (totalItems < PREPARE_PARALLEL_MIN_ITEMS) {
-    return 1;
-  }
-  unsigned int hw = std::thread::hardware_concurrency();
-  if (hw == 0u) {
-    hw = 4u;
-  }
-  const std::size_t maxWorkers = static_cast<std::size_t>(hw);
-  const std::size_t bySize =
-      std::max<std::size_t>(1, totalItems / PREPARE_PARALLEL_SLICE);
-  return clampToAvailableThreads(
-      std::min<std::size_t>(maxWorkers, bySize));
-#else
-  (void)totalItems;
-  return 1;
-#endif
+  return determineWorkerCount(
+      totalItems, PREPARE_PARALLEL_MIN_ITEMS, PREPARE_PARALLEL_SLICE);
 }
 
 static DepthCollectionResult collectDepthSortedItemsInternal(
@@ -1576,35 +1503,17 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
   const std::size_t workerCount =
       determineDepthWorkerCount(bucketItems.size());
 
-  if (workerCount <= 1) {
+  if (workerCount <= 1 || bucketItems.empty()) {
     processDepthRange(ctx, 0, bucketItems.size(), depthItems);
   } else {
-#if defined(__EMSCRIPTEN_PTHREADS__)
     std::vector<std::vector<DepthItem>> workerOutputs(workerCount);
-    std::vector<std::thread> workers;
-    workers.reserve(workerCount);
-
-    const std::size_t sliceSize =
-        (bucketItems.size() + workerCount - 1) / workerCount;
-
-    for (std::size_t workerIndex = 0; workerIndex < workerCount; ++workerIndex) {
-      const std::size_t start = workerIndex * sliceSize;
-      if (start >= bucketItems.size()) {
-        break;
-      }
-      const std::size_t end = std::min(bucketItems.size(), start + sliceSize);
-      workers.emplace_back(
-          [ctx, start, end, &workerOutputs, workerIndex]() {
-            processDepthRange(ctx, start, end, workerOutputs[workerIndex]);
-          });
-    }
-
-    for (std::thread& worker : workers) {
-      if (worker.joinable()) {
-        worker.join();
-      }
-    }
-
+    runWorkerJobs(workerCount, bucketItems.size(),
+                  [ctx, &workerOutputs](std::size_t start,
+                                        std::size_t end,
+                                        std::size_t workerIndex) {
+                    processDepthRange(
+                        ctx, start, end, workerOutputs[workerIndex]);
+                  });
     depthItems.clear();
     depthItems.reserve(bucketItems.size());
     for (auto& workerVector : workerOutputs) {
@@ -1612,9 +1521,6 @@ static DepthCollectionResult collectDepthSortedItemsInternal(
         depthItems.push_back(std::move(item));
       }
     }
-#else
-    processDepthRange(ctx, 0, bucketItems.size(), depthItems);
-#endif
   }
 
   std::sort(depthItems.begin(), depthItems.end(),
@@ -2867,28 +2773,10 @@ prepareDrawSpriteImages(const double* paramsPtr, double* resultPtr) {
   if (prepareWorkerCount <= 1 || depthCount == 0) {
     prepareRange(0, depthCount);
   } else {
-#if defined(__EMSCRIPTEN_PTHREADS__)
-    std::vector<std::thread> workers;
-    workers.reserve(prepareWorkerCount);
-    const std::size_t sliceSize =
-        (depthCount + prepareWorkerCount - 1) / prepareWorkerCount;
-    for (std::size_t workerIndex = 0; workerIndex < prepareWorkerCount;
-         ++workerIndex) {
-      const std::size_t start = workerIndex * sliceSize;
-      if (start >= depthCount) {
-        break;
-      }
-      const std::size_t end = std::min(depthCount, start + sliceSize);
-      workers.emplace_back([&, start, end]() { prepareRange(start, end); });
-    }
-    for (std::thread& worker : workers) {
-      if (worker.joinable()) {
-        worker.join();
-      }
-    }
-#else
-    prepareRange(0, depthCount);
-#endif
+    runWorkerJobs(prepareWorkerCount, depthCount,
+                  [&](std::size_t start, std::size_t end, std::size_t) {
+                    prepareRange(start, end);
+                  });
   }
 
   double* writePtr = resultPtr + RESULT_HEADER_LENGTH;
