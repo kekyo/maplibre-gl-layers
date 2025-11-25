@@ -190,6 +190,7 @@ export interface DistanceInterpolationWorkItem
   extends SpriteInterpolationState<number> {
   readonly descriptor: SpriteInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
+  readonly channel: 'offsetMeters' | 'opacity';
 }
 
 export const collectDistanceInterpolationWorkItems = (
@@ -207,6 +208,7 @@ export const collectDistanceInterpolationWorkItems = (
       ...offsetMetersState,
       descriptor: DISTANCE_INTERPOLATION_CHANNELS.offsetMeters,
       image,
+      channel: 'offsetMeters',
     });
   }
 
@@ -217,6 +219,7 @@ export const collectDistanceInterpolationWorkItems = (
       ...opacityState,
       descriptor: DISTANCE_INTERPOLATION_CHANNELS.opacity,
       image,
+      channel: 'opacity',
     });
   }
 };

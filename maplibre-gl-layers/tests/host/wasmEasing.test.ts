@@ -48,7 +48,7 @@ describe('wasm easing presets', () => {
         {
           distance: [state],
           degree: [],
-          sprite: [],
+          location: [],
         },
         500
       );
@@ -77,7 +77,7 @@ describe('wasm easing presets', () => {
         {
           distance: [state],
           degree: [],
-          sprite: [],
+          location: [],
         },
         500
       );

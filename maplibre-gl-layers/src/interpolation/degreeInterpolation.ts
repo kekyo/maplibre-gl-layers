@@ -253,6 +253,7 @@ export interface DegreeInterpolationWorkItem
   extends SpriteInterpolationState<number> {
   readonly descriptor: SpriteInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
+  readonly channel: 'rotation' | 'offsetDeg';
 }
 
 export const collectDegreeInterpolationWorkItems = (
@@ -266,6 +267,7 @@ export const collectDegreeInterpolationWorkItems = (
       ...rotationState,
       descriptor: DEGREE_INTERPOLATION_CHANNELS.rotation,
       image,
+      channel: 'rotation',
     });
   }
 
@@ -276,6 +278,7 @@ export const collectDegreeInterpolationWorkItems = (
       ...offsetState,
       descriptor: DEGREE_INTERPOLATION_CHANNELS.offsetDeg,
       image,
+      channel: 'offsetDeg',
     });
   }
 };

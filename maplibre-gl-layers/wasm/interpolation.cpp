@@ -16,6 +16,16 @@
 constexpr double DISTANCE_EPSILON = 1e-6;
 constexpr double DEGREE_EPSILON = 1e-6;
 
+enum class DistanceInterpolationChannel : int32_t {
+  OffsetMeters = 0,
+  Opacity = 1,
+};
+
+enum class DegreeInterpolationChannel : int32_t {
+  Rotation = 0,
+  OffsetDeg = 1,
+};
+
 static inline double clamp01(double value) {
   if (!std::isfinite(value)) {
     return 1.0;
@@ -178,13 +188,28 @@ static inline double lerp(double from, double to, double ratio) {
   return from + (to - from) * ratio;
 }
 
-static inline void writeNumericInterpolationResult(double* target,
-                                                   double value,
-                                                   bool completed,
-                                                   double effectiveStart) {
+static inline double clampOpacity(double value) {
+  if (!std::isfinite(value)) {
+    return 0.0;
+  }
+  if (value <= 0.0) {
+    return 0.0;
+  }
+  if (value >= 1.0) {
+    return 1.0;
+  }
+  return value;
+}
+
+static inline void writeNumericApplyInterpolationResult(double* target,
+                                                        double value,
+                                                        double finalValue,
+                                                        bool completed,
+                                                        double effectiveStart) {
   target[0] = value;
-  target[1] = completed ? 1.0 : 0.0;
-  target[2] = effectiveStart;
+  target[1] = finalValue;
+  target[2] = completed ? 1.0 : 0.0;
+  target[3] = effectiveStart;
 }
 
 static inline void writeSpriteInterpolationResult(double* target,
@@ -211,16 +236,17 @@ static inline bool evaluateDistanceInterpolationsImpl(
   const double* readCursor = cursor;
   double* writeCursor = write;
   for (std::size_t i = 0; i < count; ++i) {
-    const double duration = readCursor[0];
-    const double from = readCursor[1];
-    const double to = readCursor[2];
-    const double finalValue = readCursor[3];
-    const double startTimestamp = readCursor[4];
-    const double timestampRaw = readCursor[5];
-    const int32_t easingPresetId = static_cast<int32_t>(readCursor[6]);
-    const double easingParam0 = readCursor[7];
-    const double easingParam1 = readCursor[8];
-    const double easingParam2 = readCursor[9];
+    const int32_t channel = static_cast<int32_t>(readCursor[0]);
+    const double duration = readCursor[1];
+    const double from = readCursor[2];
+    const double pathTarget = readCursor[3];
+    const double finalValue = readCursor[4];
+    const double startTimestamp = readCursor[5];
+    const double timestampRaw = readCursor[6];
+    const int32_t easingPresetId = static_cast<int32_t>(readCursor[7]);
+    const double easingParam0 = readCursor[8];
+    const double easingParam1 = readCursor[9];
+    const double easingParam2 = readCursor[10];
     readCursor += DISTANCE_INTERPOLATION_ITEM_LENGTH;
 
     const double timestamp = resolveTimestamp(timestampRaw);
@@ -229,19 +255,27 @@ static inline bool evaluateDistanceInterpolationsImpl(
 
     double resultValue = finalValue;
     bool completed = true;
-    if (duration > 0.0 && std::fabs(to - from) > DISTANCE_EPSILON) {
+    if (duration > 0.0 && std::fabs(pathTarget - from) > DISTANCE_EPSILON) {
       const double elapsed = timestamp - effectiveStart;
       const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
       const double eased = applyEasingPreset(
           rawProgress, easingPresetId, easingParam0, easingParam1,
           easingParam2);
-      const double interpolated = lerp(from, to, eased);
+      const double interpolated = lerp(from, pathTarget, eased);
       completed = rawProgress >= 1.0;
       resultValue = completed ? finalValue : interpolated;
     }
 
-    writeNumericInterpolationResult(
-        writeCursor, resultValue, completed, effectiveStart);
+    const bool isOpacity =
+        channel == static_cast<int32_t>(DistanceInterpolationChannel::Opacity);
+    const double normalizedValue =
+        isOpacity ? clampOpacity(resultValue) : resultValue;
+    const double normalizedFinal =
+        isOpacity ? clampOpacity(finalValue) : finalValue;
+
+    writeNumericApplyInterpolationResult(writeCursor, normalizedValue,
+                                         normalizedFinal, completed,
+                                         effectiveStart);
     writeCursor += DISTANCE_INTERPOLATION_RESULT_LENGTH;
   }
   return true;
@@ -269,16 +303,17 @@ static inline bool evaluateDegreeInterpolationsImpl(
   const double* readCursor = cursor;
   double* writeCursor = write;
   for (std::size_t i = 0; i < count; ++i) {
-    const double duration = readCursor[0];
-    const double from = readCursor[1];
-    const double to = readCursor[2];
-    const double finalValue = readCursor[3];
-    const double startTimestamp = readCursor[4];
-    const double timestampRaw = readCursor[5];
-    const int32_t easingPresetId = static_cast<int32_t>(readCursor[6]);
-    const double easingParam0 = readCursor[7];
-    const double easingParam1 = readCursor[8];
-    const double easingParam2 = readCursor[9];
+    const int32_t channel = static_cast<int32_t>(readCursor[0]);
+    const double duration = readCursor[1];
+    const double from = readCursor[2];
+    const double pathTarget = readCursor[3];
+    const double finalValue = readCursor[4];
+    const double startTimestamp = readCursor[5];
+    const double timestampRaw = readCursor[6];
+    const int32_t easingPresetId = static_cast<int32_t>(readCursor[7]);
+    const double easingParam0 = readCursor[8];
+    const double easingParam1 = readCursor[9];
+    const double easingParam2 = readCursor[10];
     readCursor += DEGREE_INTERPOLATION_ITEM_LENGTH;
 
     const double timestamp = resolveTimestamp(timestampRaw);
@@ -287,20 +322,27 @@ static inline bool evaluateDegreeInterpolationsImpl(
 
     double resultValue = finalValue;
     bool completed = true;
-    if (duration > 0.0 && std::fabs(to - from) > DEGREE_EPSILON) {
+    if (duration > 0.0 && std::fabs(pathTarget - from) > DEGREE_EPSILON) {
       const double elapsed = timestamp - effectiveStart;
       const double rawProgress = duration <= 0.0 ? 1.0 : elapsed / duration;
       const double eased = applyEasingPreset(
           rawProgress, easingPresetId, easingParam0, easingParam1,
           easingParam2);
-      const double interpolated = lerp(from, to, eased);
+      const double interpolated = lerp(from, pathTarget, eased);
       completed = rawProgress >= 1.0;
       resultValue = completed ? finalValue : interpolated;
     }
 
-    writeNumericInterpolationResult(writeCursor,
-                                    normalizeAngleDeg(resultValue), completed,
-                                    effectiveStart);
+    const bool normalize =
+        channel == static_cast<int32_t>(DegreeInterpolationChannel::Rotation);
+    const double normalizedValue =
+        normalize ? normalizeAngleDeg(resultValue) : resultValue;
+    const double normalizedFinal =
+        normalize ? normalizeAngleDeg(finalValue) : finalValue;
+
+    writeNumericApplyInterpolationResult(writeCursor, normalizedValue,
+                                         normalizedFinal, completed,
+                                         effectiveStart);
     writeCursor += DEGREE_INTERPOLATION_RESULT_LENGTH;
   }
   return true;
