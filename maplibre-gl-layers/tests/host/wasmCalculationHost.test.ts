@@ -622,7 +622,7 @@ describe('converToDrawImageParams', () => {
   });
 });
 
-describe('processInterpolationsViaWasm', () => {
+describe('internalProcessInterpolationsCore', () => {
   it('encodes requests and decodes wasm responses', () => {
     const wasm = new MockWasmHost();
     const linear = (value: number): number => value;
@@ -672,11 +672,12 @@ describe('processInterpolationsViaWasm', () => {
       ],
     });
 
-    const result = __wasmCalculationTestInternals.processInterpolationsViaWasm(
-      wasm,
-      requests,
-      50
-    );
+    const result =
+      __wasmCalculationTestInternals.internalProcessInterpolationsCore(
+        wasm,
+        requests,
+        50
+      );
 
     expect(result.distance).toHaveLength(1);
     expect(result.distance[0]?.value).toBe(3);

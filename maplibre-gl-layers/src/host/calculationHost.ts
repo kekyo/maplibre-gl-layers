@@ -1621,7 +1621,7 @@ const evaluateDegreeInterpolationsBatch = (
 export interface ProcessInterpolationPresetRequests {
   readonly distance: readonly SpriteInterpolationState<number>[];
   readonly degree: readonly SpriteInterpolationState<number>[];
-  readonly sprite: readonly SpriteInterpolationState<SpriteLocation>[];
+  readonly location: readonly SpriteInterpolationState<SpriteLocation>[];
 }
 
 export interface ProcessInterpolationsEvaluationHandlers {
@@ -1795,7 +1795,7 @@ export const processInterpolationsInternal = <TTag>(
       {
         distance: distanceInterpolationWorkItems,
         degree: degreeInterpolationWorkItems,
-        sprite: locationInterpolationWorkItems,
+        location: locationInterpolationWorkItems,
       },
       timestamp
     );
@@ -1899,7 +1899,7 @@ export const processOpacityInterpolationsAfterPreparation = <TTag>(
       {
         distance: opacityWorkItems,
         degree: [],
-        sprite: [],
+        location: [],
       },
       timestamp
     );

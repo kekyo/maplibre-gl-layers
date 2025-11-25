@@ -321,23 +321,23 @@ const decodeSpriteInterpolationResult = (
 interface WasmProcessInterpolationResults {
   readonly distance: SpriteInterpolationEvaluationResult<number>[];
   readonly degree: SpriteInterpolationEvaluationResult<number>[];
-  readonly sprite: SpriteInterpolationEvaluationResult<SpriteLocation>[];
+  readonly location: SpriteInterpolationEvaluationResult<SpriteLocation>[];
 }
 
-const processInterpolationsViaWasm = (
+const internalProcessInterpolationsCore = (
   wasm: WasmHost,
   requests: ProcessInterpolationPresetRequests,
   timestamp: number
 ): WasmProcessInterpolationResults => {
   const distanceCount = requests.distance.length;
   const degreeCount = requests.degree.length;
-  const spriteCount = requests.sprite.length;
+  const spriteCount = requests.location.length;
 
   if (distanceCount === 0 && degreeCount === 0 && spriteCount === 0) {
     return {
       distance: [],
       degree: [],
-      sprite: [],
+      location: [],
     };
   }
 
@@ -381,7 +381,7 @@ const processInterpolationsViaWasm = (
         timestamp
       );
     }
-    for (const request of requests.sprite) {
+    for (const request of requests.location) {
       cursor = encodeSpriteInterpolationRequest(
         paramsBuffer,
         cursor,
@@ -439,7 +439,7 @@ const processInterpolationsViaWasm = (
     return {
       distance: distanceResults,
       degree: degreeResults,
-      sprite: spriteResults,
+      location: spriteResults,
     };
   } finally {
     resultHolder.release();
@@ -447,18 +447,21 @@ const processInterpolationsViaWasm = (
   }
 };
 
-const processInterpolationsWithWasm = <TTag>(
-  wasm: WasmHost,
-  params: RenderInterpolationParams<TTag>
-): RenderInterpolationResult => {
-  const { sprites, timestamp } = params;
-  if (!sprites.length) {
-    return {
-      handled: true,
-      hasActiveInterpolation: false,
-    };
-  }
+interface CollectedInterpolationWorkItems<TTag> {
+  readonly distance: readonly DistanceInterpolationWorkItem[];
+  readonly degree: readonly DegreeInterpolationWorkItem[];
+  readonly location: readonly LocationInterpolationWorkItem<TTag>[];
+  readonly processedSprites: ReadonlyArray<{
+    sprite: InternalSpriteCurrentState<TTag>;
+    touchedImages: InternalSpriteImageState[];
+  }>;
+  readonly hasActiveInterpolation: boolean;
+}
 
+const collectInterpolationWorkItems = <TTag>(
+  sprites: readonly InternalSpriteCurrentState<TTag>[],
+  timestamp: number
+): CollectedInterpolationWorkItems<TTag> => {
   const distanceInterpolationWorkItems: DistanceInterpolationWorkItem[] = [];
   const degreeInterpolationWorkItems: DegreeInterpolationWorkItem[] = [];
   const locationInterpolationWorkItems: LocationInterpolationWorkItem<TTag>[] =
@@ -563,38 +566,61 @@ const processInterpolationsWithWasm = <TTag>(
     processedSprites.push({ sprite, touchedImages });
   }
 
-  const wasmResults = processInterpolationsViaWasm(
-    wasm,
-    {
-      distance: distanceInterpolationWorkItems,
-      degree: degreeInterpolationWorkItems,
-      sprite: locationInterpolationWorkItems,
-    },
-    timestamp
+  return {
+    distance: distanceInterpolationWorkItems,
+    degree: degreeInterpolationWorkItems,
+    location: locationInterpolationWorkItems,
+    processedSprites,
+    hasActiveInterpolation,
+  };
+};
+
+const internalProcessInterpolations = <TTag>(
+  wasm: WasmHost,
+  params: RenderInterpolationParams<TTag>
+): RenderInterpolationResult => {
+  if (!params.sprites.length) {
+    return {
+      handled: true,
+      hasActiveInterpolation: false,
+    };
+  }
+
+  const collectedItems = collectInterpolationWorkItems(
+    params.sprites,
+    params.timestamp
   );
 
+  const wasmResults = internalProcessInterpolationsCore(
+    wasm,
+    collectedItems,
+    params.timestamp
+  );
+
+  let hasActiveInterpolation = collectedItems.hasActiveInterpolation;
+
   const activeDistanceInterpolation = applyDistanceInterpolationEvaluations(
-    distanceInterpolationWorkItems,
+    collectedItems.distance,
     wasmResults.distance,
-    timestamp
+    params.timestamp
   );
   hasActiveInterpolation ||= activeDistanceInterpolation;
 
   const activeDegreeInterpolation = applyDegreeInterpolationEvaluations(
-    degreeInterpolationWorkItems,
+    collectedItems.degree,
     wasmResults.degree,
-    timestamp
+    params.timestamp
   );
   hasActiveInterpolation ||= activeDegreeInterpolation;
 
   const activeLocationInterpolation = applyLocationInterpolationEvaluations(
-    locationInterpolationWorkItems,
-    wasmResults.sprite,
-    timestamp
+    collectedItems.location,
+    wasmResults.location,
+    params.timestamp
   );
   hasActiveInterpolation ||= activeLocationInterpolation;
 
-  for (const entry of processedSprites) {
+  for (const entry of collectedItems.processedSprites) {
     for (const image of entry.touchedImages) {
       const dirty = hasActiveImageInterpolations(image);
       image.interpolationDirty ||= dirty;
@@ -608,13 +634,15 @@ const processInterpolationsWithWasm = <TTag>(
   };
 };
 
-type CalculateSurfaceDepthKeyOptions = {
+//////////////////////////////////////////////////////////////////////////////////////
+
+interface CalculateSurfaceDepthKeyOptions {
   readonly indices?: readonly number[];
   readonly bias?: {
     readonly ndc: number;
     readonly minClipZEpsilon?: number;
   };
-};
+}
 
 /**
  * Create `calculateSurfaceDepthKey` delegator.
@@ -1745,7 +1773,7 @@ export const createWasmCalculationHost = <TTag>(
       runWithFallback(
         () => {
           let interpolationResult = params.interpolationParams
-            ? processInterpolationsWithWasm(wasm, params.interpolationParams)
+            ? internalProcessInterpolations(wasm, params.interpolationParams)
             : DEFAULT_RENDER_INTERPOLATION_RESULT;
           const preparedItems = params.prepareParams
             ? prepareDrawSpriteImagesInternal<TTag>(
@@ -1793,6 +1821,6 @@ export const __wasmCalculationTestInternals = {
   convertToWasmProjectionState,
   converToPreparedDrawImageParams,
   prepareDrawSpriteImagesInternal,
-  processInterpolationsViaWasm,
-  processInterpolationsWithWasm,
+  internalProcessInterpolationsCore,
+  internalProcessInterpolations,
 };
