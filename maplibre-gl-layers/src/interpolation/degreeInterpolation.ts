@@ -249,8 +249,7 @@ const updateDegreeInterpolationState = (
   descriptor.resolveInterpolation(image).state = nextState;
 };
 
-export interface DegreeInterpolationWorkItem
-  extends SpriteInterpolationState<number> {
+export interface DegreeInterpolationWorkItem extends SpriteInterpolationState<number> {
   readonly descriptor: SpriteInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
   readonly channel: 'rotation' | 'offsetDeg';

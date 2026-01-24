@@ -144,10 +144,10 @@ const determineSvgRasterDimensions = (
 
   const hasValidViewBox = Boolean(
     parsed?.hasViewBox &&
-      parsed.viewBoxWidth !== undefined &&
-      parsed.viewBoxHeight !== undefined &&
-      parsed.viewBoxWidth > 0 &&
-      parsed.viewBoxHeight > 0
+    parsed.viewBoxWidth !== undefined &&
+    parsed.viewBoxHeight !== undefined &&
+    parsed.viewBoxWidth > 0 &&
+    parsed.viewBoxHeight > 0
   );
   const viewBoxAspect = hasValidViewBox
     ? (parsed!.viewBoxWidth as number) / (parsed!.viewBoxHeight as number)

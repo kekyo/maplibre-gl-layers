@@ -397,8 +397,9 @@ interface RawProjectionWasmExports {
 /**
  * Internal interface of BufferHolder.
  */
-interface InternalBufferHolder<TArray extends TypedArrayBufferView<TArray>>
-  extends BufferHolder<TArray> {
+interface InternalBufferHolder<
+  TArray extends TypedArrayBufferView<TArray>,
+> extends BufferHolder<TArray> {
   /** Raw pointer */
   __ptr: Pointer;
   /** Buffer view (ex: Float64Array) */

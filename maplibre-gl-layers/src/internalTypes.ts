@@ -234,8 +234,9 @@ export interface MutableSpriteInterpolation<TValue> {
  * Mutable counterpart to {@link SpriteInterpolatedValues}, used internally so SpriteLayer
  * can reuse object references while still exposing readonly snapshots publicly.
  */
-export interface MutableSpriteInterpolatedValues<TValue>
-  extends SpriteInterpolatedValues<TValue> {
+export interface MutableSpriteInterpolatedValues<
+  TValue,
+> extends SpriteInterpolatedValues<TValue> {
   current: TValue;
   from: TValue | undefined;
   to: TValue | undefined;
@@ -243,8 +244,7 @@ export interface MutableSpriteInterpolatedValues<TValue>
   interpolation: MutableSpriteInterpolation<TValue>;
 }
 
-export interface MutableSpriteImageInterpolatedOffset
-  extends SpriteImageInterpolatedOffset {
+export interface MutableSpriteImageInterpolatedOffset extends SpriteImageInterpolatedOffset {
   offsetMeters: MutableSpriteInterpolatedValues<number>;
   offsetDeg: MutableSpriteInterpolatedValues<number>;
 }
@@ -318,15 +318,15 @@ export interface PrepareDrawSpriteImageParamsBase {
   readonly clipContext: Readonly<ClipContext> | undefined;
 }
 
-export interface PrepareDrawSpriteImageParamsBefore<TTag>
-  extends PrepareDrawSpriteImageParamsBase {
+export interface PrepareDrawSpriteImageParamsBefore<
+  TTag,
+> extends PrepareDrawSpriteImageParamsBase {
   readonly bucket: readonly Readonly<RenderTargetEntryLike<TTag>>[];
   readonly bucketBuffers: Readonly<RenderTargetBucketBuffers>;
   readonly resolvedScaling: ResolvedSpriteScalingOptions;
 }
 
-export interface PrepareDrawSpriteImageParamsAfter
-  extends PrepareDrawSpriteImageParamsBase {
+export interface PrepareDrawSpriteImageParamsAfter extends PrepareDrawSpriteImageParamsBase {
   readonly identityScaleX: number;
   readonly identityScaleY: number;
   readonly identityOffsetX: number;
@@ -338,7 +338,8 @@ export interface PrepareDrawSpriteImageParamsAfter
 }
 
 export interface PrepareDrawSpriteImageParams<TTag>
-  extends PrepareDrawSpriteImageParamsBefore<TTag>,
+  extends
+    PrepareDrawSpriteImageParamsBefore<TTag>,
     PrepareDrawSpriteImageParamsAfter {}
 
 /**
@@ -436,8 +437,7 @@ export interface RenderCalculationHost<TTag> extends Releasable {
  * Corner model describing world displacements and resulting geographic coordinates for shader validation.
  */
 export interface SurfaceShaderCornerState
-  extends SpriteLocation,
-    SurfaceCorner {}
+  extends SpriteLocation, SurfaceCorner {}
 
 /**
  * Aggregated inputs required to reproduce surface geometry on the GPU.
@@ -629,8 +629,7 @@ export type Canvas2DContext =
 export type Canvas2DSource = HTMLCanvasElement | OffscreenCanvas;
 
 /** Line definition resolved for rendering. */
-export interface ResolvedSpriteImageLineAttribute
-  extends SpriteImageLineAttributeState {
+export interface ResolvedSpriteImageLineAttribute extends SpriteImageLineAttributeState {
   readonly rgba: RgbaColor;
 }
 
@@ -677,8 +676,9 @@ export interface InternalSpriteImageState extends SpriteImageState {
 /**
  * Current sprite mutable state view tracked internally by the layer.
  */
-export interface InternalSpriteCurrentState<TTag>
-  extends SpriteCurrentState<TTag> {
+export interface InternalSpriteCurrentState<
+  TTag,
+> extends SpriteCurrentState<TTag> {
   spriteId: string;
   handle: IdHandle;
   isEnabled: boolean;

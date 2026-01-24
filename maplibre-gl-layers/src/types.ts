@@ -286,8 +286,7 @@ export interface SpriteImageDefinitionUpdate {
 /**
  * Helper for bulk initializing sprite images.
  */
-export interface SpriteImageDefinitionInitEntry
-  extends SpriteImageDefinitionInit {
+export interface SpriteImageDefinitionInitEntry extends SpriteImageDefinitionInit {
   /** Sub-layer identifier. */
   subLayer: number;
   /**
