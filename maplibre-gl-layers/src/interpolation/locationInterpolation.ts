@@ -161,8 +161,9 @@ export const evaluateLocationInterpolationsBatch = (
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-export interface LocationInterpolationWorkItem<TTag>
-  extends SpriteInterpolationState<SpriteLocation> {
+export interface LocationInterpolationWorkItem<
+  TTag,
+> extends SpriteInterpolationState<SpriteLocation> {
   readonly sprite: InternalSpriteCurrentState<TTag>;
 }
 

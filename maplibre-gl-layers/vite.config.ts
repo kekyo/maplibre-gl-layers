@@ -69,7 +69,7 @@ const copyWasmArtifactsPlugin = (): Plugin => ({
 export default defineConfig({
   plugins: [
     dts({
-      insertTypesEntry: true,
+      rollupTypes: true,
     }),
     prettierMax(),
     screwUp(),

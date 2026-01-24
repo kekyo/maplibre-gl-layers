@@ -186,8 +186,7 @@ const updateDistanceInterpolationState = (
   descriptor.resolveInterpolation(image).state = nextState;
 };
 
-export interface DistanceInterpolationWorkItem
-  extends SpriteInterpolationState<number> {
+export interface DistanceInterpolationWorkItem extends SpriteInterpolationState<number> {
   readonly descriptor: SpriteInterpolationChannelDescriptor;
   readonly image: InternalSpriteImageState;
   readonly channel: 'offsetMeters' | 'opacity';
