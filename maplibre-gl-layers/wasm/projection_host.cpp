@@ -11,6 +11,16 @@ extern "C" {
 
 //////////////////////////////////////////////////////////////////////////////////////
 
+EMSCRIPTEN_KEEPALIVE int getConfiguredMaxThreadPoolSize() {
+#ifdef MAX_THREAD_POOL_SIZE
+  return MAX_THREAD_POOL_SIZE;  // Configured thread pool size (in vite.config.ts)
+#else
+  return 1;
+#endif
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
 EMSCRIPTEN_KEEPALIVE bool fromLngLat(double lng,
                                      double lat,
                                      double altitude,

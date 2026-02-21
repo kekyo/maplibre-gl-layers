@@ -6,17 +6,13 @@
 
 import type { Releasable } from '../internalTypes';
 import type { SpriteLayerCalculationVariant } from '../types';
-import wasmConfig from '../wasm/config.json' assert { type: 'json' };
 
 //////////////////////////////////////////////////////////////////////////////////////
 
 const BUFFER_POOL_ENTRY_TTL_MS = 5_000;
 const BUFFER_POOL_SWEEP_INTERVAL_MS = 3_000;
 const BUFFER_POOL_MAX_REUSE_RATIO = 2;
-const CONFIGURED_PTHREAD_POOL_SIZE =
-  typeof wasmConfig?.pthreadPoolSize === 'number'
-    ? Math.max(0, Math.trunc(wasmConfig.pthreadPoolSize))
-    : 0;
+const MIN_PTHREAD_POOL_SIZE = 2;
 
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -366,6 +362,8 @@ const loadWasmBinary = async (
 interface RawProjectionWasmExports {
   // Runtime related functions
   readonly memory?: WebAssembly.Memory;
+  readonly _getConfiguredMaxThreadPoolSize?: () => number;
+  readonly getConfiguredMaxThreadPoolSize?: () => number;
   readonly _malloc?: (size: number) => number;
   readonly malloc?: (size: number) => number;
   readonly _free?: (ptr: number) => void;
@@ -420,19 +418,21 @@ interface InternalBufferHolder<
   release: () => void;
 }
 
-const resolveThreadPoolLimit = (): number => {
+const resolveThreadPoolLimit = (
+  configuredMaxThreadPoolSize: number
+): number => {
   const hardware =
     typeof navigator !== 'undefined' &&
     typeof navigator.hardwareConcurrency === 'number'
       ? navigator.hardwareConcurrency
       : 0;
-  if (CONFIGURED_PTHREAD_POOL_SIZE > 0 && hardware > 0) {
-    return Math.min(CONFIGURED_PTHREAD_POOL_SIZE, hardware);
+  if (hardware > 0) {
+    return Math.min(
+      configuredMaxThreadPoolSize,
+      Math.max(MIN_PTHREAD_POOL_SIZE, hardware)
+    );
   }
-  if (CONFIGURED_PTHREAD_POOL_SIZE > 0) {
-    return CONFIGURED_PTHREAD_POOL_SIZE;
-  }
-  return hardware;
+  return MIN_PTHREAD_POOL_SIZE;
 };
 
 const instantiateThreadedProjectionWasm =
@@ -464,11 +464,24 @@ const instantiateThreadedProjectionWasm =
       },
     })) as RawProjectionWasmExports;
 
-    const threadLimit = resolveThreadPoolLimit();
+    const getConfiguredMaxThreadPoolSize =
+      (moduleInstance._getConfiguredMaxThreadPoolSize as
+        | (() => number)
+        | undefined) ??
+      (moduleInstance.getConfiguredMaxThreadPoolSize as
+        | (() => number)
+        | undefined);
+    if (typeof getConfiguredMaxThreadPoolSize !== 'function') {
+      throw new Error('maplibre-gl-layers: simd-mt module is invalid.');
+    }
+
+    const configuredMaxThreadPoolSize = getConfiguredMaxThreadPoolSize();
+    const threadLimit = resolveThreadPoolLimit(configuredMaxThreadPoolSize);
     if (
       threadLimit > 0 &&
       typeof moduleInstance._setThreadPoolSize === 'function'
     ) {
+      console.log(`maplibre-gl-layers: simd-mt: ThreadLimit: ${threadLimit}`);
       moduleInstance._setThreadPoolSize(threadLimit);
     }
 

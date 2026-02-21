@@ -1159,7 +1159,7 @@ However, `simd-mt` does not function simply by being specified.
    - Assets from other origins are blocked by COEP, so explicitly allow them with CORS or an appropriate `Cross-Origin-Resource-Policy` response
    If these conditions are not met, the `simd-mt` module will fail to load and fall back to `simd`.
 2. The amount of memory used and the number of threads used must be statically determined during the WASM module build.
-   The WASM module included in the distribution package is set to 512MB/4 threads.
+   The WASM module included in the distribution package is set to 512MB/8 threads.
    - The 512MB memory requirement is based on displaying 10,000 sprites with secondary images on the demo page.
    - If memory usage exceeds the limit, an OOM occurs within the WASM module worker, causing a fallback to the JavaScript implementation.
      Therefore, if your usage conditions differ from the assumptions, you must build and deploy your own WASM module.
