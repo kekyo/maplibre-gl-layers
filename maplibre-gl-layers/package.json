@@ -43,7 +43,7 @@
     "@types/node": ">=24.9.0",
     "prettier-max": ">=1.14.0",
     "screw-up": ">=1.26.0",
-    "emsdk-env": ">=0.7.0",
+    "emsdk-env": ">=0.8.0",
     "typescript": ">=5.0.0",
     "vite": ">=5.0.0",
     "vite-plugin-dts": ">=4.5.0",

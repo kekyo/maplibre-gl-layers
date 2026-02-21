@@ -138,7 +138,7 @@ export default defineConfig({
         exports: wasmExports,
         wasmOpt: {
           enable: true,
-          args: [
+          options: [
             '-Oz',
             '--enable-nontrapping-float-to-int',
             '--enable-bulk-memory',
@@ -152,34 +152,31 @@ export default defineConfig({
           defines: {
             MAX_THREAD_POOL_SIZE: maxThreadPoolSize, // to getConfiguredMaxThreadPoolSize()
           },
-          linkOptions: [
-            ...wasmSimdLinkOptions,
-            '-pthread',
-            '-s',
-            'USE_PTHREADS=1',
-            '-s',
-            `PTHREAD_POOL_SIZE=${maxThreadPoolSize}`, // Configured.
-            '-s',
-            `INITIAL_MEMORY=${pthreadMemoryBytes}`,
-            '-s',
-            'ALLOW_MEMORY_GROWTH=0',
-            '-s',
-            'MODULARIZE=1',
-            '-s',
-            'EXPORT_ES6=1',
-          ],
-          // wasm-opt runs on outFile; disable for JS output.
-          wasmOpt: { enable: false },
+          linkOptions: [...wasmSimdLinkOptions, '-pthread'],
+          linkDirectives: {
+            USE_PTHREADS: 1,
+            PTHREAD_POOL_SIZE: maxThreadPoolSize, // Configured.
+            INITIAL_MEMORY: pthreadMemoryBytes,
+            ALLOW_MEMORY_GROWTH: 0,
+            MODULARIZE: 1,
+            EXPORT_ES6: 1,
+          },
+          wasmOpt: { options: ['--enable-simd'] },
         },
         simd: {
           outFile: 'offloads-simd.wasm',
           options: wasmSimdCompileOptions,
-          linkOptions: [...wasmSimdLinkOptions, '-s', 'ALLOW_MEMORY_GROWTH=1'],
-          wasmOpt: { args: ['--enable-simd'] },
+          linkOptions: wasmSimdLinkOptions,
+          linkDirectives: {
+            ALLOW_MEMORY_GROWTH: 1,
+          },
+          wasmOpt: { options: ['--enable-simd'] },
         },
         nosimd: {
           outFile: 'offloads-nosimd.wasm',
-          linkOptions: ['-s', 'ALLOW_MEMORY_GROWTH=1'],
+          linkDirectives: {
+            ALLOW_MEMORY_GROWTH: 1,
+          },
         },
       },
     }),
