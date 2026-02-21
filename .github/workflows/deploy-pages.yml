@@ -1,12 +1,6 @@
 name: Deploy Demo to GitHub Pages
 
-on:
-  push:
-    branches:
-      - main
-    tags:
-      - '*'
-  workflow_dispatch:
+on: [push]
 
 concurrency:
   group: pages
@@ -18,86 +12,57 @@ jobs:
     permissions:
       contents: read
     outputs:
-      deploy: ${{ steps.check-merge.outputs.deploy }}
+      on_main: ${{ steps.check_on_main.outputs.on_main }}
     steps:
       - name: Checkout current ref
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fetch main, develop, and tags
-        run: |
-          git fetch origin main:refs/remotes/origin/main
-          git fetch origin develop:refs/remotes/origin/develop
-          git fetch --tags --force
-
-      - name: Evaluate deployment conditions
-        id: check-merge
+      - name: Check if commit is on origin/main
+        id: check_on_main
         run: |
           set -euo pipefail
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          tags=$(git tag --points-at HEAD)
-          if [ -z "$tags" ]; then
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          tag_name=$(head -n 1 <<<"$tags")
-          parents=$(git rev-list --parents -n 1 HEAD)
-          word_count=$(wc -w <<<"$parents")
-          if [ "$word_count" -ne 3 ]; then
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          second_parent=$(awk '{print $3}' <<<"$parents")
-          if git merge-base --is-ancestor "$second_parent" origin/develop; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-            echo "tag=$tag_name" >> "$GITHUB_OUTPUT"
+          if git show-ref --verify --quiet refs/remotes/origin/main; then
+            if git merge-base --is-ancestor HEAD origin/main; then
+              echo "on_main=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "on_main=false" >> "$GITHUB_OUTPUT"
+            fi
           else
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "on_main=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup Node.js
-        if: steps.check-merge.outputs.deploy == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
       - name: Capture Node binary path
-        if: steps.check-merge.outputs.deploy == 'true'
         run: |
           set -euo pipefail
           HOST_NODE_BIN="$(dirname "$(which node)")"
           echo "HOST_NODE_BIN=${HOST_NODE_BIN}" >> "$GITHUB_ENV"
 
       - name: Install dependencies
-        if: steps.check-merge.outputs.deploy == 'true'
         run: |
           set -euo pipefail
-          source "${EMSDK_ENV_FILE}"
-          export PATH="${HOST_NODE_BIN}:${PATH}"
           npm install
 
       - name: Build demo workspace
-        if: steps.check-merge.outputs.deploy == 'true'
         run: |
           set -euo pipefail
-          source "${EMSDK_ENV_FILE}"
-          export PATH="${HOST_NODE_BIN}:${PATH}"
           npm run build
 
       - name: Upload Pages artifact
-        if: steps.check-merge.outputs.deploy == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: demo/dist
 
   deploy:
     needs: build
-    if: needs.build.outputs.deploy == 'true'
+    if: startsWith( github.ref, 'refs/tags/' ) && needs.build.outputs.on_main == 'true'
     runs-on: ubuntu-latest
     permissions:
       pages: write
