@@ -103,6 +103,9 @@ The library is published as an npm package. Install it in your project with:
 npm install maplibre-gl-layers
 ```
 
+Additionally, a step-by-step code implementation example for placing and displaying sprites is available in [maplibre-gl-layers-demo repository](https://github.com/kekyo/maplibre-gl-layers-demo).
+If you want to start with working code, this repository will be useful.
+
 ## Initialization
 
 First create a `SpriteLayer` instance and add it to the MapLibre map.

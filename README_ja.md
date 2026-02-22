@@ -105,6 +105,9 @@ map.on('load', async () => {
 npm install maplibre-gl-layers
 ```
 
+なお、スプライトを配置して表示する、ステップバイステップのコード実装例が、 [maplibre-gl-layers-demoリポジトリ](https://github.com/kekyo/maplibre-gl-layers-demo) にあります。
+実際に動くコードから始めたい場合は、このリポジトリが役に立つでしょう。
+
 ## 初期化
 
 最初に、SpriteLayerのインスタンスを生成して、MapLibreに追加します。
